@@ -76,8 +76,56 @@ export function esc(v: unknown): string {
   return String(v).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
 }
 
+type Close = (s?: unknown) => unknown;
+
+export function textMark(closes: Close[], fn: Close, pair?: boolean, arg?: unknown): string {
+  const i = closes.push(fn) - 1;
+  return `<!--\u27e6m:${i}\u27e7-->` + esc(closes[i](arg)) + (pair ? `<!--\u27e6/m:${i}\u27e7-->` : '');
+}
+
+export function attrMark(closes: Close[], fn: Close, name: string, arg?: unknown): string {
+  const i = closes.push(fn) - 1;
+  return `${name}="${esc(closes[i](arg))}" data-b="${i}:${name}"`;
+}
+
+export function ifMark(
+  closes: Close[],
+  cond: Close,
+  fn: (s: unknown, c: Close[]) => unknown,
+  scope?: unknown
+): string {
+  const i = closes.length;
+  let snap: { html: string; closes: Close[] } | null = null;
+  closes.push(() => {
+    if (!cond()) return null;
+    if (!snap) {
+      const c: Close[] = [];
+      snap = { html: String(fn(scope, c)), closes: c };
+    }
+    return snap;
+  });
+  const r = closes[i]() as { html: string } | null;
+  return `<!--\u27e6i:${i}\u27e7-->` + (r ? r.html : '') + `<!--\u27e6/i:${i}\u27e7-->`;
+}
+
+export function eachMark(closes: Close[], items: Close, fn: (s: unknown, c: Close[]) => unknown): string {
+  const i = closes.length;
+  closes.push(() => (items() as unknown[]).map((v) => {
+    const c: Close[] = [];
+    return { html: String(fn(v, c)), closes: c, scope: v };
+  }));
+  let h = `<!--\u27e6l:${i}\u27e7-->`;
+  for (const r of closes[i]() as Array<{ html: string }>) h += r.html;
+  return h + `<!--\u27e6/l:${i}\u27e7-->`;
+}
+
+export function headMark(closes: Close[], fn: Close): string {
+  const i = closes.push(fn) - 1;
+  return `<!--\u27e6h:${i}\u27e7-->` + fn() + `<!--\u27e6/h:${i}\u27e7-->`;
+}
+
 const MARK_RE = /^\u27e6([milh]):(\d+)\u27e7$/;
-const END_RE = /^\u27e6\/([ilh]):(\d+)\u27e7$/;
+const END_RE = /^\u27e6\/([milh]):(\d+)\u27e7$/;
 
 const wired = new WeakSet<Node>();
 
@@ -90,40 +138,47 @@ export function tpl(html: string): DocumentFragment {
 
 const HEAD_ATTR = 'data-rosezm-head';
 
-// Apply one rendered <head> block to the document: <title> replaces the title.
-export function applyHead(html: string, provided: Set<string>): void {
+export const handlers: Record<string, (e: Event) => void> =
+  (globalThis as { __rosezm_handlers?: Record<string, (e: Event) => void> }).__rosezm_handlers ??= {};
+
+/**
+ * Apply one route's whole <head> (every block of its chain, page first) to the
+ * document: <title> replaces the title, <meta>/<link>/<base> are matched by
+ * name/property/rel/charset. First occurrence of a key wins, so a page
+ * overrides its layouts - the same rule the server's mergeHeadBlocks applies,
+ * which is why the two halves agree without talking to each other.
+ *
+ * The managed set is REBUILT from the block rather than patched element by
+ * element: a route's head is the whole truth, so anything the previous route
+ * provided and this one does not is dropped, and a key that moved tags is
+ * replaced instead of duplicated. It is also a third of the code.
+ */
+export function applyHead(html: string): void {
+  const seen = new Set<string>();
   const frag = tpl(html);
-  for (const el of Array.from(frag.children)) {
-    const tag = el.tagName.toLowerCase();
-    if (tag === 'title') {
-      let titleEl = document.head.querySelector('title');
-      if (!titleEl) {
-        titleEl = document.createElement('title');
-        document.head.appendChild(titleEl);
-      }
-      titleEl.textContent = el.textContent ?? '';
-      continue;
+  const title = frag.querySelector('title');
+  if (title) {
+    let cur = document.head.querySelector('title');
+    if (!cur) {
+      cur = document.createElement('title');
+      document.head.appendChild(cur);
     }
-    if (tag !== 'meta' && tag !== 'link' && tag !== 'base') continue;
+    cur.textContent = title.textContent ?? '';
+  }
+  for (const el of Array.from(document.head.querySelectorAll(`[${HEAD_ATTR}]`))) el.remove();
+  for (const el of Array.from(frag.children)) {
+    if (el.tagName === 'TITLE') continue;
     const key = el.getAttribute('name')
       ?? el.getAttribute('property')
       ?? el.getAttribute('rel')
       ?? el.getAttribute('charset');
     if (!key) continue;
-    const managed = `${tag}:${key}`;
-    provided.add(managed);
-    let target = document.head.querySelector(`[${HEAD_ATTR}="${managed}"]`);
-    if (!target) {
-      target = document.createElement(tag);
-      target.setAttribute(HEAD_ATTR, managed);
-      document.head.appendChild(target);
-    }
-    for (const a of Array.from(el.attributes)) target.setAttribute(a.name, a.value);
-    target.textContent = el.textContent;
+    const managed = `${el.tagName.toLowerCase()}:${key}`;
+    if (seen.has(managed)) continue;
+    seen.add(managed);
+    el.setAttribute(HEAD_ATTR, managed);
+    document.head.appendChild(el);
   }
-  document.head.querySelectorAll(`[${HEAD_ATTR}]`).forEach((el) => {
-    if (!provided.has(el.getAttribute(HEAD_ATTR)!)) el.remove();
-  });
 }
 
 /** Drop every rosezm-managed head element (routes without <head> blocks). */
@@ -151,17 +206,30 @@ export function wire(root: Node, closes: Array<unknown>, scope?: unknown): Clean
   const walker = document.createTreeWalker(holder, NodeFilter.SHOW_COMMENT);
   while (walker.nextNode()) comments.push(walker.currentNode as Comment);
 
+  const nested = new Set<Comment>();
+  for (let i = 0; i < comments.length; i++) {
+    const m = (comments[i].nodeValue ?? '').match(MARK_RE);
+    if (!m || (m[1] !== 'i' && m[1] !== 'l')) continue;
+    for (let j = i + 1; j < comments.length; j++) {
+      const em = (comments[j].nodeValue ?? '').match(END_RE);
+      if (em && em[1] === m[1] && +em[2] === +m[2]) {
+        for (let k = i + 1; k < j; k++) nested.add(comments[k]);
+        break;
+      }
+    }
+  }
+
   const ends = new Map<number, Comment>();
   for (const c of comments) {
+    if (nested.has(c)) continue;
     const m = (c.nodeValue ?? '').match(END_RE);
     if (m) ends.set(+m[2], c);
   }
 
   const headBlocks: Array<{ idx: number; start: Comment; end: Comment; nodes: ChildNode[] }> = [];
-  const headProvided = new Set<string>();
 
   for (const c of comments) {
-    if (wired.has(c) || !c.parentNode) continue;
+    if (nested.has(c) || wired.has(c) || !c.parentNode) continue;
     wired.add(c);
     const m = (c.nodeValue ?? '').match(MARK_RE);
     if (!m) continue;
@@ -186,6 +254,15 @@ export function wire(root: Node, closes: Array<unknown>, scope?: unknown): Clean
         c.parentNode!.insertBefore(target, c.nextSibling);
       }
       const tn = target as Text;
+      const end = ends.get(idx);
+      if (end) {
+        let n: ChildNode | null = tn.nextSibling;
+        while (n && n !== end) {
+          const nx = n.nextSibling;
+          n.remove();
+          n = nx;
+        }
+      }
       weff(() => {
         tn.nodeValue = String((closes[idx] as (s?: unknown) => unknown)(scope));
       });
@@ -215,7 +292,7 @@ export function wire(root: Node, closes: Array<unknown>, scope?: unknown): Clean
             n = nx;
           }
         }
-        const disp = wire(frag, r.closes, scope);
+        const disp = wire(frag, r.closes, (r as { scope?: unknown }).scope ?? scope);
         const nodes = Array.from(frag.childNodes);
         const parent = anchor.parentNode!;
         for (const nd of nodes) parent.insertBefore(nd, anchor.nextSibling);
@@ -250,14 +327,19 @@ export function wire(root: Node, closes: Array<unknown>, scope?: unknown): Clean
     }
   }
 
-  for (let i = headBlocks.length - 1; i >= 0; i--) {
-    const { idx, start, end, nodes } = headBlocks[i];
-    weff(() => applyHead(String((closes[idx] as (s?: unknown) => unknown)(scope)), headProvided));
-    nodes.forEach((nd) => nd.remove());
-    start.remove();
-    end.remove();
-  }
-  if (headBlocks.length === 0 && root.nodeType !== 11) clearHead();
+  if (headBlocks.length > 0) {
+    const blocks = headBlocks;
+    weff(() => {
+      let html = '';
+      for (const b of blocks) html += String((closes[b.idx] as (s?: unknown) => unknown)(scope));
+      applyHead(html);
+    });
+    for (const b of blocks) {
+      b.nodes.forEach((nd) => nd.remove());
+      b.start.remove();
+      b.end.remove();
+    }
+  } else if (root.nodeType !== 11) clearHead();
 
   const els = (holder as Element).querySelectorAll('[data-b]');
   els.forEach((el) => {
@@ -298,6 +380,7 @@ export function $data<T>(fn: () => T | Promise<T>): Promise<T> {
 export function clearRequestState(): void {
   signalMap.clear();
   dataCache.clear();
+  pendingDeltas.clear();
 }
 
 let requestContext: Record<string, unknown> = {};
@@ -333,6 +416,8 @@ export async function isolateStateAsync<T>(
 ): Promise<{ result: T; state: Map<string, SignalEntry>; mounts: Array<() => void>; cleanups: Set<Cleanup> }> {
   const savedSignals = signalMap;
   const savedData = dataCache;
+  const savedDeltas = new Map(pendingDeltas);
+  pendingDeltas.clear();
   const savedMounts = mountQueue.splice(0, mountQueue.length);
   const savedCleanups = new Set(cleanups);
   cleanups.clear();
@@ -349,6 +434,8 @@ export async function isolateStateAsync<T>(
   } finally {
     signalMap = savedSignals;
     dataCache = savedData;
+    pendingDeltas.clear();
+    savedDeltas.forEach((d, k) => pendingDeltas.set(k, d));
     mountQueue.splice(0, 0, ...savedMounts);
     cleanups.clear();
     savedCleanups.forEach((fn: Cleanup) => cleanups.add(fn));
@@ -423,10 +510,39 @@ export function adoptCleanups(fns: Iterable<Cleanup>): void {
 
 let LOCALES: Record<string, Record<string, string>> = {};
 let DEFAULT_LOCALE = 'en';
+let LOCALE_PACKS: string[] = [];
 
 export function setLocales(dicts: Record<string, Record<string, string>>, def: string): void {
   LOCALES = dicts;
   DEFAULT_LOCALE = def;
+}
+
+/** The locales the build left out of this bundle (generated code calls this). */
+export function setLocalePacks(langs: string[]): void {
+  LOCALE_PACKS = langs;
+}
+
+/** Merge a dictionary that arrived at runtime - a fetched pack, or an app's own import(). */
+export function loadLocale(lang: string, dict: Record<string, string>): void {
+  LOCALES[lang] = { ...LOCALES[lang], ...dict };
+}
+
+/**
+ * Resolve once `lang`'s dictionary is present: immediately for an inline
+ * locale, after one fetch for a runtime pack, never for an unknown one (the
+ * URL is the contract - the server 404s it). A failed fetch leaves the locale
+ * unresolved and $t falls back to the default language; the next navigation
+ * retries. This is the seam a bundled-per-locale app can bypass entirely by
+ * calling loadLocale() itself.
+ */
+export async function ensureLocale(lang: string): Promise<void> {
+  if (LOCALES[lang] || !LOCALE_PACKS.includes(lang)) return;
+  try {
+    const res = await fetch(`/locales/${encodeURIComponent(lang)}.json`);
+    if (res.ok) loadLocale(lang, await res.json());
+  } catch {
+    // offline, or the pack is missing: the inline dictionaries still render
+  }
 }
 
 export function localeList(): string[] {
@@ -434,7 +550,7 @@ export function localeList(): string[] {
 }
 
 export function isLocale(lang: string): boolean {
-  return Object.prototype.hasOwnProperty.call(LOCALES, lang);
+  return Object.hasOwn(LOCALES, lang) || LOCALE_PACKS.includes(lang);
 }
 
 /**
@@ -455,17 +571,60 @@ export function bestLocale(header: string | null | undefined): string | null {
 }
 
 /**
+ * Reading direction of a locale. The set of right-to-left scripts is closed
+ * (Arabic, Hebrew and their relatives), so a base-tag test covers every
+ * language that uses them - no per-app config, and the document's <html dir>
+ * is server-rendered correct for no-JS visitors. A regex LITERAL, not a
+ * string .split(): esbuild drops side-effect-free initializers, so an app
+ * whose scripts never call localeDir ships neither it nor the table.
+ */
+const RTL_RE = /^(ar|fa|he|ur|ps|sd|ug|yi|ckb|dv|ks|prs|haz|mzn|nqo)/;
+/** 'rtl' for a right-to-left locale, '' otherwise - '' is the html default. */
+export function localeDir(lang: string): string {
+  return RTL_RE.test(lang) ? 'rtl' : '';
+}
+
+const ICU_RE = /\{([\w$]+),\s*(plural|selectordinal|select),\s*((?:\s*[=\w]+\s*\{(?:[^{}]|\{[^{}]*\})*\})*)\}/g;
+const BRANCH_RE = /([=\w]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g;
+
+/** The CLDR category of `n` in `locale`, or null where Intl has no answer. */
+function pluralCategory(locale: string, ordinal: boolean, n: number): string | null {
+  try {
+    return new Intl.PluralRules(locale, ordinal ? { type: 'ordinal' } : undefined).select(n);
+  } catch {
+    return null;
+  }
+}
+
+/** Expand every ICU block of a message; leave the rest (and {name} holes) alone. */
+function expandIcu(msg: string, vars: Record<string, string | number> | undefined, locale: string): string {
+  return msg.replace(ICU_RE, (whole, arg: string, kind: string, branchText: string) => {
+    const branches: Record<string, string> = {};
+    for (const m of branchText.matchAll(BRANCH_RE)) branches[m[1]] = m[2];
+    if (!branches.other) return whole;
+    const v = vars?.[arg];
+    if (kind === 'select') return branches[typeof v === 'string' && branches[v] ? v : 'other'];
+    const num = typeof v === 'number' ? v : Number(v);
+    const cat = isFinite(num)
+      ? (branches['=' + num] ? '=' + num : pluralCategory(locale, kind === 'selectordinal', num) ?? 'other')
+      : 'other';
+    return (branches[cat] ?? branches.other).replace(/#/g, String(v));
+  });
+}
+
+/**
  * Translate a key for the current language. The [lang] route param arrives
  * as state before the render (the same seeding as any dynamic param), and
  * reading it through the signal getter makes $t reactive: switching locale
  * re-runs the marker, so only the translated nodes repaint.
  */
-export function $t(key: string, vars?: Record<string, string>): string {
+export function $t(key: string, vars?: Record<string, string | number>): string {
   const [lang] = state('lang', DEFAULT_LOCALE);
   const dict = LOCALES[lang()] ?? LOCALES[DEFAULT_LOCALE] ?? {};
-  let s = Object.prototype.hasOwnProperty.call(dict, key) ? dict[key] : key;
-  if (vars) for (const k in vars) s = s.split(`{${k}}`).join(vars[k]);
-  return s;
+  const msg = dict[key];
+  let out = expandIcu(typeof msg === 'string' ? msg : key, vars, lang());
+  if (vars) for (const k in vars) out = out.split(`{${k}}`).join(String(vars[k]));
+  return out;
 }
 
 const STORES = new Map<string, { value: unknown }>();
@@ -515,6 +674,104 @@ export function $store<T>(name: string, initial: T): { get(): T; set(v: T): void
       storeTransport?.(name, box.value);
     },
   };
+}
+
+export class ActionError extends Error {
+  /** the HTTP status the response carries (400/401/403/409/422/...) */
+  code: number;
+  /** the form field the failure belongs to, when it belongs to one */
+  field?: string;
+  constructor(message: string, code = 400, field?: string) {
+    super(message);
+    this.name = 'ActionError';
+    this.code = code;
+    this.field = field;
+  }
+}
+
+/** The JSON-safe shape the dispatch seeds into state (what `$actionError()` returns). */
+export type ActionErrorInfo = { action: string; message: string; code: number; field?: string };
+
+/**
+ * The failure of the action that produced the response being rendered, or
+ * null. It is ordinary state under the key `actionError`, so the client's
+ * resumeState() restores it and the post-adopt re-render sees exactly what
+ * the server saw - one read, both sides, no hydration payload.
+ *
+ * Read it as data (`{#if $actionError()}<p>{$actionError().message}</p>{/if}`)
+ * or let a {#boundary} contain it ($actionErrorOrThrow below).
+ */
+export function $actionError(): ActionErrorInfo | null {
+  const e = signalMap.get('actionError');
+  if (!e) return null;
+  if (currentEffect) e.subs.add(currentEffect);
+  return (e.value as ActionErrorInfo | null) ?? null;
+}
+
+/**
+ * What a {#boundary} whose content depends on an action calls first: when the
+ * action that produced this response failed, throw - the boundary's own catch
+ * turns it into the fallback, so the section degrades to the error message
+ * instead of rendering a widget built on work that never happened.
+ */
+export function $actionErrorOrThrow(): void {
+  const info = $actionError();
+  if (info) throw new ActionError(info.message, info.code, info.field);
+}
+
+/** The {#boundary} fallback: the action's own message when the failure is a business one. */
+export function $boundaryFallback(err: unknown): string {
+  if (err instanceof ActionError) return `<p class="rosezm-action-error">${esc(err.message)}</p>`;
+  return '<p>This section failed to render.</p>';
+}
+
+export type StateDeltaOp = 'append' | 'prepend' | 'merge';
+
+export class StateDelta {
+  constructor(public op: StateDeltaOp, public value: unknown) {}
+}
+
+/** Append (or prepend) items to a list-valued state key. */
+export const $append = (value: unknown): StateDelta => new StateDelta('append', value);
+export const $prepend = (value: unknown): StateDelta => new StateDelta('prepend', value);
+/** Shallow-merge an object into an object-valued state key. */
+export const $merge = (value: Record<string, unknown>): StateDelta => new StateDelta('merge', value);
+
+const pendingDeltas = new Map<string, StateDelta>();
+
+/** Record the deltas of the action that just ran (the dispatch calls this). */
+export function setStateDelta(key: string, delta: StateDelta): void {
+  pendingDeltas.set(key, delta);
+}
+
+/**
+ * Apply every pending delta to the live state and clear them. The generated
+ * render calls this once, right after its state declarations - and only the
+ * SSR side ever emits the call: a delta is recorded by a server dispatch, so
+ * on the client (post-adopt re-render, client-side navigation, refresh) the
+ * map is empty and this is a no-op. That is also why a delta can never apply
+ * twice: the value it produced is what the state script carried, and the
+ * client resumes THAT instead of recomputing it.
+ */
+export function applyStateDeltas(): void {
+  if (pendingDeltas.size === 0) return;
+  for (const [key, delta] of [...pendingDeltas]) {
+    pendingDeltas.delete(key);
+    applyStateDelta(key, delta);
+  }
+}
+
+/** Apply one delta to the live state. */
+export function applyStateDelta(key: string, delta: StateDelta): void {
+  const cur = signalMap.get(key)?.value;
+  if (delta.op === 'merge') {
+    setState(key, { ...(cur as Record<string, unknown> | undefined), ...(delta.value as Record<string, unknown>) });
+    return;
+  }
+  const list = (v: unknown): unknown[] => (v == null ? [] : Array.isArray(v) ? v : [v]);
+  const merged =
+    delta.op === 'append' ? [...list(cur), ...list(delta.value)] : [...list(delta.value), ...list(cur)];
+  setState(key, merged);
 }
 
 /**

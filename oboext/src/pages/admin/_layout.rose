@@ -10,9 +10,6 @@
     var n = session() && session().user ? session().user.name : "";
     return n ? n.slice(0, 1).toUpperCase() : "A";
   }
-  function adminUser() {
-    return authed() && session().user.role === "admin";
-  }
   function pageTitle() {
     var p =
       typeof window !== "undefined"
@@ -28,16 +25,20 @@
     if (p.indexOf("/admin/categories") === 0) return "分类";
     if (p.indexOf("/admin/tags") === 0) return "标签";
     if (p.indexOf("/admin/users") === 0) return "用户";
+    if (p.indexOf("/admin/widgets") === 0) return "小工具";
+    if (p.indexOf("/admin/menus") === 0) return "菜单";
+    if (p.indexOf("/admin/menu-settings") === 0) return "菜单与首页";
     if (p.indexOf("/admin/settings") === 0) return "站点设置";
     return "管理后台";
   }
   function guest() {
     return !authed();
   }
-  // each-predicate: same-kind {#if} blocks cannot nest in .rose templates,
-  // and this group lives inside the authed() shell wrapper
-  function adminTools() {
-    return adminUser() ? [1] : [];
+  // Sidebar nav is data-driven: the session loader returns the preference-
+  // filtered, role-filtered nav as pre-rendered HTML (raw; the .rose compiler
+  // cannot nest directives enough to expand the groups inline).
+  function navRaw() {
+    return (session() && session().navRaw) || "";
   }
 </script>
 
@@ -53,29 +54,7 @@
   <aside class="adm-side">
     <div class="adm-logo"><span class="adm-auth-mark">O</span> oboext</div>
     <nav class="adm-nav">
-      <div class="adm-nav-group">
-        <div class="adm-nav-title">概览</div>
-        <a href="/admin"><span class="ic">▦</span> 仪表盘</a>
-      </div>
-      <div class="adm-nav-group">
-        <div class="adm-nav-title">内容管理</div>
-        <a href="/admin/posts"><span class="ic">✎</span> 文章</a>
-        <a href="/admin/pages"><span class="ic">📄</span> 页面</a>
-        <a href="/admin/media"><span class="ic">🖼</span> 媒体</a>
-        <a href="/admin/comments"><span class="ic">💬</span> 评论</a>
-        <a href="/admin/categories"><span class="ic">▤</span> 分类</a>
-        <a href="/admin/tags"><span class="ic">#</span> 标签</a>
-      </div>
-      <div class="adm-nav-group">
-        <div class="adm-nav-title">外观设置</div>
-        <a href="/admin/settings"><span class="ic">⚙</span> 站点设置</a>
-      </div>
-      {#each adminTools() as _}
-      <div class="adm-nav-group">
-        <div class="adm-nav-title">系统设置</div>
-        <a href="/admin/users"><span class="ic">👤</span> 用户</a>
-      </div>
-      {/each}
+      {navRaw()}
     </nav>
     <div class="adm-side-foot">
       <div class="adm-avatar">{initial()}</div>

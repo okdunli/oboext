@@ -1,0 +1,38 @@
+<script>
+  // /api/menus/:id — GET one (public), PUT {name?,items?} / DELETE (settings:manage)
+  import { apiGate, readBody, jsonFail } from "@server/admin";
+  import { getMenu, updateMenu, deleteMenu } from "@server/menus";
+
+  function pathId(request) {
+    const seg = new URL(request.url).pathname.split("/").filter(Boolean); // api menus 12
+    return Number(seg[2]);
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const id = pathId(request);
+      if (!Number.isInteger(id) || id <= 0) return jsonFail("无效 id", 400);
+      return getMenu(id);
+    });
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () => {
+      const id = pathId(request);
+      if (!Number.isInteger(id) || id <= 0) return jsonFail("无效 id", 400);
+      const body = await readBody(request);
+      const patch = {};
+      if (typeof body.name === "string") patch.name = body.name;
+      if (Array.isArray(body.items)) patch.items = body.items;
+      return updateMenu(getContext().user, id, patch);
+    });
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => {
+      const id = pathId(request);
+      if (!Number.isInteger(id) || id <= 0) return jsonFail("无效 id", 400);
+      return deleteMenu(getContext().user, id);
+    });
+  }
+</script>

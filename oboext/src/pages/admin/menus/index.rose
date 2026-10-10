@@ -1,0 +1,128 @@
+<script>
+  // Menu manager (port of components/MenuManager.tsx). Menus are keyed by
+  // theme location (header/footer/sidebar). The editor shows one menu at a
+  // time as a flat depth-indented list and PUTs the whole tree (two-phase
+  // parentId remap lives in server/menus.ts). All data reads live; the initial
+  // tree comes from the admin.menus loader and admin.js hydrates + enhances.
+  let d = $data(() => __rvLoad("admin.menus", {}));
+  function menus() {
+    return d().menus || [];
+  }
+  function activeMenu() {
+    var ms = menus();
+    return ms.length ? ms[0] : null;
+  }
+  // tree -> flat rows with depth + parentId, in display order
+  function flatten(nodes, depth, parentId, out) {
+    (nodes || []).forEach(function (n, i) {
+      out.push({
+        id: n.id,
+        parentId: parentId,
+        order: i,
+        type: n.type || "custom",
+        label: n.label || "",
+        url: n.url || "",
+        referenceSlug: n.referenceSlug || "",
+        target: n.target || "_self",
+        icon: n.icon || "",
+        depth: depth,
+      });
+      if (n.children && n.children.length) flatten(n.children, depth + 1, n.id, out);
+    });
+    return out;
+  }
+  function rows() {
+    var m = activeMenu();
+    return m ? flatten(m.items, 0, null, []) : [];
+  }
+  function payload() {
+    return JSON.stringify(d());
+  }
+  function refLabel(r) {
+    return r.label || r.referenceSlug;
+  }
+  // {#if} predicates must be zero-arg function calls; keep all inline
+  // comparisons behind named helpers.
+  function menuIsRef(r) {
+    return r.type !== "custom";
+  }
+  function menuIsCustom(r) {
+    return r.type === "custom";
+  }
+  function menuIsIndented(r) {
+    return r.depth > 0;
+  }
+  function refState(r) {
+    return r.referenceSlug ? (r.url || "已选择") : "未选择";
+  }
+  function indentStyle(r) {
+    return "margin-left:" + r.depth * 20 + "px";
+  }
+  function depthLabel(r) {
+    return "L" + (r.depth + 1);
+  }
+  function emptyClass() {
+    return "adm-empty adm-menu-empty" + (rows().length ? "" : " is-hidden");
+  }
+</script>
+
+<head>
+  <title>菜单 - 管理后台</title>
+</head>
+
+<div class="adm-menu" data-menu-manager data-menus={payload()}>
+  <div class="adm-menu-head">
+    <div class="adm-menu-tabs" data-menu-tabs>
+      {#each menus() as m}
+      <button type="button" class="adm-menu-tab" data-menu-tab data-id={m.id}>{m.name} <span class="adm-menu-loc">({m.location})</span></button>
+      {/each}
+    </div>
+    <button type="button" class="adm-btn" data-menu-save>保存菜单</button>
+  </div>
+
+  <p class="adm-menu-msg" data-menu-msg></p>
+
+  <div class="adm-menu-rows" data-menu-rows>
+    {#each rows() as r}
+    <div class="adm-menu-row" data-menu-row style={indentStyle(r)}>
+      <span class="adm-menu-depth">{depthLabel(r)}</span>
+      <select class="adm-select adm-menu-type" data-f="type">
+        <option value="custom">自定义链接</option>
+        <option value="post">文章</option>
+        <option value="page">页面</option>
+        <option value="category">分类</option>
+        <option value="tag">标签</option>
+      </select>
+      {#if (() => menuIsRef(r))()}
+      <select class="adm-select adm-menu-ref" data-f="ref">
+        <option value={r.referenceSlug}>{refLabel(r)}</option>
+      </select>
+      {/if}
+      <input class="adm-input adm-menu-label" data-f="label" value={r.label} placeholder="显示文字">
+      {#if (() => menuIsCustom(r))()}
+      <input class="adm-input adm-menu-url" data-f="url" value={r.url} placeholder="链接 /">
+      {/if}
+      {#if (() => menuIsRef(r))()}
+      <span class="adm-menu-mono" title={r.url}>{refState(r)}</span>
+      {/if}
+      <input class="adm-input adm-menu-icon" data-f="icon" value={r.icon} placeholder="图标标识" title="图标标识（lucide 名称，如 house）">
+      <div class="adm-menu-tools">
+        <button type="button" class="adm-iconbtn" data-menu-act="up" title="上移">↑</button>
+        <button type="button" class="adm-iconbtn" data-menu-act="down" title="下移">↓</button>
+        <button type="button" class="adm-iconbtn" data-menu-act="indent" title="作为上一项的子项">↳</button>
+        {#if (() => menuIsIndented(r))()}
+        <button type="button" class="adm-iconbtn" data-menu-act="outdent" title="升回顶级">↰</button>
+        {/if}
+        <button type="button" class="adm-iconbtn danger" data-menu-act="del" title="删除">🗑</button>
+      </div>
+    </div>
+    {/each}
+  </div>
+
+  <div class={emptyClass()} data-menu-empty>
+    <div style="font-size:32px;margin-bottom:8px">🧭</div>
+    <p>这个菜单还没有项目。</p>
+  </div>
+
+  <button type="button" class="adm-btn adm-btn-ghost adm-menu-add" data-menu-add>＋ 添加菜单项</button>
+</div>

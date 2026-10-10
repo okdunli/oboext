@@ -86,6 +86,11 @@
           return Response.redirect(new URL("/admin/setup", real.origin), 302);
       } else if (!user) {
         return Response.redirect(new URL("/admin/login", real.origin), 302);
+      } else if (rp === "/admin" || rp === "/admin/dashboard") {
+        // Admin home preference: /admin and the /admin/dashboard alias swap
+        // places (mirrors app/admin/page.tsx + app/admin/dashboard/page.tsx).
+        const to = reg.adminHome ? await reg.adminHome.redirect(rp) : null;
+        if (to) return Response.redirect(new URL(to, real.origin), 302);
       }
     }
 

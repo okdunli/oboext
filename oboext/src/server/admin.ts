@@ -54,6 +54,7 @@ type Capability =
   | "content:delete:any"
   | "content:delete:own"
   | "media:read"
+  | "media:upload"
   | "taxonomy:manage"
   | "users:read"
   | "users:manage"
@@ -62,17 +63,17 @@ type Capability =
 const MATRIX: Record<Role, Capability[]> = {
   admin: [
     "content:read", "content:create", "content:update:any", "content:update:own",
-    "content:delete:any", "content:delete:own", "media:read", "taxonomy:manage",
+    "content:delete:any", "content:delete:own", "media:read", "media:upload", "taxonomy:manage",
     "users:read", "users:manage", "settings:manage",
   ],
   editor: [
     "content:read", "content:create", "content:update:any", "content:update:own",
-    "content:delete:any", "content:delete:own", "media:read", "taxonomy:manage",
+    "content:delete:any", "content:delete:own", "media:read", "media:upload", "taxonomy:manage",
     "users:read",
   ],
   author: [
     "content:read", "content:create", "content:update:own", "content:delete:own",
-    "media:read",
+    "media:read", "media:upload",
   ],
   subscriber: ["content:read"],
 };

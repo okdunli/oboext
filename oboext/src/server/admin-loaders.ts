@@ -14,6 +14,7 @@ import {
   ServiceError,
 } from "./admin.js";
 import { adminListPages, adminGetPage } from "./pages.js";
+import { listMedia } from "./media.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
@@ -79,6 +80,12 @@ export async function adminPage(p: any, ctx: Ctx) {
   const user = requireUser(ctx);
   if (p?.id === "new" || p?.id == null) return { page: null };
   return { page: await adminGetPage(user, Number(p.id)) };
+}
+
+/** Media library grid — newest first, up to 200 rows like the original. */
+export async function adminMedia(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  return listMedia(user, 100, 0);
 }
 
 export async function adminComments(p: any, ctx: Ctx) {

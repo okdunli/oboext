@@ -23,6 +23,7 @@
       return /\/admin\/posts\/(new|\d+)/.test(p) ? "编辑文章" : "文章";
     if (p.indexOf("/admin/pages") === 0)
       return /\/admin\/pages\/(new|\d+)/.test(p) ? "编辑页面" : "页面";
+    if (p.indexOf("/admin/media") === 0) return "媒体库";
     if (p.indexOf("/admin/comments") === 0) return "评论";
     if (p.indexOf("/admin/categories") === 0) return "分类";
     if (p.indexOf("/admin/tags") === 0) return "标签";
@@ -60,6 +61,7 @@
         <div class="adm-nav-title">内容管理</div>
         <a href="/admin/posts"><span class="ic">✎</span> 文章</a>
         <a href="/admin/pages"><span class="ic">📄</span> 页面</a>
+        <a href="/admin/media"><span class="ic">🖼</span> 媒体</a>
         <a href="/admin/comments"><span class="ic">💬</span> 评论</a>
         <a href="/admin/categories"><span class="ic">▤</span> 分类</a>
         <a href="/admin/tags"><span class="ic">#</span> 标签</a>

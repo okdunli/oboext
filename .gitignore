@@ -1,0 +1,22 @@
+# build output
+dist/
+
+# go single-binary server artifacts
+oboext-server
+oboext-server.exe
+
+# deps
+node_modules/
+
+# local env files (may contain secrets) - never commit
+.env
+.env.*
+!.env.example
+
+# local dev database (created by running the app)
+.data/
+
+# local scratch: dev-server logs, one-off probe scripts
+*.log
+tmp/
+.vfy/

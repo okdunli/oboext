@@ -6,7 +6,7 @@
  * flag floats, exactly as posts.ts falls back to.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import {
   categories,
@@ -281,6 +281,78 @@ export async function relatedPosts(post: PostView, n = 4): Promise<PostView[]> {
     limit: n,
   });
   return items;
+}
+
+/** Published comments for one content item, oldest first (tree order). */
+export async function listPostComments(
+  postId: number,
+  postType = "post",
+): Promise<Array<{
+  id: number;
+  parentId: number | null;
+  authorName: string;
+  authorEmail: string | null;
+  authorUrl: string | null;
+  content: string;
+  createdAt: Date;
+}>> {
+  const rows = await db
+    .select({
+      id: comments.id,
+      parentId: comments.parentId,
+      authorName: comments.authorName,
+      authorEmail: comments.authorEmail,
+      authorUrl: comments.authorUrl,
+      content: comments.content,
+      createdAt: comments.createdAt,
+    })
+    .from(comments)
+    .where(
+      and(
+        eq(comments.postId, postId),
+        eq(comments.postType, postType),
+        eq(comments.status, "published"),
+      ),
+    )
+    .orderBy(asc(comments.id))
+    .limit(200);
+  return rows;
+}
+
+/** Comment listing for the public API / moderation front (live rows, asc). */
+export async function listComments(opts: {
+  postId?: number;
+  postType?: string;
+  parentId?: number;
+  status?: string;
+  limit?: number;
+  order?: "asc" | "desc";
+}): Promise<{ items: Awaited<ReturnType<typeof listPostComments>>; total: number }> {
+  const conds = [];
+  if (opts.postId != null) conds.push(eq(comments.postId, opts.postId));
+  if (opts.postType) conds.push(eq(comments.postType, opts.postType));
+  if (opts.status) conds.push(eq(comments.status, opts.status as any));
+  if (opts.parentId != null) conds.push(eq(comments.parentId, opts.parentId));
+  const where = conds.length ? and(...conds) : undefined;
+  const limit = Math.min(opts.limit ?? 200, 200);
+  const [rows, totalRows] = await Promise.all([
+    db
+      .select({
+        id: comments.id,
+        parentId: comments.parentId,
+        authorName: comments.authorName,
+        authorEmail: comments.authorEmail,
+        authorUrl: comments.authorUrl,
+        content: comments.content,
+        createdAt: comments.createdAt,
+      })
+      .from(comments)
+      .where(where)
+      .orderBy(opts.order === "desc" ? desc(comments.id) : asc(comments.id))
+      .limit(limit),
+    db.select({ n: sql<number>`count(*)` }).from(comments).where(where),
+  ]);
+  return { items: rows, total: Number(totalRows[0]?.n ?? 0) };
 }
 
 export async function counts() {

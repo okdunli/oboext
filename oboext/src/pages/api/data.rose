@@ -13,6 +13,7 @@
   import { dispatch, documents, searchRedirect, notFoundDocument } from "@server/loaders";
   import { getPost, getCategoryBySlug, getTagBySlug } from "@server/queries";
   import { ensureMigrations } from "@server/db";
+  import { getSessionFromRequest, hasAnyUser } from "@server/auth";
 
   // Lazy: the framework's build imports dist/server.js for route analysis;
   // touching the DB at module top level would make builds require a DB.
@@ -61,6 +62,10 @@
     ready,
     dispatch,
     documents,
+    auth: {
+      userFromRequest: (request) => getSessionFromRequest(request),
+      hasAnyUser: () => hasAnyUser(),
+    },
     forward: (request) => forward(request).catch((err) => {
       console.error("[oboext] query forward failed:", err);
       return new Response("Bad Gateway", { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } });

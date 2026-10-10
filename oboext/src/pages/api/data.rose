@@ -16,6 +16,7 @@
   import { serveUpload } from "@server/storage";
   import { ensureMigrations } from "@server/db";
   import { getSessionFromRequest, hasAnyUser } from "@server/auth";
+  import { getAdminMenuPrefs, homeRedirectFor } from "@server/admin-menu";
 
   // Lazy: the framework's build imports dist/server.js for route analysis;
   // touching the DB at module top level would make builds require a DB.
@@ -82,6 +83,13 @@
     notFound: async (ctx) => {
       await ready();
       return notFoundDocument(ctx);
+    },
+    // /admin <-> /admin/dashboard swap driven by the adminHomePath preference
+    adminHome: {
+      redirect: async (pathname) => {
+        await ready();
+        return homeRedirectFor(pathname, await getAdminMenuPrefs());
+      },
     },
     exists: {
       post: async (s) => {

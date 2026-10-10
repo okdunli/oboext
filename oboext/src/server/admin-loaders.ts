@@ -23,6 +23,12 @@ import {
   listWidgets,
 } from "./widgets.js";
 import {
+  listThemes,
+  getThemeMeta,
+  getActiveThemeSlug,
+  getThemePanel,
+} from "./themes.js";
+import {
   buildAdminMenuAll,
   getAdminMenuPrefs,
   shellNavHtml,
@@ -127,17 +133,49 @@ export async function adminMenus(_p: unknown, ctx: Ctx) {
   return { menus: await listMenus() };
 }
 
-/** Widget manager: areas, registered types and the theme's instances. */
-export async function adminWidgets(_p: unknown, ctx: Ctx) {
+/** Widget manager: areas, registered types and the selected theme's instances. */
+export async function adminWidgets(p: any, ctx: Ctx) {
   const user = requireUser(ctx);
   if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  const q = String(p?.theme || ctx.query?.get("theme") || "").trim();
+  const active = await getActiveThemeSlug();
+  const slug = q || active || THEME_SLUG;
+  const rows = await listThemes();
   return {
-    theme: THEME_SLUG,
-    themes: [{ slug: THEME_SLUG, name: "Skyscraper（当前启用）" }],
+    theme: slug,
+    activeThemeSlug: active,
+    themes: rows.map((t) => ({
+      slug: t.slug,
+      name: t.slug === active ? `${t.name}（当前启用）` : t.name,
+    })),
     areas: WIDGET_AREAS,
     types: WIDGET_TYPES,
-    widgets: await listWidgets(THEME_SLUG),
+    widgets: await listWidgets(slug),
   };
+}
+
+/** Theme manager: every on-disk theme with manifest meta + active flag. */
+export async function adminThemes(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  const [rows, activeSlug] = await Promise.all([listThemes(), getActiveThemeSlug()]);
+  return {
+    activeThemeSlug: activeSlug,
+    themes: rows.map((t) => ({
+      ...t,
+      active: t.slug === activeSlug,
+      meta: getThemeMeta(t.slug),
+    })),
+  };
+}
+
+/** Per-theme settings panel: both schemas, resolved values, widget areas. */
+export async function adminThemePanel(p: any, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  const slug = String(p?.slug || "").trim();
+  if (!slug) throw new ServiceError("缺少主题标识", 422);
+  return getThemePanel(slug);
 }
 
 export async function adminComments(p: any, ctx: Ctx) {

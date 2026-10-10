@@ -61,6 +61,7 @@ const CORE_GROUPS: MenuGroup[] = [
     label: "外观设置",
     glyph: "🎨",
     children: [
+      { href: "/admin/themes", label: "主题", glyph: "🎨", superOnly: true },
       { href: "/admin/widgets", label: "小工具", glyph: "🧩", superOnly: true },
       { href: "/admin/menus", label: "菜单", glyph: "🧭", superOnly: true },
     ],

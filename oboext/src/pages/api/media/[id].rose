@@ -1,0 +1,32 @@
+<script>
+  // /api/media/:id — PATCH metadata (alt/filename), DELETE one item.
+  import { apiGate, readBody, jsonFail } from "@server/admin";
+  import { updateMedia, deleteMedia } from "@server/media";
+
+  function pathId(request) {
+    const seg = new URL(request.url).pathname.split("/").filter(Boolean); // api media 12
+    return Number(seg[2]);
+  }
+
+  export async function PATCH(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const patch = {};
+      if (typeof body.filename === "string") patch.filename = body.filename;
+      if (typeof body.alt === "string") patch.alt = body.alt;
+      return updateMedia(getContext().user, pathId(request), patch);
+    });
+  }
+
+  export async function PUT(request) {
+    return PATCH(request);
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => {
+      const id = pathId(request);
+      if (!Number.isInteger(id) || id <= 0) return jsonFail("无效 id", 400);
+      return deleteMedia(getContext().user, id);
+    });
+  }
+</script>

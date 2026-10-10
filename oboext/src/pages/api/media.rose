@@ -1,0 +1,47 @@
+<script>
+  // /api/media
+  //   GET    list (any session)  ?limit=&offset=
+  //   POST   multipart upload {file, alt?} (media:upload)
+  //   DELETE ?ids=1,2,3  bulk delete (owner or content:update:any)
+  import { apiGate, jsonFail } from "@server/admin";
+  import { listMedia, createMediaFromFile, deleteMediaMany } from "@server/media";
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const q = new URL(request.url).searchParams;
+      return listMedia(
+        getContext().user,
+        q.get("limit") ? Number(q.get("limit")) : 50,
+        q.get("offset") ? Number(q.get("offset")) : 0,
+      );
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const form = await request.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) return jsonFail("缺少文件", 400);
+      const alt = String(form.get("alt") || "");
+      const row = await createMediaFromFile(getContext().user, file, alt);
+      return new Response(JSON.stringify(row), {
+        status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => {
+      const q = new URL(request.url).searchParams;
+      const raw = q.get("ids");
+      if (!raw) return jsonFail("缺少 ids 参数", 400);
+      const ids = raw
+        .split(",")
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0);
+      if (!ids.length) return jsonFail("无效 ids", 400);
+      return deleteMediaMany(getContext().user, ids);
+    });
+  }
+</script>

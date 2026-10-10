@@ -512,6 +512,303 @@
     return saved;
   };
 
+  function initMedia() {
+    var grid = document.querySelector("[data-media-grid]");
+    if (!grid || grid.__bound) return;
+    grid.__bound = true;
+
+    var state = { items: [], selected: {} };
+    try {
+      state.items = JSON.parse(grid.getAttribute("data-media") || "{}").items || [];
+    } catch (e) {}
+
+    var form = document.querySelector("[data-media-upload-form]");
+    var fileInput = document.querySelector("[data-media-file]");
+    var dz = document.querySelector("[data-media-drop]");
+    var dzText = document.querySelector("[data-media-dz-text]");
+    var altInput = document.querySelector("[data-media-alt]");
+    var submitBtn = document.querySelector("[data-media-submit]");
+    var msgEl = document.querySelector("[data-media-msg]");
+    var countEl = document.querySelector("[data-media-count]");
+    var bulkBtn = document.querySelector("[data-media-bulk]");
+    var allCb = document.querySelector("[data-media-all]");
+    var emptyEl = document.querySelector("[data-media-empty]");
+    var editModal = document.querySelector("[data-media-edit]");
+    var editAlt = document.querySelector("[data-media-edit-alt]");
+    var editName = document.querySelector("[data-media-edit-name]");
+    var editImg = document.querySelector("[data-media-edit-img]");
+    var preview = document.querySelector("[data-media-preview]");
+    var prevImg = document.querySelector("[data-media-preview-img]");
+    var prevOpen = document.querySelector("[data-media-preview-open]");
+    var prevMeta = document.querySelector("[data-media-preview-meta]");
+    var editing = null;
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+    function sizeText(n) {
+      n = Number(n) || 0;
+      if (n < 1024) return n + " B";
+      if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+      return (n / 1048576).toFixed(1) + " MB";
+    }
+    function setMsg(t, ok) {
+      if (!msgEl) return;
+      msgEl.textContent = t;
+      msgEl.className = "adm-media-msg " + (ok ? "is-ok" : "is-err");
+    }
+    function byId(id) {
+      return state.items.filter(function (x) { return x.id === id; })[0] || null;
+    }
+    function selectedIds() {
+      return Object.keys(state.selected).map(Number);
+    }
+    function syncSel() {
+      var ids = selectedIds();
+      if (countEl) countEl.textContent = "已选 " + ids.length + " / " + state.items.length;
+      if (bulkBtn) bulkBtn.disabled = ids.length === 0;
+      if (allCb) allCb.checked = state.items.length > 0 && ids.length === state.items.length;
+    }
+    function cardHtml(m) {
+      var tile =
+        String(m.mimeType).indexOf("image/") === 0
+          ? '<img class="adm-media-thumb" src="' + esc(m.url) + '" alt="' + esc(m.alt || m.filename) +
+            '" loading="lazy" data-media-preview-btn>'
+          : '<div class="adm-media-file" data-media-preview-btn><span class="ic">📄</span><span>' +
+            esc(m.mimeType) + "</span></div>";
+      return (
+        '<div class="adm-media-card" data-media-id="' + m.id + '">' +
+        '<label class="adm-media-check"><input type="checkbox" class="adm-media-sel" value="' + m.id + '"' +
+        (state.selected[m.id] ? " checked" : "") + "></label>" +
+        tile +
+        '<div class="adm-media-meta">' +
+        '<p class="adm-media-name" title="' + esc(m.filename) + '">' + esc(m.filename) + "</p>" +
+        '<p class="adm-hint">' + sizeText(m.size) + "</p>" +
+        '<div class="adm-media-actions"><div class="row-actions">' +
+        '<button type="button" class="adm-iconbtn" data-media-preview-btn title="查看 / 详情">🔍</button>' +
+        '<button type="button" class="adm-iconbtn" data-media-copy data-url="' + esc(m.url) + '" title="复制链接">🔗</button>' +
+        '<button type="button" class="adm-iconbtn" data-media-edit-btn title="编辑信息">✎</button>' +
+        "</div>" +
+        '<button type="button" class="adm-iconbtn danger" data-media-del data-url="/api/media/' + m.id +
+        '" data-confirm="删除该媒体？此操作不可恢复。" title="删除">🗑</button>' +
+        "</div></div></div>"
+      );
+    }
+    function render() {
+      grid.innerHTML = state.items.map(cardHtml).join("");
+      if (emptyEl) emptyEl.classList.toggle("is-hidden", state.items.length > 0);
+      syncSel();
+    }
+    async function load() {
+      try {
+        var d = await api("GET", "/api/media?limit=100");
+        state.items = d.items || [];
+        state.selected = {};
+        render();
+      } catch (e) {
+        setMsg(e.message, false);
+      }
+    }
+    async function copyLink(url, btn) {
+      try {
+        await navigator.clipboard.writeText(url);
+        if (btn) {
+          var old = btn.textContent;
+          btn.textContent = "✓";
+          setTimeout(function () { btn.textContent = old; }, 1500);
+        }
+      } catch (e) {
+        toast("复制失败，请手动复制", "err");
+      }
+    }
+
+    if (form) {
+      form.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var f = fileInput && fileInput.files[0];
+        if (!f) return;
+        submitBtn.disabled = true;
+        var fd = new FormData();
+        fd.append("file", f);
+        if (altInput) fd.append("alt", altInput.value);
+        try {
+          var res = await fetch("/api/media", { method: "POST", body: fd });
+          var data = null;
+          try { data = await res.json(); } catch (err) {}
+          if (!res.ok) throw new Error((data && data.error) || "上传失败 (" + res.status + ")");
+          setMsg("上传成功", true);
+          if (altInput) altInput.value = "";
+          if (fileInput) fileInput.value = "";
+          if (dzText) dzText.textContent = "点击选择文件，或拖拽到此处上传";
+          await load();
+        } catch (err) {
+          setMsg(err.message, false);
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    }
+    if (dz && fileInput) {
+      function pickName(f) {
+        if (f && dzText) {
+          dzText.textContent = f.name;
+          submitBtn.disabled = false;
+        }
+      }
+      dz.addEventListener("click", function () { fileInput.click(); });
+      dz.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+      });
+      ["dragenter", "dragover"].forEach(function (ev) {
+        dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add("is-drag"); });
+      });
+      ["dragleave", "drop"].forEach(function (ev) {
+        dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove("is-drag"); });
+      });
+      dz.addEventListener("drop", function (e) {
+        var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) pickName(f);
+      });
+      fileInput.addEventListener("change", function () { pickName(fileInput.files[0]); });
+    }
+
+    grid.addEventListener("change", function (e) {
+      if (!e.target.closest || !e.target.closest(".adm-media-sel")) return;
+      var cb = e.target.closest(".adm-media-sel");
+      var id = Number(cb.value);
+      if (cb.checked) state.selected[id] = 1;
+      else delete state.selected[id];
+      syncSel();
+    });
+    grid.addEventListener("click", async function (e) {
+      if (!e.target.closest) return;
+      var del = e.target.closest("[data-media-del]");
+      if (del) {
+        e.preventDefault();
+        if (!confirm(del.getAttribute("data-confirm") || "删除该媒体？此操作不可恢复。")) return;
+        try {
+          await api("DELETE", del.getAttribute("data-url"));
+          await load();
+          toast("已删除", "ok");
+        } catch (err) { toast(err.message, "err"); }
+        return;
+      }
+      var cp = e.target.closest("[data-media-copy]");
+      if (cp) { copyLink(cp.getAttribute("data-url"), cp); return; }
+      var eb = e.target.closest("[data-media-edit-btn]");
+      if (eb) {
+        openEdit(Number(eb.closest("[data-media-id]").getAttribute("data-media-id")));
+        return;
+      }
+      var pb = e.target.closest("[data-media-preview-btn]");
+      if (pb) {
+        openPreview(Number(pb.closest("[data-media-id]").getAttribute("data-media-id")));
+      }
+    });
+
+    if (allCb) {
+      allCb.addEventListener("change", function () {
+        var on = allCb.checked;
+        state.items.forEach(function (m) {
+          if (on) state.selected[m.id] = 1;
+          else delete state.selected[m.id];
+        });
+        grid.querySelectorAll(".adm-media-sel").forEach(function (c) { c.checked = on; });
+        syncSel();
+      });
+    }
+    if (bulkBtn) {
+      bulkBtn.addEventListener("click", async function () {
+        var ids = selectedIds();
+        if (!ids.length) return;
+        if (!confirm("确认删除选中的 " + ids.length + " 个媒体？此操作不可恢复。")) return;
+        bulkBtn.disabled = true;
+        try {
+          await api("DELETE", "/api/media?ids=" + ids.join(","));
+          await load();
+          toast("已删除 " + ids.length + " 个媒体", "ok");
+        } catch (err) {
+          toast(err.message, "err");
+          bulkBtn.disabled = false;
+        }
+      });
+    }
+
+    function openEdit(id) {
+      var m = byId(id);
+      if (!m || !editModal) return;
+      editing = m;
+      editAlt.value = m.alt || "";
+      editName.textContent = m.filename;
+      if (editImg) {
+        if (String(m.mimeType).indexOf("image/") === 0) {
+          editImg.src = m.url;
+          editImg.style.display = "";
+        } else {
+          editImg.removeAttribute("src");
+          editImg.style.display = "none";
+        }
+      }
+      editModal.hidden = false;
+    }
+    function closeEdit() {
+      if (editModal) editModal.hidden = true;
+      editing = null;
+    }
+    document.querySelectorAll("[data-media-edit-close]").forEach(function (b) {
+      b.addEventListener("click", closeEdit);
+    });
+    var saveBtn = document.querySelector("[data-media-edit-save]");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", async function () {
+        if (!editing) return;
+        try {
+          var updated = await api("PATCH", "/api/media/" + editing.id, { alt: editAlt.value });
+          var m = byId(editing.id);
+          if (m) m.alt = updated.alt;
+          render();
+          closeEdit();
+          toast("已更新", "ok");
+        } catch (err) { toast(err.message, "err"); }
+      });
+    }
+
+    function openPreview(id) {
+      var m = byId(id);
+      if (!m || !preview) return;
+      var isImg = String(m.mimeType).indexOf("image/") === 0;
+      if (prevImg) {
+        if (isImg) { prevImg.src = m.url; prevImg.style.display = ""; }
+        else { prevImg.removeAttribute("src"); prevImg.style.display = "none"; }
+      }
+      if (prevOpen) {
+        prevOpen.href = m.url;
+        prevOpen.style.display = isImg ? "none" : "";
+      }
+      if (prevMeta) {
+        prevMeta.textContent = m.filename + " · " + m.mimeType + " · " + sizeText(m.size) +
+          (m.alt ? " · " + m.alt : "");
+      }
+      preview.hidden = false;
+    }
+    function closePreview() { if (preview) preview.hidden = true; }
+    document.querySelectorAll("[data-media-preview-close]").forEach(function (b) {
+      b.addEventListener("click", closePreview);
+    });
+    if (preview) {
+      preview.addEventListener("click", function (e) {
+        if (e.target === preview) closePreview();
+      });
+    }
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") { closeEdit(); closePreview(); }
+    });
+
+    render();
+  }
+
   function initEditor() {
     var root = document.querySelector("[data-adm-editor]");
     if (!root || root.__bound) return;
@@ -596,10 +893,50 @@
     if (e.target && e.target.tagName === "SELECT") applyShowIf();
   });
 
+  function initImageFields() {
+    document.querySelectorAll("[data-img-field]").forEach(function (box) {
+      if (box.__bound) return;
+      box.__bound = true;
+      var input = box.querySelector("input.adm-input");
+      var file = box.querySelector("[data-img-file]");
+      var prev = box.querySelector("[data-img-preview]");
+      var err = box.querySelector("[data-img-err]");
+      var btn = box.querySelector("[data-img-btn]");
+      function sync() {
+        if (prev) prev.src = (input.value || "").trim();
+      }
+      input.addEventListener("input", sync);
+      file.addEventListener("change", async function () {
+        var f = file.files && file.files[0];
+        file.value = "";
+        if (!f) return;
+        if (btn) btn.classList.add("is-busy");
+        if (err) err.textContent = "";
+        try {
+          var fd = new FormData();
+          fd.append("file", f);
+          var res = await fetch("/api/media", { method: "POST", body: fd });
+          var data = {};
+          try { data = await res.json(); } catch (e) {}
+          if (!res.ok) throw new Error(data.error || "上传失败 (" + res.status + ")");
+          input.value = data.url || data.path || data.src || "";
+          sync();
+        } catch (e) {
+          if (err) err.textContent = e.message;
+        } finally {
+          if (btn) btn.classList.remove("is-busy");
+        }
+      });
+      sync();
+    });
+  }
+
   function initWidgets() {
     markActiveNav();
     hydrateControls();
     initEditor();
+    initMedia();
+    initImageFields();
   }
 
   function init() {

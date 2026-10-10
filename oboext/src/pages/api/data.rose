@@ -13,6 +13,7 @@
   import { dispatch, documents, searchRedirect, notFoundDocument } from "@server/loaders";
   import { getPost, getCategoryBySlug, getTagBySlug } from "@server/queries";
   import { getPublishedPage } from "@server/pages";
+  import { serveUpload } from "@server/storage";
   import { ensureMigrations } from "@server/db";
   import { getSessionFromRequest, hasAnyUser } from "@server/auth";
 
@@ -63,6 +64,9 @@
     ready,
     dispatch,
     documents,
+    uploads: {
+      serve: (pathname, method) => serveUpload(pathname, method),
+    },
     auth: {
       userFromRequest: (request) => getSessionFromRequest(request),
       hasAnyUser: () => hasAnyUser(),

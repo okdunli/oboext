@@ -1,0 +1,17 @@
+<script>
+  // POST /api/admin/menu-settings  {hiddenHrefs: string[], homePath: string}
+  // Port of app/api/admin/menu-settings/route.ts (settings:manage).
+  import { apiGate, readBody, requireCap } from "@server/admin";
+  import { saveAdminMenuPrefs } from "@server/admin-menu";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const body = await readBody(request);
+      return saveAdminMenuPrefs({
+        hiddenHrefs: body?.hiddenHrefs,
+        homePath: body?.homePath,
+      });
+    });
+  }
+</script>

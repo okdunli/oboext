@@ -1,0 +1,99 @@
+<script>
+
+  // data source is server/admin-menu.ts; this screen persists hiddenHrefs +
+  // adminHomePath into the options KV. Groups/leaves flatten into ONE {#each}
+  // stream (nested directives are unsupported by the .rose compiler); all
+  // boolean state rides data-* attributes with CSS revealing the right badges.
+  let ms = $data(() => __rvLoad("admin.menu-settings", {}));
+
+  function rows() {
+    const d = ms();
+    const hidden = new Set(d.hiddenHrefs || []);
+    const home = d.homePath || "/admin";
+    const out = [];
+    (d.groups || []).forEach((g) => {
+      out.push({ kind: "gstart", label: g.label });
+      (g.children || []).forEach((l) => {
+        const isHome = home === l.href;
+        out.push({
+          kind: "leaf",
+          href: l.href,
+          label: l.label,
+          locked: l.locked ? "1" : "0",
+          hook: l.hook ? "1" : "0",
+          external: l.external ? "1" : "0",
+          canHome: !l.hook && !l.external && !l.locked ? "1" : "0",
+          isHome: isHome ? "1" : "0",
+          on: hidden.has(l.href) ? "0" : "1",
+        });
+      });
+      out.push({ kind: "gend" });
+    });
+    return out;
+  }
+  function rowCls(x) {
+    return (
+      "adm-ms-row" +
+      (x.on === "0" ? " is-hidden" : "") +
+      (x.isHome === "1" ? " is-home" : "")
+    );
+  }
+  function rowDisabled(x) {
+    // current home and locked leaves can never be hidden
+    return x.isHome === "1" || x.locked === "1" ? "1" : "0";
+  }
+</script>
+
+<head>
+  <title>菜单与首页 - 管理后台</title>
+</head>
+
+<div class="adm-ms" data-ms-manager>
+  <div class="adm-ms-head">
+    <span class="adm-ms-tile">▣</span>
+    <h1 class="adm-h1" style="margin:0">菜单与首页</h1>
+  </div>
+  <p class="adm-ms-intro">
+    取消勾选可隐藏对应二级菜单；右侧「设为首页」决定进入后台时默认打开的页面。当前首页与系统锁定项不可隐藏；插件、主题提供的菜单仅支持显隐，不能设为首页。
+  </p>
+
+  <div class="adm-ms-groups">
+    {#each rows() as x}
+
+    {#if (() => x.kind === "gstart")()}
+    <section class="adm-ms-group">
+      <header class="adm-ms-group-hd"><h2>{x.label}</h2></header>
+      <ul class="adm-ms-list">
+    {/if}
+
+    {#if (() => x.kind === "leaf")()}
+        <li class={rowCls(x)} data-ms-row={x.href} data-hidden={x.on === "0" ? "1" : "0"}
+            data-locked={x.locked} data-hook={x.hook} data-external={x.external}
+            data-canhome={x.canHome} data-home={x.isHome}>
+          <input type="checkbox" class="adm-ms-check" data-ms-check data-on={x.on}
+                 data-disabled={rowDisabled(x)}>
+          <span class="adm-ms-label">{x.label}</span>
+          <span class="adm-ms-badge adm-ms-badge-hook">🔌 扩展</span>
+          <span class="adm-ms-badge adm-ms-badge-lock">🔒 锁定</span>
+          <span class="adm-ms-right">
+            <span class="adm-ms-homebadge">🏠 当前首页</span>
+            <button type="button" class="adm-ms-homebtn" data-ms-home>🏠 设为首页</button>
+          </span>
+        </li>
+    {/if}
+
+    {#if (() => x.kind === "gend")()}
+      </ul>
+    </section>
+    {/if}
+
+    {/each}
+  </div>
+
+  <div class="adm-ms-bar">
+    <span class="adm-ms-msg" data-ms-msg></span>
+    <button type="button" class="adm-btn adm-btn-sm" data-ms-save>
+      <span data-ms-save-label>💾 保存设置</span>
+    </button>
+  </div>
+</div>

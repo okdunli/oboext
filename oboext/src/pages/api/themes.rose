@@ -1,0 +1,41 @@
+<script>
+  // /api/themes
+  //   GET  list rows + read-only manifest meta + active slug (settings:manage)
+  //   POST create a real themes/<slug> folder from the default template
+  import { apiGate, readBody, jsonFail, requireCap } from "@server/admin";
+  import {
+    listThemes,
+    createTheme,
+    getThemeMeta,
+    getActiveThemeSlug,
+  } from "@server/themes";
+
+  export async function GET() {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const [rows, activeSlug] = await Promise.all([listThemes(), getActiveThemeSlug()]);
+      return {
+        activeThemeSlug: activeSlug,
+        themes: rows.map((t) => ({ ...t, active: t.slug === activeSlug, meta: getThemeMeta(t.slug) })),
+      };
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const body = await readBody(request);
+      const name = typeof body?.name === "string" ? body.name : "";
+      if (!name.trim()) return jsonFail("请输入主题名称", 422);
+      const row = await createTheme({
+        name,
+        slug: typeof body.slug === "string" && body.slug.trim() ? body.slug.trim() : undefined,
+        config: body.config && typeof body.config === "object" ? body.config : undefined,
+      });
+      return new Response(JSON.stringify(row), {
+        status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+</script>

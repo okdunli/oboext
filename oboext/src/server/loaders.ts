@@ -31,7 +31,9 @@ import { getPublishedPage, listPublishedPages } from "./pages.js";
 import * as R from "./render.js";
 import * as admin from "./admin-loaders.js";
 import { getMenuByLocation } from "./menus.js";
-import { getAreaWidgets, THEME_SLUG } from "./widgets.js";
+import { getAreaWidgets } from "./widgets.js";
+import { getActiveThemeSlug, getActiveThemeRenderConfig } from "./themes.js";
+import { themeToCss } from "./theme-tokens.js";
 
 export type Ctx = {
   query: URLSearchParams;
@@ -49,36 +51,68 @@ const SIDEBAR_FALLBACK: R.SkyItem[] = [
   { id: "s2", label: "所有文章", url: "/blog" },
 ];
 
-async function chrome(_payload: unknown, ctx?: Ctx) {
-  const pathname = (ctx && ctx.pathname) || "/";
-  const [settings, tagRows, stats, popular, cfg, sideMenu, sideWidgets, footerWidgets] =
-    await Promise.all([
-      getSettings(),
-      listTags(),
-      counts(),
-      popularPosts(5),
-      getPermalinkConfig(),
-      getMenuByLocation("sidebar"),
-      getAreaWidgets(THEME_SLUG, "sidebar"),
-      getAreaWidgets(THEME_SLUG, "footer"),
-    ]);
+async function chromeData(pathname: string) {
+  const [
+    settings,
+    tagRows,
+    stats,
+    popular,
+    cfg,
+    sideMenu,
+    themeSlug,
+    renderConfig,
+  ] = await Promise.all([
+    getSettings(),
+    listTags(),
+    counts(),
+    popularPosts(5),
+    getPermalinkConfig(),
+    getMenuByLocation("sidebar"),
+    getActiveThemeSlug(),
+    getActiveThemeRenderConfig(),
+  ]);
+  const [sideWidgets, footerWidgets] = await Promise.all([
+    getAreaWidgets(themeSlug, "sidebar"),
+    getAreaWidgets(themeSlug, "footer"),
+  ]);
+  const varsHtml =
+    pathname.indexOf("/admin") === 0
+      ? ""
+      : `<style id="rv-theme-vars">:root{${themeToCss(renderConfig)}}</style>` +
+        (typeof renderConfig.customCss === "string" && renderConfig.customCss
+          ? `<style id="rv-theme-custom">${renderConfig.customCss}</style>`
+          : "");
   const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
   const menuItems: R.SkyItem[] =
     sideMenu && sideMenu.items.length ? (sideMenu.items as R.SkyItem[]) : SIDEBAR_FALLBACK;
   return {
     siteTitle: settings.siteTitle ?? "",
     siteDescription: settings.siteDescription ?? "",
-    nav: R.raw(R.topNav(settings)),
-    aside: R.raw(
+    varsHtml,
+    navHtml: R.topNav(settings),
+    asideHtml:
       R.sidebarMenu(menuItems, pathname) +
-        R.tagCloud(tags) +
-        R.blogStats(stats) +
-        R.popularWidget(popular) +
-        R.widgetAreaHtml(sideWidgets, "sk-widget-area"),
+      R.tagCloud(tags) +
+      R.blogStats(stats) +
+      R.popularWidget(popular) +
+      R.widgetAreaHtml(sideWidgets, "sk-widget-area"),
+    footerHtml: R.footerHtml(
+      settings,
+      R.widgetAreaHtml(footerWidgets, "sk-footer-widgets"),
     ),
-    footer: R.raw(
-      R.footerHtml(settings, R.widgetAreaHtml(footerWidgets, "sk-footer-widgets")),
-    ),
+  };
+}
+
+async function chrome(_payload: unknown, ctx?: Ctx) {
+  const pathname = (ctx && ctx.pathname) || "/";
+  const d = await chromeData(pathname);
+  return {
+    siteTitle: d.siteTitle,
+    siteDescription: d.siteDescription,
+    themeVars: d.varsHtml ? R.raw(d.varsHtml) : "",
+    nav: R.raw(d.navHtml),
+    aside: R.raw(d.asideHtml),
+    footer: R.raw(d.footerHtml),
   };
 }
 
@@ -525,6 +559,8 @@ export const loaders = {
   "admin.media": admin.adminMedia,
   "admin.menus": admin.adminMenus,
   "admin.widgets": admin.adminWidgets,
+  "admin.themes": admin.adminThemes,
+  "admin.theme-panel": admin.adminThemePanel,
   "admin.menu-settings": admin.adminMenuSettings,
   "admin.taxonomies": admin.adminTaxonomies,
   "admin.users": admin.adminUsers,
@@ -535,7 +571,7 @@ export type LoaderKey = keyof typeof loaders;
 /** Server-only dispatch used by pages and by /api/data. */
 export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unknown> {
   if (key === "chrome" && ctx.pathname && ctx.pathname.indexOf("/admin") === 0) {
-    return { siteTitle: "管理后台", siteDescription: "", nav: "", aside: "", footer: "" };
+    return { siteTitle: "管理后台", siteDescription: "", themeVars: "", nav: "", aside: "", footer: "" };
   }
   const fn = (loaders as Record<string, (p: any, c: Ctx) => Promise<unknown>>)[key];
   if (!fn) throw new Error(`unknown loader: ${key}`);
@@ -553,7 +589,7 @@ export const documents = { sitemap, feed, robots };
  * stays pixel-identical (minus client routing - a 404 is a dead end).
  */
 export async function notFoundDocument(ctx: Ctx): Promise<string> {
-  const c = await chrome({}, ctx);
+  const c = await chromeData((ctx && ctx.pathname) || "/");
   const settings = await getSettings();
   const title = settings.siteTitle ?? "";
   const card =
@@ -565,10 +601,10 @@ export async function notFoundDocument(ctx: Ctx): Promise<string> {
     `<meta name="viewport" content="width=device-width, initial-scale=1">` +
     `<title>404 - ${R.esc(title)}</title>` +
     `<meta name="robots" content="noindex">` +
-    `<link rel="stylesheet" href="/public/theme.css"><link rel="icon" href="data:,">` +
-    `</head><body><div class="th-skyscraper">${c.nav.__rvraw}` +
+    `<link rel="stylesheet" href="/public/theme.css">${c.varsHtml}<link rel="icon" href="data:,">` +
+    `</head><body><div class="th-skyscraper">${c.navHtml}` +
     `<div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">${card}</div></div>` +
-    `<aside class="sidebar-column with-separate-line"><div class="sidebar-content">${c.aside.__rvraw}</div></aside>` +
-    `</div></main></div>${c.footer.__rvraw}</div></body></html>`
+    `<aside class="sidebar-column with-separate-line"><div class="sidebar-content">${c.asideHtml}</div></aside>` +
+    `</div></main></div>${c.footerHtml}</div></body><!--/--></html>`
   );
 }

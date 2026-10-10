@@ -1,0 +1,43 @@
+<script>
+  // /api/themes/:id — GET one, PATCH name/slug/config, DELETE (id may be a
+  // numeric id for GET/PATCH/DELETE; settings routes also accept a slug).
+  import { apiGate, readBody, jsonFail, requireCap } from "@server/admin";
+  import { getThemeById, updateTheme, deleteTheme } from "@server/themes";
+
+  function pathId(request) {
+    return new URL(request.url).pathname.split("/").filter(Boolean)[2];
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const raw = pathId(request);
+      const n = Number(raw);
+      return Number.isInteger(n) ? getThemeById(n) : jsonFail("无效 id", 400);
+    });
+  }
+
+  export async function PATCH(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const n = Number(pathId(request));
+      if (!Number.isInteger(n) || n <= 0) return jsonFail("无效 id", 400);
+      const body = await readBody(request);
+      return updateTheme(n, {
+        name: typeof body?.name === "string" ? body.name : undefined,
+        slug: typeof body?.slug === "string" ? body.slug : undefined,
+        config: body.config && typeof body.config === "object" ? body.config : undefined,
+        settings: body.settings && typeof body.settings === "object" ? body.settings : undefined,
+      });
+    });
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const n = Number(pathId(request));
+      if (!Number.isInteger(n) || n <= 0) return jsonFail("无效 id", 400);
+      return deleteTheme(n);
+    });
+  }
+</script>

@@ -12,15 +12,10 @@ import type { Block } from "./schema.js";
 import type { PostView, TaxRef } from "./queries.js";
 import type { PageView } from "./pages.js";
 import { getAvatarUrl, type AvatarSource } from "./avatar.js";
+import { mintRaw } from "./raw-store.js";
 
-export const RAW_KEY = "__rvraw";
 export type RawHtml = { __rvraw: string; __rvhead?: 1 };
-export const raw = (html: string): RawHtml => ({
-  __rvraw: html,
-  toString() {
-    return "";
-  },
-});
+export const raw = (html: string): string => mintRaw(html);
 export const rawHead = (html: string): RawHtml => ({
   __rvraw: html,
   __rvhead: 1,
@@ -28,8 +23,6 @@ export const rawHead = (html: string): RawHtml => ({
     return html;
   },
 });
-export const isRaw = (v: unknown): v is RawHtml =>
-  typeof v === "object" && v !== null && typeof (v as any)[RAW_KEY] === "string";
 
 export const esc = (s: unknown): string =>
   String(s ?? "")
@@ -827,13 +820,51 @@ export function topNav(settings: Record<string, any>): string {
   );
 }
 
-export function sidebarMenu(active: "home" | "blog" = "home"): string {
-  const cls = (on: boolean) =>
-    on ? "menu-item is-active current-menu-item depth-0" : "menu-item depth-0";
+export type SkyItem = {
+  id: number | string;
+  label: string;
+  url: string;
+  target?: string;
+  children?: SkyItem[];
+};
+
+export function sidebarMenu(items: SkyItem[], pathname: string): string {
+  const isActive = (url: string) =>
+    !!url && (url === pathname || (url !== "/" && pathname.indexOf(url) === 0));
+  const descendantActive = (nodes: SkyItem[]): boolean =>
+    nodes.some((n) => isActive(n.url) || (n.children ? descendantActive(n.children) : false));
+
+  const renderItems = (nodes: SkyItem[], depth: number): string =>
+    nodes
+      .map((it) => {
+        const kids = it.children || [];
+        const has = kids.length > 0;
+        const active = isActive(it.url);
+        const open = has && (active || descendantActive(kids));
+        const cls = [
+          "menu-item",
+          has ? "menu-item-has-children" : "",
+          active ? "is-active current-menu-item" : "",
+          open ? "open" : "",
+          `depth-${depth}`,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const anchor = has
+          ? `<a>${esc(it.label)}<i class="skyscraper-icons-right"></i></a>`
+          : `<a href="${esc(it.url)}"${
+              it.target && it.target !== "_self"
+                ? ` target="${esc(it.target)}" rel="noopener"`
+                : ""
+            }>${esc(it.label)}</a>`;
+        const sub = has ? `<ul class="sub-menu">${renderItems(kids, depth + 1)}</ul>` : "";
+        return `<li class="${cls}">${anchor}${sub}</li>`;
+      })
+      .join("");
+
   return (
     `<div class="widget widget_nav_menu"><div class="menu-main-container"><ul id="menu-main" class="menu">` +
-    `<li class="${cls(active === "home")}"><a href="/">首页</a></li>` +
-    `<li class="${cls(active === "blog")}"><a href="/blog">所有文章</a></li>` +
+    renderItems(items, 0) +
     `</ul></div></div>`
   );
 }
@@ -885,6 +916,230 @@ export function popularWidget(posts: PostView[]): string {
   );
 }
 
-export function footerHtml(settings: Record<string, any>): string {
-  return `<footer><div class="pagenav is-empty"></div><div class="copyright">${esc(settings.footerText ?? "")}</div></footer>`;
+export function footerHtml(settings: Record<string, any>, widgetsHtml = ""): string {
+  return `<footer>${widgetsHtml}<div class="pagenav is-empty"></div><div class="copyright">${esc(settings.footerText ?? "")}</div></footer>`;
 }
+
+const waLink = "color:var(--text);text-decoration:none;font-size:.9rem;line-height:1.5;";
+const waRow = "display:flex;align-items:baseline;justify-content:space-between;gap:.6rem;padding:.35rem 0;";
+const waDim = "color:var(--muted);font-size:.75rem;white-space:nowrap;";
+
+function waShell(w: { id: number; type: string; title: string }, body: string): string {
+  const title = w.title
+    ? `<h3 style="font-size:.8rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 .75rem">${esc(w.title)}</h3>`
+    : "";
+  return (
+    `<section class="oboe-widget" data-widget="${esc(w.type)}" style="background:var(--surface);border:var(--border-width) solid var(--border);border-radius:var(--radius);padding:1rem 1.1rem">` +
+    title + body + `</section>`
+  );
+}
+
+/**
+ * Render resolved DB widgets for one theme area — pixel port of
+ * components/shared/WidgetArea.tsx (inline-style variant, no Tailwind).
+ * `wrapClass` supplies the theme wrapper (sk-widget-area / sk-footer-widgets).
+ */
+export function widgetAreaHtml(
+  items: import("./widgets.js").ResolvedWidget[],
+  wrapClass: string,
+): string {
+  if (!items.length) return "";
+  const wrapStyle =
+    wrapClass === "sk-widget-area" ? ' style="display:flex;flex-direction:column;gap:1.5rem"' : "";
+  return `<div class="${wrapClass}"${wrapStyle}>${items.map(widgetBody).join("")}</div>`;
+}
+
+function widgetBody(w: import("./widgets.js").ResolvedWidget): string {
+  const cfg = w.config;
+  const data = (w.data ?? []) as any[];
+
+  switch (w.type) {
+    case "recent-posts":
+      return waShell(
+        w,
+        `<ul style="list-style:none;padding:0;margin:0">` +
+          data
+            .map((p) => {
+              const thumb =
+                cfg.showThumb && p.featuredImage
+                  ? `<img src="${esc(p.featuredImage)}" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0">`
+                  : "";
+              const date =
+                cfg.showDate && p.publishedAt
+                  ? `<span style="${waDim}">${esc(new Date(p.publishedAt).toISOString().slice(5, 10))}</span>`
+                  : "";
+              return `<li style="${waRow}">${thumb}<a href="${esc(p.url)}" style="${waLink}flex:1">${esc(p.title)}</a>${date}</li>`;
+            })
+            .join("") +
+          `</ul>`,
+      );
+
+    case "popular-posts":
+      return waShell(
+        w,
+        `<ol style="list-style:none;padding:0;margin:0;counter-reset:pp">` +
+          data
+            .map((p, i) => {
+              const views = cfg.showViews ? `<span style="${waDim}">${esc(p.views)}</span>` : "";
+              return (
+                `<li style="${waRow}"><span style="${waDim}width:1.2em;color:var(--accent)">${i + 1}</span>` +
+                `<a href="${esc(p.url)}" style="${waLink}flex:1">${esc(p.title)}</a>${views}</li>`
+              );
+            })
+            .join("") +
+          `</ol>`,
+      );
+
+    case "categories":
+      return waShell(
+        w,
+        `<ul style="list-style:none;padding:0;margin:0">` +
+          data
+            .map((c) => {
+              const count = cfg.showCount ? `<span style="${waDim}">${esc(c.count)}</span>` : "";
+              return `<li style="${waRow}"><a href="${esc(c.url)}" style="${waLink}">${esc(c.name)}</a>${count}</li>`;
+            })
+            .join("") +
+          `</ul>`,
+      );
+
+    case "tag-cloud": {
+      const max = Math.max(1, ...data.map((t) => Number(t.count)));
+      return waShell(
+        w,
+        `<div style="display:flex;flex-wrap:wrap;gap:.4rem">` +
+          data
+            .map((t) => {
+              const scale = cfg.scale ? 0.78 + (Number(t.count) / max) * 0.5 : 0.85;
+              return (
+                `<a href="${esc(t.url)}" style="font-size:${scale}rem;color:var(--muted);text-decoration:none;padding:.1rem .45rem;border:1px solid var(--border);border-radius:999px">${esc(t.name)}</a>`
+              );
+            })
+            .join("") +
+          `</div>`,
+      );
+    }
+
+    case "archive":
+      return waShell(
+        w,
+        `<ul style="list-style:none;padding:0;margin:0">` +
+          data
+            .map((a) => {
+              const [y, m] = String(a.period).split("-");
+              const href = m ? `/archives?year=${enc(y)}&month=${enc(m)}` : `/archives?year=${enc(y)}`;
+              const label = m ? `${y} 年 ${Number(m)} 月` : `${y} 年`;
+              const count = cfg.showCount ? `<span style="${waDim}">${esc(a.count)}</span>` : "";
+              return `<li style="${waRow}"><a href="${href}" style="${waLink}">${esc(label)}</a>${count}</li>`;
+            })
+            .join("") +
+          `</ul>`,
+      );
+
+    case "recent-comments": {
+      const len = Number(cfg.excerptLength ?? 48);
+      return waShell(
+        w,
+        `<ul style="list-style:none;padding:0;margin:0">` +
+          data
+            .map((c) => {
+              const text = String(c.content ?? "");
+              const excerpt = text.length > len ? text.slice(0, len) + "…" : text;
+              return (
+                `<li style="padding:.45rem 0;border-bottom:1px solid var(--border)">` +
+                `<p style="font-size:.78rem;color:var(--accent);margin:0">${esc(c.authorName)}</p>` +
+                `<p style="font-size:.85rem;color:var(--muted);margin:.2rem 0 0;line-height:1.5">${esc(excerpt)}</p></li>`
+              );
+            })
+            .join("") +
+          `</ul>`,
+      );
+    }
+
+    case "stats": {
+      const s = (w.data ?? {}) as Record<string, number>;
+      const rows: [string, string | number][] = [];
+      if (cfg.showPosts) rows.push(["文章", s.posts ?? 0]);
+      rows.push(["分类", s.categories ?? 0], ["标签", s.tags ?? 0]);
+      if (cfg.showComments) rows.push(["评论", s.comments ?? 0]);
+      if (cfg.showViews) rows.push(["总阅读", s.views ?? 0]);
+      if (cfg.showRuntime && cfg.since) {
+        const days = Math.max(
+          0,
+          Math.floor((Date.now() - new Date(String(cfg.since)).getTime()) / 86400000),
+        );
+        rows.push(["已运行", `${days} 天`]);
+      }
+      return waShell(
+        w,
+        `<ul style="list-style:none;padding:0;margin:0">` +
+          rows
+            .map(
+              ([k, v]) =>
+                `<li style="${waRow}"><span style="font-size:.85rem;color:var(--muted)">${esc(k)}</span><span style="font-size:.85rem;font-weight:600">${esc(v)}</span></li>`,
+            )
+            .join("") +
+          `</ul>`,
+      );
+    }
+
+    case "search":
+      return waShell(
+        w,
+        `<form action="/search" method="get" style="display:flex;gap:.4rem">` +
+          `<input name="q" placeholder="${esc(String(cfg.placeholder ?? "搜索文章…"))}" style="flex:1;min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:.45rem .7rem;font-size:.85rem;color:var(--text)">` +
+          `<button type="submit" style="background:var(--accent);color:var(--accent-text);border:0;border-radius:var(--radius);padding:.45rem .8rem;font-size:.85rem;cursor:pointer">搜索</button></form>`,
+      );
+
+    case "profile": {
+      const links = Array.isArray(cfg.links) ? (cfg.links as any[]) : [];
+      const avatar = cfg.avatar
+        ? `<img src="${esc(String(cfg.avatar))}" alt="" style="width:72px;height:72px;border-radius:50%;object-fit:cover;margin:0 auto .6rem;display:block">`
+        : "";
+      const name = cfg.name ? `<p style="font-weight:600;margin:0">${esc(String(cfg.name))}</p>` : "";
+      const role = cfg.role
+        ? `<p style="font-size:.78rem;color:var(--accent);margin:.15rem 0 0">${esc(String(cfg.role))}</p>`
+        : "";
+      const bio = cfg.bio
+        ? `<p style="font-size:.85rem;color:var(--muted);line-height:1.6;margin:.6rem 0 0">${esc(String(cfg.bio))}</p>`
+        : "";
+      const social = links.length
+        ? `<div style="display:flex;justify-content:center;gap:.6rem;margin-top:.75rem;flex-wrap:wrap">` +
+          links
+            .map(
+              (l) =>
+                `<a href="${esc(l.url ?? "#")}" target="_blank" rel="noopener" style="font-size:.8rem;color:var(--muted)">${esc(l.label ?? "")}</a>`,
+            )
+            .join("") +
+          `</div>`
+        : "";
+      return waShell(w, `<div style="text-align:center">${avatar}${name}${role}${bio}${social}</div>`);
+    }
+
+    case "links": {
+      const items = Array.isArray(cfg.items) ? (cfg.items as any[]) : [];
+      return waShell(
+        w,
+        `<ul style="list-style:none;padding:0;margin:0">` +
+          items
+            .map(
+              (l) =>
+                `<li style="${waRow}"><a href="${esc(l.url ?? "#")}" target="_blank" rel="noopener" style="${waLink}">${esc(l.label ?? "")}</a></li>`,
+            )
+            .join("") +
+          `</ul>`,
+      );
+    }
+
+    case "text":
+      return waShell(
+        w,
+        `<div class="oboe-widget-text" style="font-size:.9rem;line-height:1.7;color:var(--muted)">${String(cfg.body ?? "")}</div>`,
+      );
+
+    default:
+      return waShell(w, "");
+  }
+}
+
+const enc = encodeURIComponent;

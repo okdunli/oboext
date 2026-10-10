@@ -122,19 +122,53 @@ if (__state.__route === window.location.pathname) {
 }
 `, { minify: true }).code;
 
+const CSP_TAIL = `style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'`;
 let cspCache: { for: string | null; value: string } | null = null;
 const EXTERNAL_BOOTSTRAP = `\nimport { start, prefetch, postForm } from '/client.js';\n${BOOTSTRAP}`;
 function inlineScript(client: string): string {
   return `\n${client}\n${BOOTSTRAP}`;
 }
-export function securityHeaders(client: string | null): Record<string, string> {
+/**
+ * A fresh CSP nonce: 128 bits from the platform RNG, base64 - the syntax the
+ * header and the tag share . Web Crypto on purpose: the same helper
+ * serves the Node server and the edge adapter, and an edge runtime has no
+ * node:crypto. Minted per response and never reused: a nonce is only worth
+ * anything an attacker cannot predict, and a repeated one would hand a
+ * guessed value unlimited script execution.
+ */
+export function mintNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  let raw = '';
+  for (const b of bytes) raw += String.fromCharCode(b);
+  return btoa(raw);
+}
+
+/**
+ * The document's CSP. Two shapes, chosen per response:
+ *
+ * - no nonce (the default): `script-src 'sha256-…'` over the exact bytes the
+ *   tag will carry. Nothing else may run - the strongest policy rosezm has,
+ *   and the reason a rosezm document needs no 'unsafe-inline'.
+ * - a nonce (a route exporting `csp = { nonce: true }`):
+ *   `script-src 'nonce-…' 'strict-dynamic'`. A hash dies the moment anything
+ *   between the server and the browser touches the document - a CDN, a WAF,
+ *   an A/B injector that adds one byte blocks the page's own bundle. A nonce
+ *   survives that, and 'strict-dynamic' lets the page's own code load more
+ *   code (a third-party loader, a lazily imported chunk), which is the reason
+ *   a deployment reaches for a nonce in the first place. It is weaker in one
+ *   way: whatever the document's script loads is trusted. That is the trade
+ *   the route opts into, per route, not a framework default.
+ */
+export function securityHeaders(client: string | null, nonce = ''): Record<string, string> {
+  if (nonce) return { 'Content-Security-Policy': `script-src 'nonce-${nonce}' 'strict-dynamic'; ${CSP_TAIL}` };
   if (!cspCache || cspCache.for !== client) {
     const scriptSrc = client
       ? `'sha256-${createHash('sha256').update(inlineScript(client), 'utf-8').digest('base64')}'`
       : `'self' 'sha256-${createHash('sha256').update(EXTERNAL_BOOTSTRAP, 'utf-8').digest('base64')}'`;
     cspCache = {
       for: client,
-      value: `script-src ${scriptSrc}; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'`,
+      value: `script-src ${scriptSrc}; ${CSP_TAIL}`,
     };
   }
   return { 'Content-Security-Policy': cspCache.value };
@@ -154,6 +188,10 @@ const STYLES = `
     .rf { margin-top: 2rem; color: #888; font-size: 0.85rem; }
     ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .18s; }
   `;
+
+const STYLES_MIN = STYLES.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^"']+/g, (m) =>
+  m[0] === '"' || m[0] === "'" ? m : m.replace(/\s+/g, ' ').replace(/\s*([:;{},])\s*/g, '$1').trim()
+).trim();
 
 /**
  * Merge the route chain's <head> blocks (document order: page first, then its
@@ -182,27 +220,40 @@ function mergeHeadBlocks(blocks: string[]): string {
   return order.map((k) => byKey.get(k)!).join('\n  ');
 }
 
-/** The script tag carrying the inlined bundle (+ bootstrap), or the external fallback. */
-export function clientScriptTag(client: string | null): string {
+/**
+ * The script tag carrying the inlined bundle (+ bootstrap), or the external
+ * fallback. `nonce` stamps the same value the CSP header carries, so
+ * a route running a nonce policy has its own code allowed to run; without it
+ * the tag is byte-identical to what the sha256 in the header was computed
+ * over. Both tags in split mode get it: the external module and the inline
+ * bootstrap are the same trust root.
+ */
+export function clientScriptTag(client: string | null, nonce = ''): string {
+  const n = nonce ? ` nonce="${nonce}"` : '';
   return client
-    ? `<script type="module">${inlineScript(client)}</script>`
-    : `<script type="module" src="/client.js"></script>\n<script type="module">${EXTERNAL_BOOTSTRAP}</script>`;
+    ? `<script type="module"${n}>${inlineScript(client)}</script>`
+    : `<script type="module"${n} src="/client.js"></script>\n<script type="module"${n}>${EXTERNAL_BOOTSTRAP}</script>`;
 }
 
 /**
  * The static half of the document for streaming SSR: everything up to (and
  * including) the open `<div id="app">`. No route tags - the route's <head>
  * content is applied by the client at boot from the body's head markers.
+ *
+ * `lang`/`dir` are the document's locale and reading direction ( the
+ * servers compute them from the [lang] segment with the server bundle's
+ * docAttrs). The streaming path flushes this string BEFORE the render, so
+ * the browser gets the language metadata in the first byte.
  */
-export function shellOpen(styles: string = getStyles()): string {
+export function shellOpen(styles: string = getStyles(), lang = 'en', dir = ''): string {
   const styleTag = styles ? `\n  <style>${styles}</style>` : '';
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${lang}"${dir ? ` dir="${dir}"` : ''}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>rosezm</title>
-  <style>${STYLES}</style>${styleTag}
+  <style>${STYLES_MIN}</style>${styleTag}
   ${FAVICON}
 </head>
 <body>
@@ -210,8 +261,8 @@ export function shellOpen(styles: string = getStyles()): string {
 }
 
 /** Build the document from an explicit client source (edge runtimes have no fs). */
-export function buildShell(ssrHtml: string, stateJson: string, client: string | null, head: string[] = [], styles: string = getStyles(), js = true): string {
-  const clientTag = clientScriptTag(client);
+export function buildShell(ssrHtml: string, stateJson: string, client: string | null, head: string[] = [], styles: string = getStyles(), js = true, lang = 'en', dir = '', nonce = ''): string {
+  const clientTag = clientScriptTag(client, nonce);
 
   const mergedHead = mergeHeadBlocks(head);
   const titleTag = /<title>/i.test(mergedHead) ? '' : '<title>rosezm</title>';
@@ -223,12 +274,12 @@ export function buildShell(ssrHtml: string, stateJson: string, client: string | 
     : '';
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${lang}"${dir ? ` dir="${dir}"` : ''}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">${headTags}${iconTag}
   ${titleTag}
-  <style>${STYLES}</style>${styleTag}
+  <style>${STYLES_MIN}</style>${styleTag}
 </head>
 <body>
   <div id="app">${ssrHtml}</div>${jsTail}
@@ -237,6 +288,6 @@ export function buildShell(ssrHtml: string, stateJson: string, client: string | 
 }
 
 /** Node entry: reads dist/client.js from disk (mtime-cached). */
-export function getHtmlShell(ssrHtml: string, stateJson: string, head: string[] = [], js = true): string {
-  return buildShell(ssrHtml, stateJson, getClientSource(), head, getStyles(), js);
+export function getHtmlShell(ssrHtml: string, stateJson: string, head: string[] = [], js = true, lang = 'en', dir = '', nonce = ''): string {
+  return buildShell(ssrHtml, stateJson, getClientSource(), head, getStyles(), js, lang, dir, nonce);
 }

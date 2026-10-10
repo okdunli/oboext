@@ -1,0 +1,81 @@
+<script>
+  // Tags: create/edit/delete against /api/tags. Same form-fill delegation as
+  // categories; tags only carry name + slug.
+  let d = $data(() => __rvLoad("admin.taxonomies", {}));
+  function tags() {
+    return d().tags || [];
+  }
+  function emptyHint() {
+    return tags().length ? [] : [1];
+  }
+</script>
+
+<head>
+  <title>标签 - 管理后台</title>
+</head>
+
+<div class="adm-grid adm-cols-2">
+  <div class="adm-card">
+    <div class="adm-card-hd"><strong>新增标签</strong></div>
+    <div class="adm-card-bd">
+      <form data-adm-form="create-tag" data-add-label="新增标签">
+        <input type="hidden" name="id">
+        <div class="adm-field">
+          <label>名称</label>
+          <input class="adm-input" name="name" required placeholder="例如：Node.js">
+        </div>
+        <div class="adm-field">
+          <label>别名（slug）</label>
+          <input class="adm-input" name="slug" placeholder="留空按名称自动生成">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <button class="adm-btn" type="submit">新增标签</button>
+          <button class="adm-btn adm-btn-ghost" type="button" data-adm-act="tax-new" data-form='[data-adm-form="create-tag"]'>取消编辑</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="adm-card adm-table-wrap">
+    <table class="adm-table">
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th style="width:120px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each tags() as t}
+        <tr>
+          <td>
+            <div class="title">#{t.name}</div>
+            <div class="sub">/{t.slug}</div>
+          </td>
+          <td>
+            <div class="row-actions">
+              <a class="adm-iconbtn" href={"/blog/tag/" + t.slug} target="_blank">查看</a>
+              <button
+                class="adm-iconbtn"
+                data-adm-act="tax-edit"
+                data-form='[data-adm-form="create-tag"]'
+                data-id={t.id}
+                data-name={t.name}
+                data-slug={t.slug}
+              >编辑</button>
+              <button
+                class="adm-iconbtn danger"
+                data-adm-act="delete"
+                data-url={"/api/tags/" + t.id}
+                data-confirm={"确认删除标签「" + t.name + "」？文章关联会一并解除。"}
+              >删除</button>
+            </div>
+          </td>
+        </tr>
+        {/each}
+      </tbody>
+    </table>
+    {#each emptyHint() as _}
+    <div class="adm-empty">还没有标签，在左侧创建第一个吧。</div>
+    {/each}
+  </div>
+</div>

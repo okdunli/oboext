@@ -3,7 +3,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as zlib from 'zlib';
-import { pathToFileURL } from 'url';
+import { pathToFileURL, fileURLToPath } from 'url';
 import { buildProject, type RouteInfo } from '../compiler/index.js';
 import { getHtmlShell, getClientSource, shellOpen, clientScriptTag, securityHeaders, setBundleMode } from './shell.js';
 
@@ -56,17 +56,25 @@ function sendHtml(req: any, res: any, status: number, html: string, extraHeaders
   }
 }
 
+function writeWebHeaders(web: any, res: any): void {
+  const cookies = web.headers.getSetCookie?.() ?? [];
+  web.headers.forEach((v: string, k: string) => {
+    if (cookies.length && k.toLowerCase() === 'set-cookie') return;
+    res.setHeader(k, v);
+  });
+  if (cookies.length) res.setHeader('set-cookie', cookies);
+}
+
 async function sendWebResponse(web: any, res: any): Promise<void> {
-  web.headers.forEach((v: string, k: string) => res.setHeader(k, v));
+  writeWebHeaders(web, res);
   res.statusCode = web.status;
   res.end(Buffer.from(await web.arrayBuffer()));
 }
 
 const fileCache = new Map<string, { mtimeMs: number; raw: Buffer; br: Buffer; gzip: Buffer; etag: string }>();
 
-const ROOT = process.cwd();
-const EXAMPLE_DIR = path.join(ROOT, 'oboext');
-const OUT_DIR = path.join(ROOT, 'dist');
+const SRC_DIR = process.argv[3] ? path.resolve(process.argv[3]) : process.cwd();
+const OUT_DIR = path.join(process.cwd(), 'dist');
 const PORT = Number(process.env.PORT) || 3000;
 
 // Import dist/server.js, cached until the file changes on disk.
@@ -86,7 +94,8 @@ async function loadServer(): Promise<any> {
 }
 
 async function build(): Promise<void> {
-  const { routes, bundle } = await buildProject(EXAMPLE_DIR, OUT_DIR);
+  const { routes, bundle } = await buildProject(SRC_DIR, OUT_DIR);
+  await clearPrerendered(OUT_DIR);
   setBundleMode(bundle);
   const skipped = await prerender(routes);
   await fs.promises.writeFile(path.join(OUT_DIR, 'broken.json'), JSON.stringify(skipped));
@@ -112,6 +121,27 @@ async function writeBrotli(dir: string): Promise<void> {
   }
 }
 
+// Delete the prerendered output of a previous build: HTML documents and baked API bodies, with their brotli siblings.
+async function clearPrerendered(dir: string): Promise<void> {
+  for (const e of await fs.promises.readdir(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      await clearPrerendered(p);
+      continue;
+    }
+    if (!/\.(?:html|json)(?:\.br)?$/.test(e.name)) continue;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await fs.promises.rm(p, { force: true });
+        break;
+      } catch (err) {
+        if (attempt >= 2 || !/EPERM|EBUSY|EACCES/.test(String(err))) throw err;
+        await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+      }
+    }
+  }
+}
+
 // Prerender every static route to dist/<route>/index.html at build time.
 async function prerender(routes: RouteInfo[]): Promise<string[]> {
   const ssrModule = await loadServer();
@@ -132,12 +162,12 @@ async function prerender(routes: RouteInfo[]): Promise<string[]> {
     const routeDir = routePath === '/' ? OUT_DIR : path.join(OUT_DIR, routePath.slice(1));
     await fs.promises.mkdir(routeDir, { recursive: true });
     await fs.promises.writeFile(path.join(routeDir, 'index.html'), getHtmlShell(page.html, page.state, page.head, page.csr !== false));
-    console.log(`prerendered ${routePath} -> ${path.relative(ROOT, path.join(routeDir, 'index.html'))}`);
+    console.log(`prerendered ${routePath} -> ${path.relative(process.cwd(), path.join(routeDir, 'index.html'))}`);
   };
 
   for (const info of routes) {
     if ((ssrModule.dynamicRoutes as string[]).includes(info.routePath)) {
-      console.log(`dynamic route ${info.routePath}: reads the request context, rendered on demand`);
+      console.log(`dynamic route ${info.routePath}: per-request state (getContext/$store), rendered on demand`);
       continue;
     }
     if (info.paramNames.length === 0) {
@@ -174,7 +204,7 @@ async function prerender(routes: RouteInfo[]): Promise<string[]> {
       const outFile = path.join(OUT_DIR, routePath.slice(1) + '.json');
       await fs.promises.mkdir(path.dirname(outFile), { recursive: true });
       await fs.promises.writeFile(outFile, body);
-      console.log(`prerendered api ${routePath} -> ${path.relative(ROOT, outFile)}`);
+      console.log(`prerendered api ${routePath} -> ${path.relative(process.cwd(), outFile)}`);
     } catch (err) {
       console.error(`api prerender skipped for ${routePath}: ${err instanceof Error ? err.message : err}`);
     }
@@ -229,8 +259,95 @@ function revalidateInBackground(routePath: string, filePath: string): void {
   })();
 }
 
+/** A request body is bounded. 1 MB holds any form and any JSON API call a
+ * site this size makes; a deployment that needs more sets it explicitly. */
+const MAX_BODY = Number(process.env.rosezm_MAX_BODY) || 1024 * 1024;
+
+/**
+ * Collect a request body, refusing anything past MAX_BODY with a 413. The
+ * refusal stops buffering immediately, so a client streaming 10 GB gets one
+ * small response instead of a 10 GB buffer.
+ */
+function readBody(req: any, res: any, onDone: (body: any) => void): void {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let refused = false;
+  req.on('data', (c: Buffer) => {
+    if (refused) return;
+    size += c.length;
+    if (size > MAX_BODY) {
+      refused = true;
+      res.statusCode = 413;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end(`Payload too large (limit ${MAX_BODY} bytes)`);
+      return;
+    }
+    chunks.push(c);
+  });
+  req.on('end', () => { if (!refused) onDone(Buffer.concat(chunks)); });
+  req.on('error', () => {});
+}
+
+/**
+ * CSRF: a state-changing request that did not come from this site is
+ * refused before anything else runs. Browsers stamp every cross-origin POST
+ * with an Origin header, so the check is free for real browsers; a client
+ * that sends neither Origin nor Sec-Fetch-Site (curl, a health check, the
+ * test suites) is not attackable by CSRF - the attack rides the victim's
+ * cookies in a browser - so it passes. Returns the refusal, or null.
+ */
+function crossSiteWrite(req: any): { status: number; body: string } | null {
+  const m = req.method;
+  if (m !== 'POST' && m !== 'PUT' && m !== 'PATCH' && m !== 'DELETE') return null;
+  const origin = req.headers.origin;
+  if (origin) {
+    let host: string;
+    try {
+      host = new URL(origin).host;
+    } catch {
+      return { status: 403, body: 'Cross-site request blocked (unparsable Origin header)' };
+    }
+    return host === req.headers.host ? null : { status: 403, body: 'Cross-site request blocked (Origin does not match Host)' };
+  }
+  const site = req.headers['sec-fetch-site'];
+  if (site && site !== 'same-origin' && site !== 'same-site' && site !== 'none') {
+    return { status: 403, body: `Cross-site request blocked (sec-fetch-site: ${site})` };
+  }
+  return null;
+}
+
+/**
+ * One access line per request on stdout - the same greppable shape the Go
+ * binary writes (`ts method path status bytes duration`), with the worker id
+ * in front when several workers share one stdout. Logged on the response's
+ * finish, so a streamed route is recorded when it is actually done.
+ */
+function withAccessLog(handler: (req: any, res: any) => void, tag?: string): (req: any, res: any) => void {
+  return (req, res) => {
+    const started = process.hrtime.bigint();
+    let bytes = 0;
+    const write = res.write.bind(res);
+    const end = res.end.bind(res);
+    res.write = (chunk: any, ...rest: any[]) => { if (chunk) bytes += Buffer.byteLength(chunk); return write(chunk, ...rest); };
+    res.end = (chunk: any, ...rest: any[]) => { if (chunk) bytes += Buffer.byteLength(chunk); return end(chunk, ...rest); };
+    res.on('finish', () => {
+      const ms = Number(process.hrtime.bigint() - started) / 1e6;
+      const dur = ms >= 1 ? `${ms.toFixed(3)}ms` : `${(ms * 1000).toFixed(0)}us`;
+      console.log(`${new Date().toISOString().slice(0, 19)}Z${tag ? ` [${tag}]` : ''} ${req.method} ${req.url} ${res.statusCode} ${bytes}B ${dur}`);
+    });
+    handler(req, res);
+  };
+}
+
 function serveStatic(dir: string, isr = false): (req: any, res: any) => void {
   return (req, res) => {
+    const blocked = crossSiteWrite(req);
+    if (blocked) {
+      res.statusCode = blocked.status;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end(blocked.body);
+      return;
+    }
     loadServer().then(async (ssrModule: any) => {
       const apiPath0 = pathnameOf(req.url);
       const isPagePost = req.method === 'POST' && !ssrModule.isApi(apiPath0);
@@ -243,11 +360,8 @@ function serveStatic(dir: string, isr = false): (req: any, res: any) => void {
       }
       const apiPath = pathnameOf(req.url);
       if (ssrModule.isApi(apiPath)) {
-        const chunks: Buffer[] = [];
-        req.on('data', (c: Buffer) => chunks.push(c));
-        req.on('end', async () => {
+        readBody(req, res, async (body) => {
           try {
-            const body = Buffer.concat(chunks);
             const headers: Record<string, string> = {};
             for (const [k, v] of Object.entries(req.headers)) {
               if (v !== undefined) headers[k] = Array.isArray(v) ? v.join(', ') : String(v);
@@ -258,7 +372,7 @@ function serveStatic(dir: string, isr = false): (req: any, res: any) => void {
               body: body.length > 0 ? body : undefined,
             });
             const apiRes = await ssrModule.handleApi(req.method || 'GET', apiPath, request);
-            apiRes.headers.forEach((v: string, k: string) => res.setHeader(k, v));
+            writeWebHeaders(apiRes, res);
             res.statusCode = apiRes.status;
             res.end(Buffer.from(await apiRes.arrayBuffer()));
           } catch {
@@ -271,11 +385,8 @@ function serveStatic(dir: string, isr = false): (req: any, res: any) => void {
       }
 
       if (req.method === 'POST') {
-        const chunks: Buffer[] = [];
-        req.on('data', (c: Buffer) => chunks.push(c));
-        req.on('end', async () => {
+        readBody(req, res, async (body) => {
           try {
-            const body = Buffer.concat(chunks);
             const form = await new Response(body, {
               headers: { 'content-type': req.headers['content-type'] || 'application/x-www-form-urlencoded' },
             }).formData();
@@ -407,10 +518,14 @@ function pathnameOf(url: string | undefined): string {
   }
 }
 
-/** The version from package.json - one source of truth, no constant to drift. */
+/**
+ * The version from package.json - one source of truth, no constant to drift.
+ * Resolved from THIS module (not the cwd): the banner names the framework's
+ * version even when it builds somebody else's project.
+ */
 function version(): string {
   try {
-    return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8')).version ?? '0.0.0';
+    return JSON.parse(fs.readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf-8')).version ?? '0.0.0';
   } catch {
     return '0.0.0';
   }
@@ -425,7 +540,7 @@ async function dev(): Promise<void> {
   }
 
   let timeout: any;
-  fs.watch(EXAMPLE_DIR, { recursive: true }, () => {
+  fs.watch(SRC_DIR, { recursive: true }, () => {
     clearTimeout(timeout);
     timeout = setTimeout(async () => {
       try {
@@ -455,8 +570,55 @@ async function preview(): Promise<void> {
   });
 }
 
+// `rosezm serve` runs what `build` produced - no rebuild, no watcher.
+async function serve(): Promise<void> {
+  if (!fs.existsSync(path.join(OUT_DIR, 'server.js'))) {
+    console.error(`rosezm: ${OUT_DIR} has no server.js - run rosezm build first`);
+    process.exit(1);
+  }
+  const cluster = (await import('node:cluster')).default as any;
+  cluster.schedulingPolicy = cluster.SCHED_RR;
+  const os = await import('node:os');
+  const workers = Math.max(1, Number(process.env.rosezm_WORKERS) || os.cpus().length);
+  const PORT = Number(process.env.PORT) || 3000;
+  if (cluster.isPrimary) {
+    for (let i = 0; i < workers; i++) cluster.fork();
+    cluster.on('message', (worker: any, msg: any) => {
+      if (!msg || msg.type !== 'rosezm:store') return;
+      for (const w of Object.values<any>(cluster.workers ?? {})) {
+        if (w && w.id !== worker.id) w.send(msg);
+      }
+    });
+    let live = workers;
+    const stop = () => {
+      for (const w of Object.values<any>(cluster.workers ?? {})) w.kill();
+      setTimeout(() => process.exit(0), 5000).unref();
+    };
+    process.on('SIGTERM', stop);
+    process.on('SIGINT', stop);
+    cluster.on('exit', () => { if (--live <= 0) process.exit(0); });
+    console.log(`🌹 rosezm v${version()} serve: ${workers} worker${workers > 1 ? 's' : ''} on http://localhost:${PORT} (cluster, bounded bodies, graceful shutdown, access log on stdout)`);
+    return;
+  }
+  process.on('disconnect', () => process.exit(0));
+  const http = await import('node:http');
+  const server = http.createServer(withAccessLog(serveStatic(OUT_DIR, true), `w${process.pid}`));
+  server.requestTimeout = 30_000;
+  server.headersTimeout = 65_000;
+  server.keepAliveTimeout = 5_000;
+  server.listen(PORT, () => console.log(`🌹 rosezm worker ${process.pid} listening on http://localhost:${PORT}`));
+  const stop = () => {
+    server.close(() => process.exit(0));
+    server.closeIdleConnections?.();
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
+}
+
 const cmd = process.argv[2];
 if (cmd === 'dev') dev();
 else if (cmd === 'build') build();
 else if (cmd === 'preview') preview();
-else console.log('Usage: rosezm dev|build|preview');
+else if (cmd === 'serve') serve();
+else console.log('Usage: rosezm dev|build|preview|serve [dir]   (dir defaults to the current directory; dist/ is written there)');

@@ -1,0 +1,43 @@
+<script>
+  // Admin login. Public (middleware-whitelisted); POST /api/auth/login sets
+  // the HttpOnly cms_session cookie, then we hard-navigate into the shell.
+  let session = $data(() => __rvLoad("admin.session", {}));
+</script>
+
+<head>
+  <title>登录 - 管理后台</title>
+</head>
+
+<div class="adm-auth">
+  <div class="adm-auth-side">
+    <div class="adm-auth-brand"><span class="adm-auth-mark">O</span> oboext</div>
+    <div>
+      <h1>内容管理后台</h1>
+      <p>动态全栈博客：文章、评论、分类、标签、用户与站点设置，全部按请求实时读写数据库。</p>
+      <ul>
+        <li>jose HS256 会话 + bcrypt 密码哈希</li>
+        <li>登录失败滑动窗口限流</li>
+        <li>基于角色的内容权限（admin / editor / author）</li>
+      </ul>
+    </div>
+    <div class="adm-hint">oboext on rosezm · Node runtime</div>
+  </div>
+  <div class="adm-auth-main">
+    <div class="adm-auth-card">
+      <h2>欢迎回来</h2>
+      <p class="adm-auth-sub">登录以管理你的站点内容</p>
+      <form data-adm-form="login">
+        <div class="adm-field">
+          <label>邮箱或昵称</label>
+          <input class="adm-input" name="account" autocomplete="username" required autofocus>
+        </div>
+        <div class="adm-field">
+          <label>密码</label>
+          <input class="adm-input" type="password" name="password" autocomplete="current-password" required>
+        </div>
+        <button class="adm-btn adm-btn-block" type="submit">登 录</button>
+        <p class="adm-auth-msg" data-adm-msg></p>
+      </form>
+    </div>
+  </div>
+</div>

@@ -2,14 +2,9 @@
   // Post detail. The [slug] segment arrives pre-seeded as state; the "post"
   // loader reads the live database per request (body, related posts, view
   // counter). Cold GETs for a missing slug are answered 404 by the
-  // middleware's existence pre-check; a client-side hop to a deleted slug
-  // (middleware never runs there) reloads so the server can answer 404.
+  // middleware's existence pre-check; there is no client-side router.
   let slug = $state("");
   let post = $data(() => __rvLoad("post", { slug: slug() }));
-
-  onMount(() => {
-    if (post() && post().notFound) window.location.reload();
-  });
 </script>
 
 <head>

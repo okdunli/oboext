@@ -1,0 +1,24 @@
+<script>
+  // /api/menus
+  //   GET  list all menus with resolved items (public, like the original)
+  //   POST create a menu location {location,name} (settings:manage)
+  import { apiGate, readBody, jsonFail } from "@server/admin";
+  import { listMenus, createMenu } from "@server/menus";
+
+  export async function GET() {
+    return apiGate(async () => listMenus());
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      if (!body || typeof body.location !== "string" || typeof body.name !== "string")
+        return jsonFail("缺少 location 或 name", 400);
+      const row = await createMenu(getContext().user, body.location, body.name);
+      return new Response(JSON.stringify(row), {
+        status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+</script>

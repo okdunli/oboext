@@ -1,6 +1,6 @@
 <script>
   // Tag archive. Missing tags are real 404s on cold GETs (middleware
-  // existence check); client-side hops reload for the same.
+  // existence check); there is no client-side router.
   let slug = $state("");
   let list = $data(() =>
     __rvLoad("tag", {
@@ -8,10 +8,6 @@
       page: Number(__rvQs().get("page") || 1),
     })
   );
-
-  onMount(() => {
-    if (list() && list().notFound) window.location.reload();
-  });
 </script>
 
 <head>

@@ -893,6 +893,249 @@
     if (e.target && e.target.tagName === "SELECT") applyShowIf();
   });
 
+  function initMenus() {
+    var root = document.querySelector("[data-menu-manager]");
+    if (!root || root.__bound) return;
+    root.__bound = true;
+
+    var state = { menus: [], activeId: null, flat: [], options: {}, tempSeq: 0 };
+    try {
+      var boot = JSON.parse(root.getAttribute("data-menus") || "{}");
+      state.menus = boot.menus || [];
+      if (state.menus.length) state.activeId = state.menus[0].id;
+    } catch (e) {}
+
+    var tabsEl = root.querySelector("[data-menu-tabs]");
+    var rowsEl = root.querySelector("[data-menu-rows]");
+    var msgEl = root.querySelector("[data-menu-msg]");
+    var emptyEl = root.querySelector("[data-menu-empty]");
+    var saveBtn = root.querySelector("[data-menu-save]");
+    var addBtn = root.querySelector("[data-menu-add]");
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+    function flatten(nodes, depth, parentId, out) {
+      (nodes || []).forEach(function (n, i) {
+        out.push({
+          id: n.id, parentId: parentId, order: i,
+          type: n.type || "custom", label: n.label || "", url: n.url || "",
+          referenceSlug: n.referenceSlug || "", target: n.target || "_self",
+          icon: n.icon || "", depth: depth,
+        });
+        if (n.children && n.children.length)
+          flatten(n.children, depth + 1, n.id, out);
+      });
+      return out;
+    }
+    function activeMenu() {
+      return state.menus.filter(function (m) { return m.id === state.activeId; })[0] || null;
+    }
+    function useMenu(id) {
+      state.activeId = id;
+      var m = activeMenu();
+      state.flat = m ? flatten(m.items, 0, null, []) : [];
+      render();
+      var types = [];
+      state.flat.forEach(function (it) {
+        if (it.type !== "custom" && types.indexOf(it.type) < 0) types.push(it.type);
+      });
+      types.forEach(ensureOptions);
+    }
+    function setMsg(t, ok) {
+      if (!msgEl) return;
+      msgEl.textContent = t;
+      msgEl.className = "adm-menu-msg" + (t ? (ok ? " is-ok" : " is-err") : "");
+    }
+    function tabHtml(m) {
+      return '<button type="button" class="adm-menu-tab' +
+        (m.id === state.activeId ? " is-active" : "") +
+        '" data-menu-tab data-id="' + m.id + '">' + esc(m.name) +
+        ' <span class="adm-menu-loc">(' + esc(m.location) + ")</span></button>";
+    }
+    function refOptions(it) {
+      var list = state.options[it.type] || [];
+      var have = list.some(function (o) { return o.slug === it.referenceSlug; });
+      var html = '<option value="">' +
+        ("选择" + ({ post: "文章", page: "页面", category: "分类", tag: "标签" })[it.type] || "目标") + "…</option>";
+      if (it.referenceSlug && !have)
+        html += '<option value="' + esc(it.referenceSlug) + '">' + esc(it.label || it.referenceSlug) + "</option>";
+      list.forEach(function (o) {
+        html += '<option value="' + esc(o.slug) + '"' + (o.slug === it.referenceSlug ? " selected" : "") +
+          ">" + esc(o.label) + "</option>";
+      });
+      return html;
+    }
+    function rowHtml(it, idx) {
+      var html = '<div class="adm-menu-row" data-menu-row style="margin-left:' + (it.depth * 20) + 'px">';
+      html += '<span class="adm-menu-depth">L' + (it.depth + 1) + "</span>";
+      html += '<select class="adm-select adm-menu-type" data-f="type">';
+      ["custom", "post", "page", "category", "tag"].forEach(function (t) {
+        var label = { custom: "自定义链接", post: "文章", page: "页面", category: "分类", tag: "标签" }[t];
+        html += '<option value="' + t + '"' + (it.type === t ? " selected" : "") + ">" + label + "</option>";
+      });
+      html += "</select>";
+      if (it.type !== "custom") {
+        html += '<select class="adm-select adm-menu-ref" data-f="ref">' + refOptions(it) + "</select>";
+      }
+      html += '<input class="adm-input adm-menu-label" data-f="label" value="' + esc(it.label) + '" placeholder="显示文字">';
+      if (it.type === "custom") {
+        html += '<input class="adm-input adm-menu-url" data-f="url" value="' + esc(it.url) + '" placeholder="链接 /">';
+      } else {
+        html += '<span class="adm-menu-mono" title="' + esc(it.url) + '">' +
+          esc(it.referenceSlug ? (it.url || "已选择") : "未选择") + "</span>";
+      }
+      html += '<input class="adm-input adm-menu-icon" data-f="icon" value="' + esc(it.icon) +
+        '" placeholder="图标标识" title="图标标识（lucide 名称，如 house）">';
+      html += '<div class="adm-menu-tools">';
+      html += '<button type="button" class="adm-iconbtn" data-menu-act="up" title="上移" ' +
+        (idx === 0 ? "disabled" : "") + ">↑</button>";
+      html += '<button type="button" class="adm-iconbtn" data-menu-act="down" title="下移" ' +
+        (idx === state.flat.length - 1 ? "disabled" : "") + ">↓</button>";
+      html += '<button type="button" class="adm-iconbtn" data-menu-act="indent" title="作为上一项的子项" ' +
+        (idx === 0 ? "disabled" : "") + ">↳</button>";
+      if (it.depth > 0)
+        html += '<button type="button" class="adm-iconbtn" data-menu-act="outdent" title="升回顶级">↰</button>';
+      html += '<button type="button" class="adm-iconbtn danger" data-menu-act="del" title="删除">🗑</button>';
+      html += "</div></div>";
+      return html;
+    }
+    function render() {
+      if (tabsEl) tabsEl.innerHTML = state.menus.map(tabHtml).join("");
+      if (rowsEl) rowsEl.innerHTML = state.flat.map(rowHtml).join("");
+      if (emptyEl) emptyEl.classList.toggle("is-hidden", state.flat.length > 0);
+      if (saveBtn) saveBtn.disabled = state.activeId == null;
+    }
+    function ensureOptions(type) {
+      if (state.options[type] || type === "custom") return Promise.resolve();
+      var url = type === "post" ? "/api/posts?status=published&limit=100"
+        : type === "page" ? "/api/pages?status=published&limit=100"
+        : type === "category" ? "/api/categories" : "/api/tags";
+      return api("GET", url).then(function (data) {
+        var list;
+        if (type === "post" || type === "page") {
+          list = (data.items || []).map(function (p) {
+            return { id: p.id, label: p.title, slug: p.slug, url: p.url || "" };
+          });
+        } else {
+          list = (data || []).map(function (t) {
+            return { id: t.id, label: t.name, slug: t.slug, url: t.url || "" };
+          });
+        }
+        state.options[type] = list;
+        render();
+      }).catch(function () { state.options[type] = []; });
+    }
+
+    tabsEl.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-menu-tab]");
+      if (b) useMenu(Number(b.getAttribute("data-id")));
+    });
+    addBtn.addEventListener("click", function () {
+      var id = --state.tempSeq;
+      state.flat.push({
+        id: id, parentId: null, order: state.flat.length, type: "custom",
+        label: "", url: "", referenceSlug: "", target: "_self", icon: "", depth: 0,
+      });
+      render();
+    });
+
+    rowsEl.addEventListener("change", function (e) {
+      var row = e.target.closest("[data-menu-row]");
+      if (!row) return;
+      var idx = [].slice.call(rowsEl.children).indexOf(row);
+      var it = state.flat[idx];
+      var f = e.target.getAttribute("data-f");
+      if (f === "type") {
+        it.type = e.target.value;
+        it.referenceSlug = "";
+        it.url = "";
+        render();
+        ensureOptions(it.type);
+        return;
+      }
+      if (f === "ref") {
+        var slug = e.target.value;
+        var matched = (state.options[it.type] || []).filter(function (o) { return o.slug === slug; })[0];
+        it.referenceSlug = slug || null;
+        it.url = matched ? matched.url : "";
+        if (matched) it.label = matched.label;
+        render();
+      }
+    });
+    rowsEl.addEventListener("input", function (e) {
+      var row = e.target.closest("[data-menu-row]");
+      if (!row) return;
+      var idx = [].slice.call(rowsEl.children).indexOf(row);
+      var it = state.flat[idx];
+      var f = e.target.getAttribute("data-f");
+      if (f === "label") it.label = e.target.value;
+      else if (f === "url") it.url = e.target.value;
+      else if (f === "icon") it.icon = e.target.value;
+    });
+    rowsEl.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-menu-act]");
+      if (!b) return;
+      var row = e.target.closest("[data-menu-row]");
+      var idx = [].slice.call(rowsEl.children).indexOf(row);
+      var it = state.flat[idx];
+      var act = b.getAttribute("data-menu-act");
+      if (act === "up" && idx > 0) {
+        var t1 = state.flat[idx - 1];
+        state.flat[idx - 1] = it; state.flat[idx] = t1;
+      } else if (act === "down" && idx < state.flat.length - 1) {
+        var t2 = state.flat[idx + 1];
+        state.flat[idx + 1] = it; state.flat[idx] = t2;
+      } else if (act === "indent" && idx > 0) {
+        var prev = state.flat[idx - 1];
+        if (prev.id !== undefined) { it.parentId = prev.id; it.depth = Math.min(prev.depth + 1, 2); }
+      } else if (act === "outdent") {
+        it.parentId = null; it.depth = 0;
+      } else if (act === "del") {
+        state.flat = state.flat.filter(function (x, i) {
+          return i !== idx && x.parentId !== it.id;
+        });
+      }
+      render();
+    });
+
+    saveBtn.addEventListener("click", async function () {
+      if (state.activeId == null) return;
+      for (var i = 0; i < state.flat.length; i++) {
+        if (!state.flat[i].label.trim()) {
+          setMsg("第 " + (i + 1) + " 项缺少显示文字", false);
+          return;
+        }
+      }
+      var payload = {
+        items: state.flat.map(function (it, i) {
+          return {
+            id: it.id, parentId: it.parentId, order: i, type: it.type,
+            label: it.label, url: it.url, referenceSlug: it.referenceSlug || null,
+            target: it.target, icon: it.icon || null,
+          };
+        }),
+      };
+      saveBtn.disabled = true;
+      try {
+        await api("PUT", "/api/menus/" + state.activeId, payload);
+        setMsg("已保存 ✓", true);
+        var data = await api("GET", "/api/menus");
+        state.menus = data || [];
+        useMenu(state.activeId);
+      } catch (err) {
+        setMsg(err.message, false);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    render();
+    if (state.activeId != null) useMenu(state.activeId);
+  }
+
   function initImageFields() {
     document.querySelectorAll("[data-img-field]").forEach(function (box) {
       if (box.__bound) return;
@@ -931,12 +1174,387 @@
     });
   }
 
+  function initWidgetManager() {
+    var root = document.querySelector("[data-wg-manager]");
+    if (!root || root.__wgbound) return;
+    root.__wgbound = true;
+
+    var boot = {};
+    try { boot = JSON.parse(root.getAttribute("data-wg") || "{}"); } catch (e) { return; }
+    var theme = boot.theme || "skyscraper";
+    var typeMap = {};
+    (boot.types || []).forEach(function (t) { typeMap[t.type] = t; });
+    var byId = {};
+    (boot.widgets || []).forEach(function (w) { byId[w.id] = w; });
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+    function reloadSoon() { setTimeout(function () { location.reload(); }, 250); }
+    function fail(err) { toast(err.message || "请求失败", "err"); }
+
+    root.addEventListener("click", function (e) {
+      var b;
+      if ((b = e.target.closest("[data-wg-add-open]"))) {
+        var sec = b.closest(".adm-wg-area");
+        var picker = sec.querySelector("[data-wg-picker]");
+        if (picker) picker.hidden = false;
+        b.hidden = true;
+        return;
+      }
+      if ((b = e.target.closest("[data-wg-picker-x]"))) {
+        var sec2 = b.closest(".adm-wg-area");
+        sec2.querySelector("[data-wg-picker]").hidden = true;
+        var openBtn = sec2.querySelector("[data-wg-add-open]");
+        if (openBtn) openBtn.hidden = false;
+        return;
+      }
+      if ((b = e.target.closest("[data-wg-add]"))) {
+        var area = b.getAttribute("data-wg-area");
+        var type = b.getAttribute("data-type");
+        var def = typeMap[type] || {};
+        api("POST", "/api/widgets", { area: area, type: type, themeSlug: theme, title: def.label || "" })
+          .then(function () { toast("已添加", "ok"); reloadSoon(); }).catch(fail);
+        return;
+      }
+      if ((b = e.target.closest("[data-wg-move]"))) {
+        if (b.classList.contains("is-disabled")) return;
+        var rowEl = b.closest("[data-wg-id]");
+        var box = rowEl.parentElement;
+        var ids = [].slice.call(box.querySelectorAll("[data-wg-id]"))
+          .map(function (r) { return Number(r.getAttribute("data-wg-id")); });
+        var i = ids.indexOf(Number(rowEl.getAttribute("data-wg-id")));
+        var j = i + Number(b.getAttribute("data-wg-move"));
+        if (i < 0 || j < 0 || j >= ids.length) return;
+        var tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp;
+        api("PATCH", "/api/widgets", { ids: ids }).then(reloadSoon).catch(fail);
+        return;
+      }
+      if ((b = e.target.closest("[data-wg-toggle]"))) {
+        var w0 = byId[Number(b.closest("[data-wg-id]").getAttribute("data-wg-id"))];
+        api("PATCH", "/api/widgets/" + w0.id, { enabled: !w0.enabled }).then(reloadSoon).catch(fail);
+        return;
+      }
+      if ((b = e.target.closest("[data-wg-del]"))) {
+        var id = Number(b.closest("[data-wg-id]").getAttribute("data-wg-id"));
+        if (!confirm("确定删除这个小工具？")) return;
+        api("DELETE", "/api/widgets/" + id)
+          .then(function () { toast("已删除", "ok"); reloadSoon(); }).catch(fail);
+        return;
+      }
+      if ((b = e.target.closest("[data-wg-edit]"))) {
+        var ew = byId[Number(b.closest("[data-wg-id]").getAttribute("data-wg-id"))];
+        openEditor(ew);
+      }
+    });
+
+    var modal = null;
+    var editing = null;
+    var fields = [];
+
+    function allFields(def) {
+      return (def.settings || []).reduce(function (a, s) { return a.concat(s.fields || []); }, []);
+    }
+    function resolveValues(flds, stored) {
+      var out = {};
+      flds.forEach(function (f) { if (f.default !== undefined) out[f.key] = f.default; });
+      var known = {};
+      flds.forEach(function (f) { known[f.key] = 1; });
+      Object.keys(stored || {}).forEach(function (k) {
+        var v = stored[k];
+        if (known[k] && v !== undefined && v !== null && v !== "") out[k] = v;
+      });
+      return out;
+    }
+    function fieldHtml(f, values) {
+      var v = values[f.key];
+      var showIf = f.showIf
+        ? ' data-showif-key="' + esc(f.showIf.key) + '" data-showif-eq="' +
+          esc([].concat(f.showIf.equals).map(String).join(",")) + '"'
+        : "";
+      var html = '<div class="adm-wg-fld' + (f.half ? " half" : "") +
+        '" data-wg-fld="' + esc(f.key) + '"' + showIf + ">";
+      if (f.type === "switch") {
+        html += '<button type="button" class="adm-wg-switch"><span>' + esc(f.label) + "</span>" +
+          '<span class="track' + (v ? " is-on" : "") + '"><i></i></span></button>';
+      } else {
+        html += '<label class="adm-wg-label">' + esc(f.label) + "</label>";
+        if (f.type === "number") {
+          html += '<input class="adm-input" type="number" data-wg-input' +
+            (f.min != null ? ' min="' + f.min + '"' : "") +
+            (f.max != null ? ' max="' + f.max + '"' : "") + ' value="' + esc(Number(v) || 0) + '">';
+        } else if (f.type === "select") {
+          html += '<select class="adm-select" data-wg-input>' +
+            (f.options || []).map(function (o) {
+              return '<option value="' + esc(o.value) + '"' +
+                (String(o.value) === String(v) ? " selected" : "") + ">" + esc(o.label) + "</option>";
+            }).join("") + "</select>";
+        } else if (f.type === "textarea" || f.type === "code") {
+          html += '<textarea class="adm-textarea' + (f.type === "code" ? " adm-wg-code" : "") +
+            '" rows="' + (f.type === "code" ? 8 : 3) + '" data-wg-input placeholder="' +
+            esc(f.placeholder || "") + '">' + esc(v) + "</textarea>";
+        } else if (f.type === "image") {
+          html += '<div class="adm-wg-img">' +
+            '<img class="adm-wg-img-prev" data-wg-img-prev alt="" src="' + esc(v || "") + '">' +
+            '<div class="adm-wg-img-row"><input class="adm-input" data-wg-input placeholder="/uploads/media/... 或 https://..." value="' + esc(v || "") + '">' +
+            '<label class="adm-imgfield-btn">⬆ 上传<input type="file" accept="image/*" class="adm-hidden-file" data-wg-img-file></label>' +
+            "</div></div>";
+        } else if (f.type === "links") {
+          var rows = Array.isArray(v) ? v : [];
+          html += '<div class="adm-wg-links" data-wg-links>' +
+            rows.map(function (it) {
+              return '<div class="adm-wg-link-row">' +
+                '<input class="adm-input" data-wg-link="label" placeholder="名称" value="' + esc(it.label || "") + '">' +
+                '<input class="adm-input" data-wg-link="url" placeholder="https://" value="' + esc(it.url || "") + '">' +
+                '<input class="adm-input" data-wg-link="icon" placeholder="图标" value="' + esc(it.icon || "") + '">' +
+                '<button type="button" class="adm-iconbtn danger" data-wg-link-del title="删除">🗑</button></div>';
+            }).join("") +
+            '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-wg-link-add>＋ 添加一项</button></div>';
+        } else {
+          html += '<input class="adm-input" data-wg-input placeholder="' + esc(f.placeholder || "") +
+            '" value="' + esc(v == null ? "" : v) + '">';
+        }
+      }
+      if (f.help) html += '<p class="adm-hint">' + esc(f.help) + "</p>";
+      return html + "</div>";
+    }
+    function linkRowHtml(it) {
+      it = it || {};
+      return '<div class="adm-wg-link-row">' +
+        '<input class="adm-input" data-wg-link="label" placeholder="名称" value="' + esc(it.label || "") + '">' +
+        '<input class="adm-input" data-wg-link="url" placeholder="https://" value="' + esc(it.url || "") + '">' +
+        '<input class="adm-input" data-wg-link="icon" placeholder="图标" value="' + esc(it.icon || "") + '">' +
+        '<button type="button" class="adm-iconbtn danger" data-wg-link-del title="删除">🗑</button></div>';
+    }
+    function liveValue(f) {
+      var box = modal.querySelector('[data-wg-fld="' + f.key + '"]');
+      if (!box) return undefined;
+      if (f.type === "switch")
+        return !!box.querySelector(".track.is-on");
+      if (f.type === "links") {
+        return [].slice.call(box.querySelectorAll(".adm-wg-link-row")).map(function (r) {
+          return {
+            label: r.querySelector('[data-wg-link="label"]').value,
+            url: r.querySelector('[data-wg-link="url"]').value,
+            icon: r.querySelector('[data-wg-link="icon"]').value,
+          };
+        });
+      }
+      var inp = box.querySelector("[data-wg-input]");
+      if (f.type === "number") {
+        var n = Number(inp.value);
+        return Number.isFinite(n) ? n : (f.default === undefined ? 0 : f.default);
+      }
+      return inp.value;
+    }
+    function applyShowIf() {
+      modal.querySelectorAll("[data-showif-key]").forEach(function (box) {
+        var key = box.getAttribute("data-showif-key");
+        var eq = box.getAttribute("data-showif-eq").split(",");
+        var f = fields.filter(function (x) { return x.key === key; })[0];
+        var cur = f ? String(liveValue(f)) : "";
+        box.hidden = eq.indexOf(cur) < 0;
+      });
+    }
+    function ensureModal() {
+      if (modal) return modal;
+      modal = document.createElement("div");
+      modal.className = "adm-modal";
+      modal.hidden = true;
+      modal.innerHTML =
+        '<div class="adm-modal-box adm-wg-modal-box">' +
+        '<div class="adm-modal-hd"><div><h2 data-wg-modal-title></h2>' +
+        '<p class="adm-wg-modal-sub" data-wg-modal-sub></p></div>' +
+        '<button class="adm-modal-x" data-wg-modal-x>✕</button></div>' +
+        '<div class="adm-modal-bd">' +
+        '<label class="adm-wg-label">标题</label>' +
+        '<input class="adm-input" data-wg-title placeholder="留空则不显示标题">' +
+        '<div class="adm-wg-form" data-wg-form></div></div>' +
+        '<div class="adm-modal-ft">' +
+        '<button class="adm-btn adm-btn-ghost" data-wg-modal-cancel>取消</button>' +
+        '<button class="adm-btn" data-wg-save>保存</button></div></div>';
+      document.body.appendChild(modal);
+
+      modal.addEventListener("click", function (e) {
+        if (e.target === modal || e.target.closest("[data-wg-modal-x]") ||
+            e.target.closest("[data-wg-modal-cancel]")) {
+          modal.hidden = true;
+        }
+        var sw = e.target.closest("[data-wg-switch]");
+        if (sw) {
+          sw.querySelector(".track").classList.toggle("is-on");
+          applyShowIf();
+          return;
+        }
+        if (e.target.closest("[data-wg-link-add]")) {
+          var holder = e.target.closest("[data-wg-links]");
+          var addBtn = holder.querySelector("[data-wg-link-add]");
+          addBtn.insertAdjacentHTML("beforebegin", linkRowHtml({}));
+          return;
+        }
+        var delLink = e.target.closest("[data-wg-link-del]");
+        if (delLink) {
+          delLink.closest(".adm-wg-link-row").remove();
+        }
+      });
+      modal.addEventListener("input", function (e) {
+        if (e.target.hasAttribute && e.target.hasAttribute("data-wg-input")) {
+          var imgBox = e.target.closest(".adm-wg-img");
+          if (imgBox) imgBox.querySelector("[data-wg-img-prev]").src = e.target.value;
+          applyShowIf();
+        }
+      });
+      modal.addEventListener("change", function (e) {
+        var file = e.target.hasAttribute && e.target.getAttribute("data-wg-img-file");
+        if (!file) { applyShowIf(); return; }
+        var f0 = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!f0) return;
+        var btn = e.target.parentElement;
+        btn.classList.add("is-busy");
+        var fd = new FormData();
+        fd.append("file", f0);
+        fetch("/api/media", { method: "POST", body: fd })
+          .then(async function (res) {
+            var data = {};
+            try { data = await res.json(); } catch (err) {}
+            if (!res.ok) throw new Error(data.error || "上传失败 (" + res.status + ")");
+            var url = data.url || data.path || data.src || "";
+            var imgBox = e.target.closest(".adm-wg-img");
+            imgBox.querySelector("[data-wg-input]").value = url;
+            imgBox.querySelector("[data-wg-img-prev]").src = url;
+          })
+          .catch(fail)
+          .finally(function () { btn.classList.remove("is-busy"); });
+      });
+      modal.querySelector("[data-wg-save]").addEventListener("click", async function () {
+        if (!editing) return;
+        var config = {};
+        fields.forEach(function (f) {
+          var v = liveValue(f);
+          if (v !== undefined) config[f.key] = v;
+        });
+        var title = modal.querySelector("[data-wg-title]").value;
+        var saveBtn = modal.querySelector("[data-wg-save]");
+        saveBtn.disabled = true;
+        try {
+          await api("PATCH", "/api/widgets/" + editing.id, { title: title, config: config });
+          modal.hidden = true;
+          toast("已保存", "ok");
+          reloadSoon();
+        } catch (err) {
+          fail(err);
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+      return modal;
+    }
+    function openEditor(w) {
+      var def = typeMap[w.type] || { settings: [] };
+      editing = w;
+      fields = allFields(def);
+      var values = resolveValues(fields, w.config || {});
+      ensureModal();
+      modal.querySelector("[data-wg-modal-title]").textContent = def.label || w.type;
+      modal.querySelector("[data-wg-modal-sub]").textContent = w.area + " · " + w.type;
+      modal.querySelector("[data-wg-title]").value = w.title || "";
+      var form = modal.querySelector("[data-wg-form]");
+      form.innerHTML = fields.map(function (f) { return fieldHtml(f, values); }).join("");
+      applyShowIf();
+      modal.hidden = false;
+    }
+  }
+
+  function initMenuSettings() {
+    var root = document.querySelector("[data-ms-manager]");
+    if (!root || root.__msbound) return;
+    root.__msbound = true;
+    var msgEl = root.querySelector("[data-ms-msg]");
+    var saveBtn = root.querySelector("[data-ms-save]");
+
+    function setMsg(kind, text) {
+      if (!msgEl) return;
+      msgEl.textContent = text || "";
+      msgEl.className = "adm-ms-msg" + (kind === "err" ? " is-err" : kind === "ok" ? " is-ok" : "");
+    }
+
+    root.addEventListener("click", function (e) {
+      var btn = e.target.closest && e.target.closest("[data-ms-home]");
+      if (!btn || !root.contains(btn)) return;
+      var row = btn.closest("[data-ms-row]");
+      if (!row || row.dataset.canhome !== "1") return;
+      var cur = root.querySelector('[data-ms-row][data-home="1"]');
+      if (cur && cur !== row) {
+        cur.dataset.home = "0";
+        cur.classList.remove("is-home");
+        var oldCb = cur.querySelector("[data-ms-check]");
+        if (cur.dataset.locked !== "1") {
+          oldCb.dataset.disabled = "0";
+          oldCb.disabled = false;
+        }
+      }
+      row.dataset.home = "1";
+      row.dataset.hidden = "0";
+      row.classList.remove("is-hidden");
+      row.classList.add("is-home");
+      var cb = row.querySelector("[data-ms-check]");
+      cb.dataset.disabled = "1";
+      cb.disabled = true;
+      cb.checked = true;
+      cb.dataset.on = "1";
+      setMsg("", "");
+    });
+
+    root.addEventListener("change", function (e) {
+      var cb = e.target.closest && e.target.closest("[data-ms-check]");
+      if (!cb || !root.contains(cb)) return;
+      var row = cb.closest("[data-ms-row]");
+      if (cb.dataset.disabled === "1") {
+        cb.checked = row.dataset.hidden !== "1";
+        return;
+      }
+      var hidden = !cb.checked;
+      row.dataset.hidden = hidden ? "1" : "0";
+      row.classList.toggle("is-hidden", hidden);
+      cb.dataset.on = hidden ? "0" : "1";
+    });
+
+    saveBtn.addEventListener("click", async function () {
+      var hidden = [];
+      root.querySelectorAll("[data-ms-row]").forEach(function (r) {
+        if (r.dataset.hidden === "1" && r.dataset.home !== "1" && r.dataset.locked !== "1") {
+          hidden.push(r.dataset.msRow);
+        }
+      });
+      var homeRow = root.querySelector('[data-ms-row][data-home="1"]');
+      var homePath = homeRow ? homeRow.dataset.msRow : "/admin";
+      saveBtn.disabled = true;
+      try {
+        await api("POST", "/api/admin/menu-settings", {
+          hiddenHrefs: hidden,
+          homePath: homePath,
+        });
+        toast("已保存，侧栏菜单已更新");
+        setTimeout(function () { location.reload(); }, 300);
+      } catch (err) {
+        setMsg("err", (err && err.message) || "保存失败");
+        saveBtn.disabled = false;
+      }
+    });
+  }
+
   function initWidgets() {
     markActiveNav();
     hydrateControls();
     initEditor();
     initMedia();
     initImageFields();
+    initMenus();
+    initWidgetManager();
+    initMenuSettings();
   }
 
   function init() {

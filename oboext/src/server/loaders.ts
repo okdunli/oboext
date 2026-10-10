@@ -30,6 +30,8 @@ import { resolveCommentConfig } from "./comments-config.js";
 import { getPublishedPage, listPublishedPages } from "./pages.js";
 import * as R from "./render.js";
 import * as admin from "./admin-loaders.js";
+import { getMenuByLocation } from "./menus.js";
+import { getAreaWidgets, THEME_SLUG } from "./widgets.js";
 
 export type Ctx = {
   query: URLSearchParams;
@@ -42,27 +44,41 @@ export type Ctx = {
 
 const pageNum = (v: unknown): number => Math.max(1, Number(v) || 1);
 
+const SIDEBAR_FALLBACK: R.SkyItem[] = [
+  { id: "s1", label: "首页", url: "/" },
+  { id: "s2", label: "所有文章", url: "/blog" },
+];
+
 async function chrome(_payload: unknown, ctx?: Ctx) {
-  const [settings, tagRows, stats, popular, cfg] = await Promise.all([
-    getSettings(),
-    listTags(),
-    counts(),
-    popularPosts(5),
-    getPermalinkConfig(),
-  ]);
+  const pathname = (ctx && ctx.pathname) || "/";
+  const [settings, tagRows, stats, popular, cfg, sideMenu, sideWidgets, footerWidgets] =
+    await Promise.all([
+      getSettings(),
+      listTags(),
+      counts(),
+      popularPosts(5),
+      getPermalinkConfig(),
+      getMenuByLocation("sidebar"),
+      getAreaWidgets(THEME_SLUG, "sidebar"),
+      getAreaWidgets(THEME_SLUG, "footer"),
+    ]);
   const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
-  const onBlog = !!ctx && (ctx.pathname === "/blog" || ctx.pathname.indexOf("/blog/") === 0);
+  const menuItems: R.SkyItem[] =
+    sideMenu && sideMenu.items.length ? (sideMenu.items as R.SkyItem[]) : SIDEBAR_FALLBACK;
   return {
     siteTitle: settings.siteTitle ?? "",
     siteDescription: settings.siteDescription ?? "",
     nav: R.raw(R.topNav(settings)),
     aside: R.raw(
-      R.sidebarMenu(onBlog ? "blog" : "home") +
+      R.sidebarMenu(menuItems, pathname) +
         R.tagCloud(tags) +
         R.blogStats(stats) +
-        R.popularWidget(popular),
+        R.popularWidget(popular) +
+        R.widgetAreaHtml(sideWidgets, "sk-widget-area"),
     ),
-    footer: R.raw(R.footerHtml(settings)),
+    footer: R.raw(
+      R.footerHtml(settings, R.widgetAreaHtml(footerWidgets, "sk-footer-widgets")),
+    ),
   };
 }
 
@@ -507,6 +523,9 @@ export const loaders = {
   "admin.page": admin.adminPage,
   "admin.comments": admin.adminComments,
   "admin.media": admin.adminMedia,
+  "admin.menus": admin.adminMenus,
+  "admin.widgets": admin.adminWidgets,
+  "admin.menu-settings": admin.adminMenuSettings,
   "admin.taxonomies": admin.adminTaxonomies,
   "admin.users": admin.adminUsers,
   "admin.settings": admin.adminSettings,

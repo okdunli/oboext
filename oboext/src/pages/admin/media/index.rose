@@ -57,10 +57,10 @@
     <label class="adm-media-check">
       <input type="checkbox" class="adm-media-sel" value={m.id}>
     </label>
-    {#if isImage(m)}
+    {#if (() => isImage(m))()}
     <img class="adm-media-thumb" src={m.url} alt={m.alt || m.filename} loading="lazy" data-media-preview-btn>
     {/if}
-    {#if !isImage(m)}
+    {#if (() => !isImage(m))()}
     <div class="adm-media-file" data-media-preview-btn><span class="ic">📄</span><span>{m.mimeType}</span></div>
     {/if}
     <div class="adm-media-meta">

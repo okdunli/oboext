@@ -15,7 +15,20 @@ import {
 } from "./admin.js";
 import { adminListPages, adminGetPage } from "./pages.js";
 import { listMedia } from "./media.js";
+import { listMenus } from "./menus.js";
+import {
+  THEME_SLUG,
+  WIDGET_AREAS,
+  WIDGET_TYPES,
+  listWidgets,
+} from "./widgets.js";
+import {
+  buildAdminMenuAll,
+  getAdminMenuPrefs,
+  shellNavHtml,
+} from "./admin-menu.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
+import { raw } from "./render.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
 import { db } from "./db.js";
@@ -29,9 +42,29 @@ function requireUser(ctx: Ctx): SessionUser {
   return ctx.user;
 }
 
-/** Login/setup pages: who am I, and does first-run setup still apply. */
+/** Login/setup pages: who am I, and does first-run setup still apply.
+ *  Authed pages additionally receive the preference-driven sidebar nav. */
 export async function adminSession(_p: unknown, _ctx: Ctx) {
-  return { user: _ctx.user ?? null, needsSetup: !(await hasAnyUser()) };
+  const user = _ctx.user ?? null;
+  const out: {
+    user: SessionUser | null;
+    needsSetup: boolean;
+    homePath?: string;
+    navRaw?: ReturnType<typeof raw>;
+  } = { user, needsSetup: !(await hasAnyUser()) };
+  if (user) {
+    const prefs = await getAdminMenuPrefs();
+    out.homePath = prefs.homePath;
+    out.navRaw = raw(shellNavHtml(user.role, String(_ctx.pathname || ""), prefs));
+  }
+  return out;
+}
+
+export async function adminMenuSettings(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  const prefs = await getAdminMenuPrefs();
+  return { groups: buildAdminMenuAll(), hiddenHrefs: prefs.hiddenHrefs, homePath: prefs.homePath };
 }
 
 export async function adminDashboard(_p: unknown, ctx: Ctx) {
@@ -82,10 +115,29 @@ export async function adminPage(p: any, ctx: Ctx) {
   return { page: await adminGetPage(user, Number(p.id)) };
 }
 
-/** Media library grid — newest first, up to 200 rows like the original. */
+/** Media library grid — newest first, service caps at 100 rows. */
 export async function adminMedia(_p: unknown, ctx: Ctx) {
   const user = requireUser(ctx);
   return listMedia(user, 100, 0);
+}
+
+/** Menu manager: every menu with its resolved item tree. */
+export async function adminMenus(_p: unknown, ctx: Ctx) {
+  requireUser(ctx);
+  return { menus: await listMenus() };
+}
+
+/** Widget manager: areas, registered types and the theme's instances. */
+export async function adminWidgets(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  return {
+    theme: THEME_SLUG,
+    themes: [{ slug: THEME_SLUG, name: "Skyscraper（当前启用）" }],
+    areas: WIDGET_AREAS,
+    types: WIDGET_TYPES,
+    widgets: await listWidgets(THEME_SLUG),
+  };
 }
 
 export async function adminComments(p: any, ctx: Ctx) {

@@ -1,6 +1,6 @@
 {
   "name": "oboext",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "license": "MIT",
   "description": "Fast & lightweight self-hosted dynamic content management system engine with tiny footprint, built-in admin panel and smooth content editing.",
   "type": "module",
@@ -18,7 +18,11 @@
     "postgres": "^3.4.9"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.0.0",
+    "bcryptjs": "^2.4.3",
+    "jose": "^5.10.0",
+    "no": "^0.0.1",
     "tsx": "^4.7.0",
     "typescript": "^5.6.0"
   }

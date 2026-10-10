@@ -1,0 +1,17 @@
+<script>
+  // Installer-only database/storage configuration (ported from
+  // app/api/db-config/route.ts): verifies a remote Postgres, merges
+  // .env.local, hot-swaps the running DB. Refuses once setup is complete.
+  import { apiGate, jsonFail, readBody } from "@server/admin";
+  import { applyDbConfig } from "@server/db-config";
+  import { hasAnyUser } from "@server/auth";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      if (await hasAnyUser()) return jsonFail("系统已初始化", 403);
+      const body = await readBody(request);
+      const result = await applyDbConfig(body);
+      return Response.json(result);
+    });
+  }
+</script>

@@ -1,0 +1,18 @@
+<script>
+  // POST /api/auth/logout — clears cms_session. Safe to call while unsigned.
+  import { apiGate } from "@server/admin";
+  import { clearSessionCookieValue } from "@server/auth";
+
+  export async function POST() {
+    return apiGate(
+      async () =>
+        new Response("{}", {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            "set-cookie": clearSessionCookieValue(),
+          },
+        }),
+    );
+  }
+</script>

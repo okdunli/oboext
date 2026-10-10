@@ -1,0 +1,81 @@
+<script>
+  // Home page: all sections render from the live database through the
+  // "home" loader. This script only wires the two client-only interactions:
+  // the cardFlip carousel and the random-cards fan-out.
+  let home = $data(() => __rvLoad("home", {}));
+
+  let __flipTimer = null;
+  onMount(() => {
+    // cardFlip: rotate the stacked pages every 5s, mirroring the original
+    // original's offset classes and the single .meta panel on the right.
+    // Hero metadata is read from the server-rendered data-* attributes
+    // (nothing is baked into this file).
+    const sec = document.getElementById('cardFlip');
+    if (sec) {
+      const pages = Array.prototype.slice.call(sec.querySelectorAll('.cardFlip-slider .page'));
+      const n = pages.length;
+      const HERO = pages.map((pg) => ({
+        url: pg.getAttribute('data-url') || '/',
+        title: pg.querySelector('.post') ? pg.querySelector('.post').textContent : '',
+        cat: pg.getAttribute('data-cat') || '',
+        date: pg.getAttribute('data-date') || '',
+        reads: pg.getAttribute('data-reads') || '0',
+        comments: pg.getAttribute('data-comments') || '0',
+      }));
+      const POS = ['current', 'future0', 'future1', 'future2', 'past1'];
+      let cur = 0;
+      const draw = () => {
+        pages.forEach((pg, i) => {
+          const off = (i - cur + n) % n;
+          pg.className = 'page ' + (POS[off] || 'past1');
+        });
+        const p = HERO[cur];
+        const tax = sec.querySelector('.meta .taxonomy');
+        if (tax) tax.textContent = p.cat;
+        const titleA = sec.querySelector('.meta a.title');
+        titleA.setAttribute('href', p.url);
+        titleA.textContent = p.title;
+        sec.querySelector('.meta time').textContent = p.date;
+        sec.querySelector('.meta .reads').textContent = p.reads + ' 阅读';
+        sec.querySelector('.meta .comments').textContent = p.comments + ' 条评论';
+        sec.querySelector('.meta a.goto').setAttribute('href', p.url);
+      };
+      const go = (d) => { cur = (cur + d + n) % n; draw(); };
+      const next = sec.querySelector('.navigator .next');
+      const prev = sec.querySelector('.navigator .prev');
+      if (next) next.addEventListener('click', () => go(1));
+      if (prev) prev.addEventListener('click', () => go(-1));
+      if (n > 1) __flipTimer = setInterval(() => go(1), 5000);
+    }
+
+    // random fan-out: measure one grid column, fan nested cards to that width
+    const row = document.querySelector('.post-card-nested-row');
+    if (row) {
+      const mainCol = row.closest('.main-column');
+      let colWidth = 0;
+      if (mainCol) {
+        const probe = document.createElement('div');
+        probe.className = 'row';
+        const el = document.createElement('div');
+        el.className = 'el post-card-col col-xxs-6 col-xs-6 col-sm-4 col-md-4 col-lg-3 col-xl-3';
+        el.style.cssText = 'padding:0;margin:0;visibility:hidden;';
+        probe.style.cssText = 'position:absolute;left:0;top:0;width:' + mainCol.clientWidth + 'px;visibility:hidden;pointer-events:none;';
+        probe.appendChild(el);
+        mainCol.appendChild(probe);
+        colWidth = el.getBoundingClientRect().width;
+        probe.remove();
+      }
+      if (!colWidth || !isFinite(colWidth)) colWidth = 300;
+      let total = 15;
+      row.querySelectorAll('.post-card-nested-col').forEach((col) => {
+        col.style.width = colWidth + 'px';
+        col.style.opacity = '1';
+        total += colWidth;
+      });
+      if (total > row.getBoundingClientRect().width) row.classList.add('native-scroll');
+    }
+  });
+  onCleanup(() => { if (__flipTimer) clearInterval(__flipTimer); });
+</script>
+
+{home().main}

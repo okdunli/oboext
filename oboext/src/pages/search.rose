@@ -1,0 +1,25 @@
+<script>
+  // Search results. Cold GETs with exactly one hit are 302'd to that post
+  // by the middleware (original SearchPage parity); under SPA navigation the
+  // middleware never runs, so the loader returns { redirect } and onMount
+  // performs the same jump client-side.
+  let result = $data(() =>
+    __rvLoad("search", {
+      q: __rvQs().get("q") || "",
+      page: Number(__rvQs().get("page") || 1),
+      all: __rvQs().get("all") === "1",
+    })
+  );
+
+  onMount(() => {
+    const r = result();
+    if (r && r.redirect) window.location.replace(r.redirect);
+  });
+</script>
+
+<head>
+  <title>{result().headTitle}</title>
+  <meta name="robots" content="noindex,nofollow">
+</head>
+
+{result().main}

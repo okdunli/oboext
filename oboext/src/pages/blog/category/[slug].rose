@@ -1,0 +1,21 @@
+<script>
+  // Category archive. Missing categories are real 404s on cold GETs
+  // (middleware existence check); client-side hops reload for the same.
+  let slug = $state("");
+  let list = $data(() =>
+    __rvLoad("category", {
+      slug: slug(),
+      page: Number(__rvQs().get("page") || 1),
+    })
+  );
+
+  onMount(() => {
+    if (list() && list().notFound) window.location.reload();
+  });
+</script>
+
+<head>
+  <title>{list().headTitle}</title>
+</head>
+
+{list().main}

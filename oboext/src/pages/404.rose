@@ -1,0 +1,16 @@
+<head>
+  <title>404 - 页面未找到</title>
+  <meta name="robots" content="noindex">
+</head>
+
+<section class="sk-section sk-list-page">
+  <h1 class="title_style_01">404</h1>
+  <div class="sk-list-sub sk-muted">抱歉，您访问的内容不存在或已被移除。</div>
+  <div class="sk-search-all">
+    <a href="/">← 返回首页</a> &nbsp; <a href="/blog">浏览所有文章</a>
+  </div>
+  <form class="sk-404-search" action="/search" method="get" role="search">
+    <input type="search" name="q" placeholder="搜索文章…" aria-label="搜索">
+    <button type="submit">搜索</button>
+  </form>
+</section>

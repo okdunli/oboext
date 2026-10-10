@@ -1,0 +1,120 @@
+<script>
+  // oboext request interceptor (runs once per request on the Node server).
+  //
+  // Responsibilities:
+  //   1. serve sitemap.xml / feed.xml / robots.txt straight from the loaders;
+  //   2. 302 the unique-hit search to its post (original SearchPage parity);
+  //   3. answer real 404s for missing posts/categories/tags - a matched
+  //      dynamic route cannot set 404 from inside its component;
+  //   4. work around the rosefd 0.1.0 query-string router bug (see below).
+  //
+  // The loader registry (dispatch/documents/ready/exists/forward) is
+  // installed on globalThis by pages/api/data.rose at module-eval time (a
+  // static import in the server bundle), so this file needs no ESM import of
+  // its own - the component compiler keeps non-exported statements inside
+  // render(), where an import declaration would be illegal.
+  export async function handle(request) {
+    const reg = globalThis.__oboeLoaders;
+    if (reg && reg.ready) {
+      // a dead database must surface as 500, not a broken page
+      await reg.ready();
+    }
+
+    const u = new URL(request.url);
+    const p = u.pathname;
+
+    // Framework 0.1.0 bug: any query string 404s the router. Re-enter the
+    // server at the bare pathname (same process, loopback); that second pass
+    // carries the real URL in x-rv-url and renders normally. /api/* already
+    // strips the query for routing, so it is excluded.
+    if (u.search && p !== "/api/data" && p.indexOf("/api/") !== 0 && reg && reg.forward) {
+      return reg.forward(request);
+    }
+
+    // The real URL: x-rv-url during a loopback pass (absolute), this request
+    // otherwise. The bare pass-2 pathname may differ only in the query.
+    const rv = request.headers.get("x-rv-url");
+    let real = u;
+    if (rv) {
+      try {
+        real = new URL(rv, u.origin);
+      } catch (e) {}
+    }
+
+    const ctx = getContext();
+    ctx.pathname = real.pathname;
+    ctx.origin = real.origin;
+    ctx.query = real.searchParams;
+    ctx.ua = request.headers.get("user-agent") || "";
+    ctx.ip =
+      (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
+      (request.headers.get("x-real-ip") || "").trim();
+
+    // /api/data renders for whatever page the browser is on: its loader
+    // context must carry THAT pathname/query, not the endpoint's. The header
+    // was already applied above; nothing else to do here.
+    if (p === "/api/data") return;
+
+    if (!reg) return;
+
+    const rp = real.pathname;
+
+    // --------------------------------------------------- XML / txt documents
+    if (rp === "/sitemap.xml") {
+      return new Response(await reg.documents.sitemap(ctx), {
+        headers: { "content-type": "application/xml; charset=utf-8" },
+      });
+    }
+    if (rp === "/feed.xml" || rp === "/rss.xml" || rp === "/feed") {
+      return new Response(await reg.documents.feed(ctx), {
+        headers: { "content-type": "application/rss+xml; charset=utf-8" },
+      });
+    }
+    if (rp === "/robots.txt") {
+      return new Response(await reg.documents.robots(ctx), {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
+
+    if (request.method !== "GET" && request.method !== "HEAD") return;
+
+    // ------------------------------------- unique-hit search jumps to the post
+    if (rp === "/search") {
+      const q = (real.searchParams.get("q") || "").trim();
+      if (q && real.searchParams.get("all") !== "1") {
+        const to = await reg.searchRedirect(q);
+        if (to) return Response.redirect(new URL(to, real.origin), 302);
+      }
+      return;
+    }
+
+    // -------------------------------------------- missing entities -> real 404
+    const dec = (s) => {
+      try {
+        return decodeURIComponent(s);
+      } catch (e) {
+        return s;
+      }
+    };
+    const missing404 = async () =>
+      new Response(await reg.notFound(ctx), {
+        status: 404,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+
+    if (rp.indexOf("/blog/category/") === 0) {
+      const slug = dec(rp.slice("/blog/category/".length)).replace(/\/+$/, "");
+      if (slug && !(await reg.exists.category(slug))) return missing404();
+      return;
+    }
+    if (rp.indexOf("/blog/tag/") === 0) {
+      const slug = dec(rp.slice("/blog/tag/".length)).replace(/\/+$/, "");
+      if (slug && !(await reg.exists.tag(slug))) return missing404();
+      return;
+    }
+    if (rp.indexOf("/blog/") === 0 && rp !== "/blog/") {
+      const slug = dec(rp.slice("/blog/".length)).replace(/\/+$/, "");
+      if (slug && !(await reg.exists.post(slug))) return missing404();
+    }
+  }
+</script>

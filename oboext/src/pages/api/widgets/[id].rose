@@ -1,0 +1,33 @@
+<script>
+  // /api/widgets/:id — PATCH title/area/order/enabled/config, DELETE
+  import { apiGate, readBody, jsonFail } from "@server/admin";
+  import { updateWidget, deleteWidget } from "@server/widgets";
+
+  function pathId(request) {
+    const seg = new URL(request.url).pathname.split("/").filter(Boolean); // api widgets 12
+    return Number(seg[2]);
+  }
+
+  export async function PATCH(request) {
+    return apiGate(async () => {
+      const id = pathId(request);
+      if (!Number.isInteger(id) || id <= 0) return jsonFail("无效 id", 400);
+      const body = await readBody(request);
+      return updateWidget(getContext().user, id, {
+        area: typeof body.area === "string" ? body.area : undefined,
+        title: typeof body.title === "string" ? body.title : undefined,
+        order: typeof body.order === "number" ? body.order : undefined,
+        enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+        config: body.config && typeof body.config === "object" ? body.config : undefined,
+      });
+    });
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => {
+      const id = pathId(request);
+      if (!Number.isInteger(id) || id <= 0) return jsonFail("无效 id", 400);
+      return deleteWidget(getContext().user, id);
+    });
+  }
+</script>

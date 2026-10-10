@@ -1,0 +1,12 @@
+<script>
+  // GET /api/auth/me — the current session user, or 401.
+  import { apiGate, jsonFail } from "@server/admin";
+
+  export async function GET() {
+    return apiGate(async () => {
+      const user = getContext().user;
+      if (!user) return jsonFail("未认证", 401);
+      return { user };
+    });
+  }
+</script>

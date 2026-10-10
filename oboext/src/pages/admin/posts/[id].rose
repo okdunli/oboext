@@ -1,0 +1,220 @@
+<script>
+  // Post editor (new + existing). The route segment :id is seeded as state
+  // before render; "new" loads an empty form. Everything saves through
+  // /api/posts via admin.js's BlockEditor — no content is ever baked.
+  let postId = $state("");
+  let d = $data(() => __rvLoad("admin.post", { id: postId() }));
+
+  function p() {
+    return d().post;
+  }
+  function isNew() {
+    return !d().post;
+  }
+  function val(f) {
+    const x = d().post;
+    return x && x[f] != null ? x[f] : "";
+  }
+  function localTime() {
+    const x = d().post;
+    if (!x || !x.publishedAt) return "";
+    const dt = new Date(x.publishedAt);
+    if (Number.isNaN(dt.getTime())) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+    return (
+      dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) +
+      "T" + pad(dt.getHours()) + ":" + pad(dt.getMinutes())
+    );
+  }
+  function cats() {
+    return d().categories || [];
+  }
+  function tagList() {
+    return d().tags || [];
+  }
+  function authors() {
+    return d().authors || [];
+  }
+  function hasAuthors() {
+    return authors().length > 0;
+  }
+  function isLive() {
+    const x = d().post;
+    return !!x && x.status === "published";
+  }
+  function postUrl() {
+    const x = d().post;
+    return x ? "/blog/" + x.slug : "#";
+  }
+  function deleteUrl() {
+    const x = d().post;
+    return x ? "/api/posts/" + x.id : "";
+  }
+  function postDataAttr() {
+    return JSON.stringify(d());
+  }
+</script>
+
+<head>
+  <title>编辑文章 - 管理后台</title>
+</head>
+
+<form data-adm-editor data-adm-form="post" data-post={postDataAttr()}>
+  <div class="adm-toolbar">
+    <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/posts">← 文章列表</a>
+    <span style="flex:1"></span>
+    {#if isLive()}
+    <a class="adm-btn adm-btn-ghost adm-btn-sm" href={postUrl()} target="_blank">查看文章 ↗</a>
+    {/if}
+    {#if !isNew()}
+    <button
+      type="button"
+      class="adm-btn adm-btn-danger adm-btn-sm"
+      data-adm-act="delete"
+      data-url={deleteUrl()}
+      data-confirm="确认删除这篇文章？此操作不可撤销。"
+    >删除</button>
+    {/if}
+    <button type="submit" class="adm-btn adm-btn-ghost adm-btn-sm" data-save-as="draft">存为草稿</button>
+    <button type="submit" class="adm-btn adm-btn-sm" data-save-as="">保存</button>
+    <button type="submit" class="adm-btn adm-btn-green adm-btn-sm" data-save-as="published">发布</button>
+  </div>
+
+  <div class="adm-grid adm-cols-editor">
+    <div>
+      <div class="adm-card">
+        <div class="adm-card-bd">
+          <input
+            class="adm-input adm-title-input"
+            name="title"
+            placeholder="请输入标题"
+            value={val('title')}
+          >
+          <div class="adm-permalink">
+            <span>固定链接：</span>
+            <input name="slug" placeholder="留空则按标题自动生成" value={val('slug')}>
+          </div>
+          <!-- textarea is a raw-text element: template comment markers would
+               leak into its value, so the excerpt rides a data attribute and
+               admin.js copies it into .value at init -->
+          <textarea
+            class="adm-textarea"
+            name="excerpt"
+            rows="2"
+            placeholder="摘要（留空则自动从正文提取）"
+            data-dv={val('excerpt')}
+          ></textarea>
+        </div>
+      </div>
+
+      <div class="adm-card" style="margin-top:16px">
+        <div class="adm-card-bd">
+          <div class="adm-card-hd" style="padding:0 0 12px;border-bottom:none">
+            <strong>正文区块</strong>
+            <span class="spacer"></span>
+            <span class="adm-hint">段落、标题、图片、引用等可自由拖拽排序</span>
+          </div>
+          <div class="adm-blocks"></div>
+          <div class="adm-block-add">
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="paragraph">＋ 段落</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="heading">＋ 标题</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="image">＋ 图片</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="quote">＋ 引用</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="code">＋ 代码</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="list">＋ 列表</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="divider">＋ 分割线</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="html">＋ HTML</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="adm-side-sticky">
+      <div class="adm-card">
+        <div class="adm-card-hd"><strong>发布</strong></div>
+        <div class="adm-card-bd">
+          <div class="adm-field" style="margin-bottom:12px">
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">状态</span>
+            <select class="adm-select" name="status">
+              <option value="draft">草稿</option>
+              <option value="published">已发布</option>
+              <option value="archived">已归档</option>
+            </select>
+          </div>
+          <div class="adm-field" style="margin-bottom:12px">
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">发布时间</span>
+            <input class="adm-input" type="datetime-local" name="publishedAt" value={localTime()}>
+            <div class="adm-hint" style="margin-top:4px">草稿设为未来时间即定时发布，到点自动上线；留空按保存时间。</div>
+          </div>
+          <div class="adm-field" style="margin-bottom:12px">
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">评论</span>
+            <select class="adm-select" name="commentStatus">
+              <option value="open">开放评论</option>
+              <option value="closed">关闭评论</option>
+            </select>
+          </div>
+          {#if hasAuthors()}
+          <div class="adm-field" style="margin-bottom:12px">
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">作者</span>
+            <select class="adm-select" name="authorId">
+              <option value="">（默认自己）</option>
+              {#each authors() as a}
+              <option value={a.id}>{a.name}</option>
+              {/each}
+            </select>
+          </div>
+          {/if}
+          <div class="adm-field" style="margin-bottom:0">
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">特色图 URL</span>
+            <input class="adm-input" name="featuredImage" placeholder="https://…" value={val('featuredImage')}>
+          </div>
+          <div class="adm-switch" style="margin-top:10px">
+            <div>
+              <div class="t">置顶</div>
+              <div class="d">固定在文章列表顶部</div>
+            </div>
+            <input type="checkbox" name="pinned" data-bool>
+          </div>
+        </div>
+      </div>
+
+      <div class="adm-card">
+        <div class="adm-card-hd"><strong>分类</strong></div>
+        <div class="adm-card-bd">
+          <div class="adm-checklist">
+            {#each cats() as c}
+            <label><input type="checkbox" name="categoryIds[]" value={c.id}> {c.name}</label>
+            {/each}
+          </div>
+          <div class="adm-hint" style="margin-top:8px">没有合适的分类？先去「分类」页面创建。</div>
+        </div>
+      </div>
+
+      <div class="adm-card">
+        <div class="adm-card-hd"><strong>标签</strong></div>
+        <div class="adm-card-bd">
+          <div class="adm-checklist">
+            {#each tagList() as t}
+            <label><input type="checkbox" name="tagIds[]" value={t.id}> {t.name}</label>
+            {/each}
+          </div>
+        </div>
+      </div>
+
+      <div class="adm-card">
+        <div class="adm-card-hd"><strong>SEO</strong></div>
+        <div class="adm-card-bd">
+          <input class="adm-input" name="seoTitle" placeholder="SEO 标题" value={val('seoTitle')} style="margin-bottom:10px">
+          <textarea
+            class="adm-textarea"
+            name="seoDescription"
+            rows="2"
+            placeholder="SEO 描述"
+            data-dv={val('seoDescription')}
+          ></textarea>
+          <input class="adm-input" name="seoKeywords" placeholder="SEO 关键词，逗号分隔" value={val('seoKeywords')} style="margin-top:10px">
+        </div>
+      </div>
+    </div>
+  </div>
+</form>

@@ -1,0 +1,24 @@
+<script>
+  // /api/posts/:id — GET one post for the editor, PUT update, DELETE remove.
+  import { apiGate, readBody, adminGetPost, updatePost, deletePost } from "@server/admin";
+
+  function pathId(request) {
+    const seg = new URL(request.url).pathname.split("/").filter(Boolean); // api posts 12
+    return Number(seg[2]);
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => adminGetPost(getContext().user, pathId(request)));
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      return updatePost(getContext().user, pathId(request), body);
+    });
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => deletePost(getContext().user, pathId(request)));
+  }
+</script>

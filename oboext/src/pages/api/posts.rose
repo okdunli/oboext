@@ -1,0 +1,47 @@
+<script>
+  // /api/posts
+  //   GET    admin post list (?status=&search=&limit=&offset=)
+  //   POST   create a post
+  //   PATCH  bulk action { ids, action: publish|draft|archive|delete }
+  import {
+    apiGate,
+    readBody,
+    adminListPosts,
+    createPost,
+    bulkPosts,
+  } from "@server/admin";
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const user = getContext().user;
+      const q = new URL(request.url).searchParams;
+      return adminListPosts(user, {
+        status: q.get("status") || undefined,
+        search: q.get("search") || undefined,
+        limit: q.get("limit") ? Number(q.get("limit")) : undefined,
+        offset: q.get("offset") ? Number(q.get("offset")) : undefined,
+      });
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const post = await createPost(getContext().user, body);
+      return new Response(JSON.stringify(post), {
+        status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+
+  export async function PATCH(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const ids = Array.isArray(body.ids)
+        ? body.ids.map(Number).filter((n) => Number.isInteger(n))
+        : [];
+      return bulkPosts(getContext().user, ids, body.action);
+    });
+  }
+</script>

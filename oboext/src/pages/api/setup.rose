@@ -1,12 +1,18 @@
 <script>
   // First-run setup: GET reports whether the instance still needs its first
-  // admin; POST creates that admin and immediately opens the session. Only
-  // valid while the users table is empty (createFirstAdmin enforces it).
-  import { apiGate, jsonOk, jsonFail, readBody } from "@server/admin";
+  // admin; POST creates that admin, bootstraps site info, and immediately
+  // opens the session. Only valid while the users table is empty
+  // (createFirstAdmin enforces it). Mirrors app/api/setup/route.ts.
+  import { apiGate, jsonFail, readBody, bootstrapSiteSettings } from "@server/admin";
   import { hasAnyUser, createFirstAdmin, sessionCookieValue } from "@server/auth";
 
   export async function GET() {
-    return apiGate(async () => jsonOk({ needsSetup: !(await hasAnyUser()) }));
+    return apiGate(async () => {
+      const needs = !(await hasAnyUser());
+      return new Response(JSON.stringify({ needsSetup: needs, setupRequired: needs }), {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
   }
 
   export async function POST(request) {
@@ -16,11 +22,16 @@
       const email = String(body.email || "").trim();
       const name = String(body.name || "").trim();
       const password = String(body.password || "");
+      const siteTitle = String(body.siteTitle || "").trim();
+      const siteDescription = String(body.siteDescription || "").trim();
+      const tagline = String(body.tagline || "").trim();
+      const footerText = String(body.footerText || "").trim();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
         return jsonFail("请输入合法邮箱", 422);
       if (!name) return jsonFail("请输入昵称", 422);
-      if (password.length < 6) return jsonFail("密码至少 6 位", 422);
+      if (password.length < 8) return jsonFail("密码至少 8 位", 422);
       const user = await createFirstAdmin({ email, name, password });
+      await bootstrapSiteSettings({ siteTitle, siteDescription, tagline, footerText });
       return new Response(JSON.stringify({ user }), {
         status: 201,
         headers: {

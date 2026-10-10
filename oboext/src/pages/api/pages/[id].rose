@@ -1,0 +1,38 @@
+<script>
+  // /api/pages/:id — GET one page (any session sees unpublished; guests get
+  // published only), PUT update, DELETE remove. Writes need update:any.
+  import { apiGate, readBody, jsonFail, can } from "@server/admin";
+  import {
+    adminGetPage,
+    updatePage,
+    deletePage,
+    getPublishedPageById,
+  } from "@server/pages";
+
+  function pathId(request) {
+    const seg = new URL(request.url).pathname.split("/").filter(Boolean); // api pages 12
+    return Number(seg[2]);
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const id = pathId(request);
+      const user = getContext().user;
+      if (user && can(user.role, "content:read")) return adminGetPage(user, id);
+      const page = await getPublishedPageById(id);
+      if (!page) return jsonFail("页面不存在", 404);
+      return page;
+    });
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      return updatePage(getContext().user, pathId(request), body);
+    });
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => deletePage(getContext().user, pathId(request)));
+  }
+</script>

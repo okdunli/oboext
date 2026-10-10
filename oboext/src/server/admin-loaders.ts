@@ -13,6 +13,7 @@ import {
   adminListUsers,
   ServiceError,
 } from "./admin.js";
+import { adminListPages, adminGetPage } from "./pages.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
@@ -59,6 +60,25 @@ export async function adminPost(p: any, ctx: Ctx) {
   if (p?.id === "new" || p?.id == null) return { post: null, categories, tags, authors };
   const post = await adminGetPost(user, Number(p.id));
   return { post, categories, tags, authors };
+}
+
+export async function adminPages(p: any, ctx: Ctx) {
+  const user = requireUser(ctx);
+  const page = Math.max(1, Number(p?.page) || 1);
+  const limit = 50;
+  const out = await adminListPages(user, {
+    status: p?.status || undefined,
+    limit,
+    offset: (page - 1) * limit,
+  });
+  return { ...out, page, limit };
+}
+
+/** Editor data: one page (or null for "new"). */
+export async function adminPage(p: any, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (p?.id === "new" || p?.id == null) return { page: null };
+  return { page: await adminGetPage(user, Number(p.id)) };
 }
 
 export async function adminComments(p: any, ctx: Ctx) {

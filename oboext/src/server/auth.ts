@@ -15,6 +15,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
+bcrypt.setRandomFallback((len: number) => Array.from(crypto.randomBytes(len)));
 import { and, desc, eq, gt, or, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
 import { users, securityEvents } from "./schema.js";

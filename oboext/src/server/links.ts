@@ -156,6 +156,10 @@ export function postUrlFor(cfg: PermalinkConfig, post: PostUrlInput): string {
   return joinPath([...baseSegs(cfg.postBase), ...postTailSegments(cfg, post)]);
 }
 
+export function pageUrlFor(cfg: PermalinkConfig, page: { slug: string }): string {
+  return joinPath([...baseSegs(cfg.pageBase), page.slug]);
+}
+
 export function categoryUrlFor(cfg: PermalinkConfig, cat: { slug: string }): string {
   return joinPath([...baseSegs(cfg.categoryBase), cat.slug]);
 }

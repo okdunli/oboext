@@ -10,6 +10,7 @@
  */
 import type { Block } from "./schema.js";
 import type { PostView, TaxRef } from "./queries.js";
+import type { PageView } from "./pages.js";
 import { getAvatarUrl, type AvatarSource } from "./avatar.js";
 
 export const RAW_KEY = "__rvraw";
@@ -289,7 +290,7 @@ function highlightCodeBlocks(html: string): string {
 
 /** blocks -> heading ids -> highlight. No brace mangling: output travels via
  *  raw() at runtime, never through the template parser. */
-export function buildPostBody(p: PostView): string {
+export function buildPostBody(p: { content?: Block[] | null; slug: string }): string {
   const blocks = (p.content ?? []) as Block[];
   return highlightCodeBlocks(addHeadingIds(serializeBlocks(blocks), p.slug));
 }
@@ -572,9 +573,8 @@ export function commentsSection(m: CommentModel): string {
   }
   if (m.provider !== "builtin") {
     return '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
-      '<div data-comment-provider=' + esc(m.provider) +
-      " data-config=" + esc(JSON.stringify(m.config)) +
-      ' class="sf-comment-provider"></div></section>';
+      '<div class="sf-comment-provider" data-comment-provider="' + esc(m.provider) +
+      '" data-config="' + esc(JSON.stringify(m.config)) + '"></div></section>';
   }
   return (
     '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
@@ -626,6 +626,75 @@ export function postPage(
     '<section class="sk-section"><h2 class="title_style_01">相关文章</h2>' +
     cardRow(related, false) +
     "</section>" +
+    (commentsHtml ||
+      '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
+        '<div class="sf-comment-close">评论已关闭。</div></section>') +
+    "</div>"
+  );
+}
+
+/** Skyscraper PageBySlug uses slash dates in its meta line. */
+function fmtDateSlash(v: Date | string | null | undefined): string {
+  if (!v) return "";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+}
+
+export function pageHead(p: PageView, siteTitle: string, siteDescription: string, origin: string): string {
+  const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
+  const desc = p.seoDescription || p.excerpt || siteDescription;
+  const url = `${origin}${p.url}`;
+  const iso = (v: Date | string | null | undefined) =>
+    new Date(v ?? p.publishedAt!).toISOString();
+  return [
+    `<title>${esc(fullTitle)}</title>`,
+    `<meta name="description" content="${esc(desc)}">`,
+    `<meta name="robots" content="index, follow">`,
+    `<link rel="canonical" href="${esc(url)}">`,
+    `<meta property="og:title" content="${esc(fullTitle)}">`,
+    `<meta property="og:description" content="${esc(desc)}">`,
+    `<meta property="og:url" content="${esc(url)}">`,
+    p.featuredImage ? `<meta property="og:image" content="${esc(p.featuredImage)}">` : "",
+    `<meta property="og:type" content="website">`,
+    p.publishedAt ? `<meta property="article:published_time" content="${iso(p.publishedAt)}">` : "",
+    `<meta property="article:modified_time" content="${iso(p.updatedAt || p.publishedAt)}">`,
+    `<meta name="twitter:card" content="summary_large_image">`,
+    `<meta name="twitter:title" content="${esc(fullTitle)}">`,
+    `<meta name="twitter:description" content="${esc(desc)}">`,
+    p.featuredImage ? `<meta name="twitter:image" content="${esc(p.featuredImage)}">` : "",
+  ]
+    .filter(Boolean)
+    .join("");
+}
+
+export function pagePage(p: PageView, recent: PostView[], commentsHtml = ""): string {
+  const bodyHtml = buildPostBody(p);
+  const lis = recent
+    .map(
+      (x) =>
+        `<li style="padding:8px 0;border-bottom:1px dashed var(--sk-border-strong)">` +
+        `<a href="${esc(x.url)}">${esc(x.title)}</a>` +
+        `<span class="sk-muted" style="float:right;font-size:12px">${fmtDateSlash(
+          x.publishedAt,
+        )}</span></li>`,
+    )
+    .join("");
+  const recentSection = recent.length
+    ? '<section class="sk-section"><h2 class="title_style_01">最新文章</h2>' +
+      `<ul style="list-style:none;margin:0;padding:0">${lis}</ul></section>`
+    : "";
+  return (
+    '<div class="sk-postpage">' +
+    `<div class="sk-crumbs"><a href="/">首页</a> / <span>${esc(p.title)}</span></div>` +
+    '<article class="post-wrapper">' +
+    '<span class="share-ribbon" aria-hidden="true"><span class="content">' +
+    '<i class="sk-i-share"></i>分享</span></span>' +
+    `<div class="meta"><span>${fmtDateSlash(p.publishedAt)}</span></div>` +
+    `<h1>${esc(p.title)}</h1>` +
+    `<div class="post-content prose-cms">${bodyHtml}</div>` +
+    "</article>" +
+    recentSection +
     (commentsHtml ||
       '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
         '<div class="sf-comment-close">评论已关闭。</div></section>') +

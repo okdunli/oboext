@@ -146,5 +146,9 @@
       const slug = dec(rp.slice("/blog/".length)).replace(/\/+$/, "");
       if (slug && !(await reg.exists.post(slug))) return missing404();
     }
+    if (rp.indexOf("/pages/") === 0 && rp !== "/pages/") {
+      const slug = dec(rp.slice("/pages/".length)).replace(/\/+$/, "");
+      if (slug && !(await reg.exists.page(slug))) return missing404();
+    }
   }
 </script>

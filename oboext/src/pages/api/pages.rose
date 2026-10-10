@@ -1,0 +1,34 @@
+<script>
+  // /api/pages
+  //   GET   page list (?status=&limit=&offset=). Guests are forced to
+  //         status=published (original app/api/pages parity); staff with
+  //         content:read may pass any status.
+  //   POST  create a page (content:update:any — editors/admins only)
+  import { apiGate, readBody, can } from "@server/admin";
+  import { adminListPages, listPublishedPages, createPage } from "@server/pages";
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const user = getContext().user;
+      const q = new URL(request.url).searchParams;
+      const status = q.get("status") || undefined;
+      const limit = q.get("limit") ? Number(q.get("limit")) : undefined;
+      const offset = q.get("offset") ? Number(q.get("offset")) : undefined;
+      if (user && can(user.role, "content:read")) {
+        return adminListPages(user, { status, limit, offset });
+      }
+      return listPublishedPages({ limit, offset });
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const page = await createPage(getContext().user, body);
+      return new Response(JSON.stringify(page), {
+        status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+</script>

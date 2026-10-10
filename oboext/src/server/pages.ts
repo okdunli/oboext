@@ -1,0 +1,367 @@
+/**
+ * Static pages service — ported from lib/services/pages.ts + metas.ts.
+ *
+ * Writes require content:update:any (editors/admins only — authors never
+ * manage pages, matching the original). Every read hits the live database;
+ * the original's publicCached/public-cache layer is intentionally absent
+ * (per-request reads are the core invariant of this port).
+ */
+import { and, desc, eq, sql } from "drizzle-orm";
+import { db } from "./db.js";
+import { pages as pagesTable, pageMetas, type Block, type Page } from "./schema.js";
+import type { SessionUser } from "./auth.js";
+import { can, requireCap, requireUser, ServiceError, slugify } from "./admin.js";
+import { blocksToPlainText } from "./admin.js";
+import { getPermalinkConfig, pageUrlFor } from "./links.js";
+
+export type PageView = Page & {
+  url: string;
+  metas: Record<string, string>;
+};
+
+export type PageInput = {
+  title: string;
+  slug?: string;
+  excerpt?: string | null;
+  content?: Block[];
+  status?: "draft" | "published" | "archived";
+  featuredImage?: string | null;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+  seoKeywords?: string | null;
+  commentStatus?: "open" | "closed";
+  parentId?: number | null;
+  publishedAt?: string | null;
+  metas?: { key: string; value: string }[];
+};
+
+async function getPageMetas(pageId: number): Promise<Record<string, string>> {
+  const rows = await db.select().from(pageMetas).where(eq(pageMetas.pageId, pageId));
+  const out: Record<string, string> = {};
+  for (const r of rows) out[r.key] = r.value ?? "";
+  return out;
+}
+
+async function setPageMetas(pageId: number, metas: { key: string; value: string }[]): Promise<void> {
+  await db.delete(pageMetas).where(eq(pageMetas.pageId, pageId));
+  const clean = metas
+    .map((m) => ({ key: String(m.key ?? "").trim(), value: String(m.value ?? "") }))
+    .filter((m) => m.key.length > 0);
+  if (clean.length) {
+    await db.insert(pageMetas).values(clean.map((m) => ({ pageId, key: m.key.slice(0, 100), value: m.value })));
+  }
+}
+
+function excerptFrom(text: string, max = 160): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > max ? clean.slice(0, max).trimEnd() + "…" : clean;
+}
+
+function clean(v: string | null | undefined): string | null {
+  return v === undefined || v === null || v === "" ? null : v;
+}
+
+const STATUSES = ["draft", "published", "archived"] as const;
+
+/** Whitelisted, normalized page fields accepted by create/update. */
+type ValidatedPage = {
+  title?: string;
+  slug?: string;
+  excerpt?: string;
+  content?: Block[];
+  status?: (typeof STATUSES)[number];
+  publishedAt?: string | null;
+  featuredImage?: string | null;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+  seoKeywords?: string | null;
+  commentStatus?: "open" | "closed";
+  parentId?: number | null;
+  metas?: { key: string; value: string }[];
+};
+
+/** Mirror of pageInputSchema; throws ServiceError(422) on bad input. */
+function validate(input: Partial<PageInput>): ValidatedPage {
+  const out: ValidatedPage = {};
+  if (input.title !== undefined) {
+    const title = String(input.title ?? "").trim();
+    if (!title) throw new ServiceError("标题不能为空", 422);
+    if (title.length > 300) throw new ServiceError("标题过长", 422);
+    out.title = title;
+  }
+  if (input.slug !== undefined) {
+    const s = String(input.slug ?? "").slice(0, 200);
+    if (s) out.slug = s;
+  }
+  if (input.excerpt !== undefined) {
+    const s = String(input.excerpt ?? "");
+    if (s.length > 500) throw new ServiceError("摘要过长", 422);
+    out.excerpt = s;
+  }
+  if (input.content !== undefined) {
+    if (!Array.isArray(input.content)) throw new ServiceError("正文区块格式不正确", 422);
+    out.content = input.content;
+  }
+  if (input.status !== undefined && input.status != null && input.status !== "") {
+    if (!STATUSES.includes(input.status as (typeof STATUSES)[number]))
+      throw new ServiceError("状态不合法", 422);
+    out.status = input.status;
+  }
+  if (input.publishedAt !== undefined) {
+    if (input.publishedAt) {
+      if (Number.isNaN(Date.parse(input.publishedAt)))
+        throw new ServiceError("publishedAt 必须是合法的时间字符串", 422);
+      out.publishedAt = input.publishedAt;
+    } else {
+      out.publishedAt = null;
+    }
+  }
+  if (input.featuredImage !== undefined) {
+    const s = String(input.featuredImage ?? "");
+    if (s.length > 500) throw new ServiceError("特色图 URL 过长", 422);
+    out.featuredImage = s || null;
+  }
+  for (const [k, max] of [
+    ["seoTitle", 200],
+    ["seoDescription", 300],
+    ["seoKeywords", 500],
+  ] as const) {
+    if (input[k] !== undefined) {
+      const s = String(input[k] ?? "");
+      if (s.length > max) throw new ServiceError("SEO 字段过长", 422);
+      (out as Record<string, unknown>)[k] = s || null;
+    }
+  }
+  if (input.commentStatus !== undefined && input.commentStatus != null && input.commentStatus !== "") {
+    if (input.commentStatus !== "open" && input.commentStatus !== "closed")
+      throw new ServiceError("评论状态不合法", 422);
+    out.commentStatus = input.commentStatus;
+  }
+  if (input.parentId !== undefined) {
+    if (input.parentId == null || (input.parentId as unknown) === "") {
+      out.parentId = null;
+    } else {
+      const n = Number(input.parentId);
+      if (!Number.isInteger(n) || n <= 0) throw new ServiceError("父页面 ID 不合法", 422);
+      out.parentId = n;
+    }
+  }
+  if (input.metas !== undefined) {
+    if (!Array.isArray(input.metas)) throw new ServiceError("自定义字段格式不正确", 422);
+    out.metas = input.metas
+      .filter((m) => m && typeof m === "object")
+      .map((m) => ({ key: String(m.key ?? ""), value: String(m.value ?? "") }));
+  }
+  return out;
+}
+
+async function takenSlugs(base: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ slug: pagesTable.slug })
+    .from(pagesTable)
+    .where(sql`${pagesTable.slug} LIKE ${base + "%"}`);
+  return new Set(rows.map((r) => r.slug));
+}
+
+async function hydrate(row: Page): Promise<PageView> {
+  const [metas, cfg] = await Promise.all([getPageMetas(row.id), getPermalinkConfig()]);
+  return { ...row, url: pageUrlFor(cfg, row), metas };
+}
+
+/** Published page by stored slug (null when missing/unpublished). */
+export async function getPublishedPage(slug: string): Promise<PageView | null> {
+  const [row] = await db
+    .select()
+    .from(pagesTable)
+    .where(and(eq(pagesTable.slug, slug), eq(pagesTable.status, "published")))
+    .limit(1);
+  return row ? hydrate(row) : null;
+}
+
+/** Public GET /api/pages parity: guests see published pages only. */
+export async function listPublishedPages(f: { limit?: number; offset?: number } = {}): Promise<{
+  items: (Page & { url: string })[];
+  total: number;
+}> {
+  const limit = Math.min(f.limit ?? 20, 100);
+  const offset = f.offset ?? 0;
+  const where = eq(pagesTable.status, "published");
+  const rows = await db
+    .select()
+    .from(pagesTable)
+    .where(where)
+    .orderBy(desc(pagesTable.updatedAt))
+    .limit(limit)
+    .offset(offset);
+  const [totalRows, cfg] = await Promise.all([
+    db.select({ n: sql<number>`count(*)` }).from(pagesTable).where(where),
+    getPermalinkConfig(),
+  ]);
+  return {
+    items: rows.map((r) => ({ ...r, url: pageUrlFor(cfg, r) })),
+    total: Number(totalRows[0]?.n ?? 0),
+  };
+}
+
+/** Published page by id (null when missing/unpublished) — guest GET parity. */
+export async function getPublishedPageById(id: number): Promise<PageView | null> {
+  const [row] = await db
+    .select()
+    .from(pagesTable)
+    .where(and(eq(pagesTable.id, id), eq(pagesTable.status, "published")))
+    .limit(1);
+  return row ? hydrate(row) : null;
+}
+
+/** Admin page list — all statuses, newest-updated first, like the original. */
+export async function adminListPages(
+  user: SessionUser | null,
+  f: { status?: string; limit?: number; offset?: number } = {},
+): Promise<{ items: (Page & { url: string })[]; total: number }> {
+  requireCap(user, "content:read");
+  const limit = Math.min(f.limit ?? 50, 100);
+  const offset = f.offset ?? 0;
+  const where = f.status ? eq(pagesTable.status, f.status as any) : undefined;
+  const rows = await db
+    .select()
+    .from(pagesTable)
+    .where(where)
+    .orderBy(desc(pagesTable.updatedAt))
+    .limit(limit)
+    .offset(offset);
+  const [totalRows, cfg] = await Promise.all([
+    db.select({ n: sql<number>`count(*)` }).from(pagesTable).where(where),
+    getPermalinkConfig(),
+  ]);
+  return {
+    items: rows.map((r) => ({ ...r, url: pageUrlFor(cfg, r) })),
+    total: Number(totalRows[0]?.n ?? 0),
+  };
+}
+
+/** Editor read: any status, custom fields as an editable {key,value} array. */
+export async function adminGetPage(
+  user: SessionUser | null,
+  id: number,
+): Promise<PageView & { metaList: { key: string; value: string }[] }> {
+  requireCap(user, "content:read");
+  const [row] = await db.select().from(pagesTable).where(eq(pagesTable.id, id));
+  if (!row) throw new ServiceError("页面不存在", 404);
+  const v = await hydrate(row);
+  return { ...v, metaList: Object.entries(v.metas).map(([key, value]) => ({ key, value })) };
+}
+
+function requirePageManager(user: SessionUser | null): SessionUser {
+  const u = requireUser(user);
+  if (!can(u.role, "content:update:any"))
+    throw new ServiceError("仅编辑/管理员可管理页面", 403);
+  return u;
+}
+
+export async function createPage(user: SessionUser | null, raw: Partial<PageInput>) {
+  requirePageManager(user);
+  const input = validate(raw);
+  if (!input.title) throw new ServiceError("标题不能为空", 422);
+  const content = input.content ?? [];
+  const base = slugify(input.slug || input.title);
+  const slug = await uniquePageSlug(base, null);
+  const status = input.status ?? "draft";
+  const excerpt =
+    input.excerpt || excerptFrom(blocksToPlainText(content));
+
+  const [row] = await db
+    .insert(pagesTable)
+    .values({
+      title: input.title,
+      slug,
+      excerpt,
+      content,
+      status,
+      featuredImage: input.featuredImage !== undefined ? input.featuredImage : null,
+      seoTitle: input.seoTitle !== undefined ? clean(input.seoTitle) : null,
+      seoDescription: input.seoDescription !== undefined ? clean(input.seoDescription) : null,
+      seoKeywords: input.seoKeywords !== undefined ? clean(input.seoKeywords) : null,
+      commentStatus: input.commentStatus ?? "open",
+      parentId: input.parentId ?? null,
+      publishedAt: input.publishedAt
+        ? new Date(input.publishedAt)
+        : status === "published"
+          ? new Date()
+          : null,
+    })
+    .returning();
+  if (input.metas) await setPageMetas(row.id, input.metas);
+  return adminGetPage(user, row.id);
+}
+
+async function uniquePageSlug(base: string, ignoreSlug: string | null): Promise<string> {
+  const taken = await takenSlugs(base);
+  if (ignoreSlug) taken.delete(ignoreSlug);
+  let slug = base;
+  let n = 2;
+  while (taken.has(slug)) {
+    slug = `${base}-${n}`;
+    n++;
+  }
+  return slug;
+}
+
+export async function updatePage(user: SessionUser | null, id: number, raw: Partial<PageInput>) {
+  requirePageManager(user);
+  const input = validate(raw);
+  const existingRow = await db
+    .select()
+    .from(pagesTable)
+    .where(eq(pagesTable.id, id))
+    .limit(1);
+  const existing = existingRow[0];
+  if (!existing) throw new ServiceError("页面不存在", 404);
+
+  let slug = existing.slug;
+  if (input.slug && input.slug !== existing.slug) {
+    slug = await uniquePageSlug(slugify(input.slug), existing.slug);
+  }
+  const content = input.content ?? (existing.content as Block[]);
+  let publishedAt = existing.publishedAt;
+  if (input.publishedAt !== undefined) {
+    publishedAt = input.publishedAt ? new Date(input.publishedAt) : null;
+  } else if (input.status === "published" && !existing.publishedAt) {
+    publishedAt = new Date();
+  }
+
+  await db
+    .update(pagesTable)
+    .set({
+      title: input.title ?? existing.title,
+      slug,
+      excerpt:
+        input.excerpt !== undefined
+          ? input.excerpt || excerptFrom(blocksToPlainText(content))
+          : existing.excerpt,
+      content,
+      status: input.status ?? existing.status,
+      featuredImage:
+        input.featuredImage !== undefined ? input.featuredImage : existing.featuredImage,
+      seoTitle: input.seoTitle !== undefined ? clean(input.seoTitle) : existing.seoTitle,
+      seoDescription:
+        input.seoDescription !== undefined ? clean(input.seoDescription) : existing.seoDescription,
+      seoKeywords:
+        input.seoKeywords !== undefined ? clean(input.seoKeywords) : existing.seoKeywords,
+      commentStatus: input.commentStatus ?? existing.commentStatus,
+      parentId: input.parentId !== undefined ? input.parentId : existing.parentId,
+      publishedAt,
+      updatedAt: new Date(),
+    })
+    .where(eq(pagesTable.id, id));
+
+  if (input.metas) await setPageMetas(id, input.metas);
+  return adminGetPage(user, id);
+}
+
+export async function deletePage(user: SessionUser | null, id: number): Promise<{ id: number }> {
+  requirePageManager(user);
+  const [existing] = await db.select({ id: pagesTable.id }).from(pagesTable).where(eq(pagesTable.id, id));
+  if (!existing) throw new ServiceError("页面不存在", 404);
+  await db.delete(pagesTable).where(eq(pagesTable.id, id));
+  return { id };
+}

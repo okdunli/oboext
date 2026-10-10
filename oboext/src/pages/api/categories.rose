@@ -1,0 +1,20 @@
+<script>
+  // /api/categories — GET list (all readers), POST create (taxonomy:manage)
+  import { apiGate, readBody, createCategory } from "@server/admin";
+  import { listCategories } from "@server/queries";
+
+  export async function GET() {
+    return apiGate(async () => listCategories());
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const row = await createCategory(getContext().user, body);
+      return new Response(JSON.stringify(row), {
+        status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+</script>

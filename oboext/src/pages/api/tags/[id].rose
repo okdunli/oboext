@@ -1,0 +1,18 @@
+<script>
+  // /api/tags/:id — PUT update, DELETE remove
+  import { apiGate, readBody, updateTag, deleteTag } from "@server/admin";
+
+  function pathId(request) {
+    return Number(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () =>
+      updateTag(getContext().user, pathId(request), await readBody(request)),
+    );
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => deleteTag(getContext().user, pathId(request)));
+  }
+</script>

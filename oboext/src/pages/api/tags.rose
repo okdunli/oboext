@@ -1,0 +1,19 @@
+<script>
+  // /api/tags — GET list, POST create
+  import { apiGate, readBody, createTag } from "@server/admin";
+  import { listTags } from "@server/queries";
+
+  export async function GET() {
+    return apiGate(async () => listTags());
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const row = await createTag(getContext().user, await readBody(request));
+      return new Response(JSON.stringify(row), {
+        status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+</script>

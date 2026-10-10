@@ -63,7 +63,11 @@ function __rvLoad(key, payload) {
 const CSP_HEADERS = `
 export const headers = {
   "Content-Security-Policy":
-    "script-src 'self' __RVP_CSP__; style-src 'unsafe-inline' 'self'; img-src 'self' data: https://picsum.photos; font-src data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'",
+    "script-src 'self' __RVP_CSP__ https://giscus.app https://utteranc.es https://cdn.jsdelivr.net https://*.disqus.com; " +
+    "style-src 'unsafe-inline' 'self'; " +
+    "img-src 'self' data: https://picsum.photos https://www.gravatar.com https://cn.gravatar.com https://cravatar.cn https://weavatar.com https://seccdn.libravatar.org https://q1.qlogo.cn https://*.disquscdn.com; " +
+    "font-src data:; connect-src 'self' https:; frame-src https://giscus.app https://*.disqus.com; " +
+    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'",
 };
 `;
 

@@ -1,0 +1,26 @@
+<script>
+  // /api/comments/:id — moderate (PATCH/PUT) or delete.
+  import { apiGate, readBody, updateComment, deleteComment } from "@server/admin";
+
+  function pathId(request) {
+    return Number(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+  }
+
+  async function save(request) {
+    const body = await readBody(request);
+    return updateComment(getContext().user, pathId(request), {
+      status: body.status,
+      content: body.content,
+    });
+  }
+  export async function PATCH(request) {
+    return apiGate(() => save(request));
+  }
+  export async function PUT(request) {
+    return apiGate(() => save(request));
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => deleteComment(getContext().user, pathId(request)));
+  }
+</script>

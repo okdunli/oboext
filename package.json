@@ -1,0 +1,26 @@
+{
+  "name": "oboext",
+  "version": "0.0.1",
+
+  "license": "MIT",
+  "description": "oboext rebuilt on rosefd: dynamic full-stack blog, per-request DB rendering, Node runtime",
+  "type": "module",
+  "scripts": {
+    "gen": "node tools/gen.mjs",
+    "dev": "node tools/serve.mjs dev",
+    "build": "node tools/build.mjs build",
+    "preview": "node tools/serve.mjs preview",
+    "build:go": "go build -o oboext-server ."
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "drizzle-orm": "^0.36.4",
+    "esbuild": "^0.24.0",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.6.0"
+  }
+}

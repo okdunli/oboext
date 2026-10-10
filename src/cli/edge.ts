@@ -2,25 +2,38 @@
 
 import { pathToFileURL } from 'url';
 import { join } from 'path';
-import { buildShell, shellOpen, clientScriptTag, securityHeaders } from './shell.js';
+import { buildShell, shellOpen, clientScriptTag, securityHeaders, mintNonce } from './shell.js';
 
 type ServerModule = {
-  renderPage(pathname: string, form?: FormData): Promise<{ html: string; state: string; head: string[]; status?: number; csr?: boolean }>;
+  renderPage(pathname: string, form?: FormData): Promise<{ html: string; state: string; head: string[]; status?: number; csr?: boolean; lang?: string; dir?: string }>;
   renderPageStream(pathname: string, write: (chunk: string) => void, shellOpen: string, clientTag: string): Promise<number>;
   canStream(pathname: string): boolean;
   isNoJs(pathname: string): boolean;
   isApi(pathname: string): boolean;
   handleApi(method: string, pathname: string, request: Request): Promise<Response>;
+ /** The document's <html lang>/<dir> for a pathname (streaming needs them before the render) */
+  docAttrs(pathname: string): { lang: string; dir: string };
   /** pages/_middleware.rose's handler, or null when the project has none */
   middleware: ((request: Request) => Promise<Response | void | null>) | null;
   /** run the middleware once per request; returns its short-circuit Response or null */
   runMiddleware(rawReq: any, form?: FormData): Promise<Response | null>;
+ /** The runtime plugin hooks, and whether the project declares any */
+  runRequestHooks(ctx: {
+    request: Request; url: URL; method: string; pathname: string; state: Record<string, unknown>;
+  }): Promise<Response | null>;
+  runResponseHooks(ctx: {
+    request: Request; url: URL; method: string; pathname: string; state: Record<string, unknown>;
+  }, res: Response): Promise<Response>;
+  hasRequestHooks: boolean;
+  hasResponseHooks: boolean;
   /** routes whose component reads getContext(): never prerendered, always live */
   dynamicRoutes: string[];
  /** per-route response headers [] when no route exports any */
   routeHeaders: Array<{ pattern: string; headers: Record<string, string> }>;
   /** the route's own exported headers for a pathname, or null */
   headersFor(pathname: string): Record<string, string> | null;
+ /** Routes that exported `csp = { nonce: true }` - nonce policy, never baked */
+  cspNonce(pathname: string): boolean;
 };
 
 /**
@@ -48,9 +61,9 @@ export async function createEdgeHandler(outDir: string): Promise<(request: Reque
     broken = new Set();
   }
 
-  const pageHeaders = (pathname: string): Record<string, string> => {
+  const pageHeaders = (pathname: string, nonce = ''): Record<string, string> => {
     const headers: Record<string, string> = {};
-    if (client) for (const [k, v] of Object.entries(securityHeaders(client))) headers[k.toLowerCase()] = v;
+    if (client) for (const [k, v] of Object.entries(securityHeaders(client, nonce))) headers[k.toLowerCase()] = v;
     const own = mod.headersFor?.(pathname);
     if (own) for (const [k, v] of Object.entries(own)) headers[k.toLowerCase()] = v;
     return headers;
@@ -58,37 +71,51 @@ export async function createEdgeHandler(outDir: string): Promise<(request: Reque
 
   return async function handle(request: Request): Promise<Response> {
     const { pathname } = new URL(request.url);
+    const hookCtx = mod.hasRequestHooks || mod.hasResponseHooks
+      ? { request, url: new URL(request.url), method: request.method, pathname, state: {} as Record<string, unknown> }
+      : null;
+    if (hookCtx) {
+      const short = await mod.runRequestHooks(hookCtx);
+      if (short) return mod.runResponseHooks(hookCtx, short);
+    }
     if (mod.middleware) {
       const mw = await mod.runMiddleware(request);
-      if (mw) return mw;
+      if (mw) return hookCtx ? mod.runResponseHooks(hookCtx, mw) : mw;
     }
     if (mod.isApi(pathname)) {
-      return mod.handleApi(request.method, pathname, request);
+      const apiRes = await mod.handleApi(request.method, pathname, request);
+      return hookCtx ? mod.runResponseHooks(hookCtx, apiRes) : apiRes;
     }
     const form = request.method === 'POST' ? await request.formData() : undefined;
     if (!form && !broken.has(pathname) && mod.canStream(pathname) && !mod.isNoJs(pathname)) {
+      const nonce = mod.cspNonce?.(pathname) ? mintNonce() : '';
+      const streamed = new Response(null, {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8', ...pageHeaders(pathname, nonce) }
+      });
+      const head = hookCtx ? await mod.runResponseHooks(hookCtx, streamed) : streamed;
       const encoder = new TextEncoder();
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
+          const doc = mod.docAttrs(pathname);
           await mod.renderPageStream(
             pathname,
             (chunk) => controller.enqueue(encoder.encode(chunk)),
-            shellOpen(styles),
-            clientScriptTag(client)
+            shellOpen(styles, doc.lang, doc.dir),
+            clientScriptTag(client, nonce)
           );
           controller.close();
         }
       });
-      return new Response(stream, {
-        status: 200,
-        headers: { 'content-type': 'text/html; charset=utf-8', ...pageHeaders(pathname) }
-      });
+      return new Response(stream, { status: head.status, headers: head.headers });
     }
     const page = await mod.renderPage(pathname, form);
-    const html = buildShell(page.html, page.state, client, page.head, styles, page.csr !== false);
-    return new Response(html, {
+    const nonce = mod.cspNonce?.(pathname) ? mintNonce() : '';
+    const html = buildShell(page.html, page.state, client, page.head, styles, page.csr !== false, page.lang, page.dir, nonce);
+    const buffered = new Response(html, {
       status: page.status ?? 200,
-      headers: { 'content-type': 'text/html; charset=utf-8', ...pageHeaders(pathname) }
+      headers: { 'content-type': 'text/html; charset=utf-8', ...pageHeaders(pathname, nonce) }
     });
+    return hookCtx ? mod.runResponseHooks(hookCtx, buffered) : buffered;
   };
 }

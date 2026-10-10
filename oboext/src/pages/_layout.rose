@@ -37,6 +37,7 @@
 <slot />
 {/if}
 {#if publicPath()}
+{chrome().themeVars}
 <script src="/public/noflash.js"></script>
 <script src="/public/theme.js"></script>
 <script src="/public/comments.js"></script>

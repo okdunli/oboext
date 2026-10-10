@@ -1,0 +1,128 @@
+<script>
+  // Post list (all statuses, live DB). Status/search/page ride the query
+  // string; the middleware's loopback workaround makes them reach SSR.
+  let data = $data(() =>
+    __rvLoad("admin.posts", {
+      status: __rvQs().get("status") || "",
+      search: __rvQs().get("q") || "",
+      page: Number(__rvQs().get("page") || 1),
+    }),
+  );
+  const items = data().items;
+  function fmtDate(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
+      "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function statusLabel(s) {
+    return s === "published" ? "已发布" : s === "draft" ? "草稿" : "已归档";
+  }
+  function taxNames(list) {
+    return (list || []).map((t) => t.name).join(" · ");
+  }
+  function tabClass(s) {
+    return (__rvQs().get("status") || "") === s ? "is-active" : "";
+  }
+  function prevPage() {
+    return Math.max(1, data().page - 1);
+  }
+  function nextPage() {
+    return data().page + 1;
+  }
+  function hasNext() {
+    return data().page * data().limit < data().total;
+  }
+  function pagerHref(p) {
+    const q = new URLSearchParams(__rvQs().toString());
+    q.set("page", String(p));
+    return "/admin/posts?" + q.toString();
+  }
+  function hasPrev() {
+    return data().page > 1;
+  }
+  function hasPager() {
+    return data().total > data().limit || data().page > 1;
+  }
+  function emptyHint() {
+    return items.length ? [] : [1];
+  }
+  // same-kind blocks can't nest ({#if} in {#if} pairs wrongly), so the pager
+  // wrapper rides an each-predicate while the prev/next flags stay {#if}
+  function pager() {
+    return hasPager() ? [1] : [];
+  }
+</script>
+
+<head>
+  <title>文章 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div class="adm-tabs">
+    <a class={tabClass("")} href="/admin/posts">全部</a>
+    <a class={tabClass("published")} href="/admin/posts?status=published">已发布</a>
+    <a class={tabClass("draft")} href="/admin/posts?status=draft">草稿</a>
+    <a class={tabClass("archived")} href="/admin/posts?status=archived">已归档</a>
+  </div>
+  <span style="flex:1"></span>
+  <form class="adm-search" action="/admin/posts">
+    <input class="adm-input" name="q" placeholder="搜索标题/摘要" value={__rvQs().get("q") || ""}>
+  </form>
+  <a class="adm-btn" href="/admin/posts/new">＋ 写文章</a>
+</div>
+
+<div class="adm-toolbar" style="gap:8px;">
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-op="publish">批量发布</button>
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-op="draft">转草稿</button>
+  <button class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-op="delete">批量删除</button>
+</div>
+
+<div class="adm-card adm-table-wrap">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th style="width:34px"><input type="checkbox" data-adm-act="check-all"></th>
+        <th>标题</th>
+        <th style="width:110px">作者</th>
+        <th style="width:90px">状态</th>
+        <th style="width:110px">日期</th>
+        <th style="width:60px">浏览</th>
+        <th style="width:120px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each items as p}
+      <tr>
+        <td><input type="checkbox" class="adm-check" value={p.id}></td>
+        <td>
+          <a class="title" href={"/admin/posts/" + p.id}>{p.title}</a>
+          <div class="sub">/{p.slug} · {taxNames(p.categories)} <span style="opacity:.55">{taxNames(p.tags)}</span></div>
+        </td>
+        <td>{p.authorName || "—"}</td>
+        <td><span class={"adm-tag " + p.status}>{statusLabel(p.status)}</span></td>
+        <td class="adm-hint">{fmtDate(p.updatedAt)}</td>
+        <td class="adm-hint">{p.views}</td>
+        <td>
+          <div class="row-actions">
+            <a class="adm-iconbtn" href={"/admin/posts/" + p.id}>编辑</a>
+            <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/posts/" + p.id} data-confirm={"确认删除文章「" + p.title + "」？"}>删除</button>
+          </div>
+        </td>
+      </tr>
+      {/each}
+    </tbody>
+  </table>
+  {#each emptyHint() as _}
+  <div class="adm-empty">还没有文章，点击右上角「写文章」开始创作。</div>
+  {/each}
+</div>
+
+{#each pager() as _}
+<div class="adm-pager">
+  共 {data().total} 篇 · 第 {data().page} 页
+  <span style="flex:1"></span>
+  {#if hasPrev()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(prevPage())}>上一页</a>{/if}
+  {#if hasNext()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(nextPage())}>下一页</a>{/if}
+</div>
+{/each}

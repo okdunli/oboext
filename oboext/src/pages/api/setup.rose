@@ -1,0 +1,33 @@
+<script>
+  // First-run setup: GET reports whether the instance still needs its first
+  // admin; POST creates that admin and immediately opens the session. Only
+  // valid while the users table is empty (createFirstAdmin enforces it).
+  import { apiGate, jsonOk, jsonFail, readBody } from "@server/admin";
+  import { hasAnyUser, createFirstAdmin, sessionCookieValue } from "@server/auth";
+
+  export async function GET() {
+    return apiGate(async () => jsonOk({ needsSetup: !(await hasAnyUser()) }));
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      if (await hasAnyUser()) return jsonFail("系统已初始化", 403);
+      const body = await readBody(request);
+      const email = String(body.email || "").trim();
+      const name = String(body.name || "").trim();
+      const password = String(body.password || "");
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+        return jsonFail("请输入合法邮箱", 422);
+      if (!name) return jsonFail("请输入昵称", 422);
+      if (password.length < 6) return jsonFail("密码至少 6 位", 422);
+      const user = await createFirstAdmin({ email, name, password });
+      return new Response(JSON.stringify({ user }), {
+        status: 201,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "set-cookie": await sessionCookieValue(user),
+        },
+      });
+    });
+  }
+</script>

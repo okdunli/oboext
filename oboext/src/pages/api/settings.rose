@@ -1,0 +1,23 @@
+<script>
+  // /api/settings — GET the singleton row, PATCH whitelisted columns.
+  import { apiGate, readBody, requireCap, updateSettings } from "@server/admin";
+  import { getSettings } from "@server/queries";
+
+  export async function GET() {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return getSettings();
+    });
+  }
+
+  export async function PATCH(request) {
+    return apiGate(async () =>
+      updateSettings(getContext().user, await readBody(request)),
+    );
+  }
+  export async function PUT(request) {
+    return apiGate(async () =>
+      updateSettings(getContext().user, await readBody(request)),
+    );
+  }
+</script>

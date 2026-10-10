@@ -1,0 +1,100 @@
+<script>
+  // Static pages list (all statuses, live DB). Port of app/admin/pages/page.tsx.
+  let data = $data(() =>
+    __rvLoad("admin.pages", {
+      status: __rvQs().get("status") || "",
+      page: Number(__rvQs().get("page") || 1),
+    }),
+  );
+  // NB: {#each} compiles its expression as a zero-arg call, so iteration
+  // targets must be function accessors, never bare arrays.
+  function rows() {
+    return data().items;
+  }
+  function fmtDate(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
+      "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function statusLabel(s) {
+    return s === "published" ? "已发布" : s === "draft" ? "草稿" : "已归档";
+  }
+  function hasNext() {
+    return data().page * data().limit < data().total;
+  }
+  function hasPrev() {
+    return data().page > 1;
+  }
+  function hasPager() {
+    return data().total > data().limit || data().page > 1;
+  }
+  function pagerHref(p) {
+    return "/admin/pages?page=" + p;
+  }
+  function emptyHint() {
+    return rows().length ? [] : [1];
+  }
+  function pager() {
+    return hasPager() ? [1] : [];
+  }
+</script>
+
+<head>
+  <title>页面 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div class="adm-tabs">
+    <a class={(__rvQs().get("status") || "") === "" ? "is-active" : ""} href="/admin/pages">全部</a>
+    <a class={__rvQs().get("status") === "published" ? "is-active" : ""} href="/admin/pages?status=published">已发布</a>
+    <a class={__rvQs().get("status") === "draft" ? "is-active" : ""} href="/admin/pages?status=draft">草稿</a>
+    <a class={__rvQs().get("status") === "archived" ? "is-active" : ""} href="/admin/pages?status=archived">已归档</a>
+  </div>
+  <span style="flex:1"></span>
+  <a class="adm-btn" href="/admin/pages/new">＋ 新建页面</a>
+</div>
+
+<div class="adm-card adm-table-wrap">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th>标题</th>
+        <th style="width:90px">状态</th>
+        <th style="width:120px">更新</th>
+        <th style="width:130px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each rows() as p}
+      <tr>
+        <td>
+          <a class="title" href={"/admin/pages/" + p.id}>{p.title}</a>
+          <div class="sub">/{p.slug}</div>
+        </td>
+        <td><span class={"adm-tag " + p.status}>{statusLabel(p.status)}</span></td>
+        <td class="adm-hint">{fmtDate(p.updatedAt)}</td>
+        <td>
+          <div class="row-actions">
+            <a class="adm-iconbtn" href={p.url} target="_blank" rel="noopener">查看</a>
+            <a class="adm-iconbtn" href={"/admin/pages/" + p.id}>编辑</a>
+            <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/pages/" + p.id} data-confirm={"确认删除页面「" + p.title + "」？"}>删除</button>
+          </div>
+        </td>
+      </tr>
+      {/each}
+    </tbody>
+  </table>
+  {#each emptyHint() as _}
+  <div class="adm-empty">还没有页面。</div>
+  {/each}
+</div>
+
+{#each pager() as _}
+<div class="adm-pager">
+  共 {data().total} 个页面 · 第 {data().page} 页
+  <span style="flex:1"></span>
+  {#if hasPrev()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(data().page - 1)}>上一页</a>{/if}
+  {#if hasNext()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(data().page + 1)}>下一页</a>{/if}
+</div>
+{/each}

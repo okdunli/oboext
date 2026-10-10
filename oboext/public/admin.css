@@ -106,6 +106,74 @@ button { font-family: inherit; }
 .adm-steps i { width: 26px; height: 4px; border-radius: 2px; background: var(--adm-border); display: block; }
 .adm-steps i.on { background: var(--adm-accent); }
 
+/* ------------------------------------------------------- installer wizard */
+.su-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--adm-bg);
+  padding: 40px 16px;
+}
+.su-card {
+  width: 100%;
+  max-width: 448px;
+  border: 1px solid var(--adm-border);
+  border-radius: 12px;
+  background: var(--adm-panel);
+  padding: 32px;
+}
+.su-title { margin: 0; font-size: 24px; font-weight: 700; color: #818cf8; }
+.su-lead { margin: 6px 0 0; font-size: 14px; line-height: 1.6; color: var(--adm-muted); }
+.su-group {
+  margin: 24px 0 0;
+  border: 1px solid var(--adm-border);
+  border-radius: 8px;
+  padding: 16px;
+}
+.su-group-last { margin-top: 16px; }
+.su-group legend { padding: 0 8px; font-size: 12px; color: var(--adm-faint); }
+.su-radios { display: flex; gap: 12px; }
+.su-radio {
+  flex: 1;
+  cursor: pointer;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 14px;
+  color: #d4d4d8;
+  text-align: center;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.su-radio:hover { border-color: #71717a; }
+.su-radio.is-on { border-color: #6366f1; background: rgba(99, 102, 241, .1); color: #a5b4fc; }
+.su-radio input {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.su-panel { margin-top: 12px; }
+.su-panel[hidden] { display: none; }
+.su-hint { margin: 0; font-size: 12px; line-height: 1.7; color: var(--adm-muted); }
+.su-code {
+  display: block;
+  margin-top: 6px;
+  background: var(--adm-bg);
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--adm-muted);
+  overflow-x: auto;
+}
+.su-label { display: block; margin-top: 16px; font-size: 14px; color: #d4d4d8; }
+.su-panel .su-label { margin-top: 12px; }
+.su-input { margin-top: 4px; }
+.su-error { margin: 16px 0 0; font-size: 14px; color: #f87171; }
+.su-error[hidden] { display: none; }
+.su-submit { margin-top: 24px; }
+.su-back { margin: 16px 0 0; text-align: center; font-size: 12px; }
+.su-back a { color: #818cf8; }
+.su-back a:hover { text-decoration: underline; }
+
 /* --------------------------------------------------------------------- shell */
 .adm-shell { display: flex; min-height: 100vh; }
 .adm-side {
@@ -258,6 +326,11 @@ button { font-family: inherit; }
 .adm-block.code textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; min-height: 130px; }
 .adm-block input.meta { margin-bottom: 8px; }
 .adm-block-add { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 4px; }
+.adm-metas { display: flex; flex-direction: column; gap: 8px; }
+.adm-meta-row { display: flex; gap: 6px; align-items: center; }
+.adm-meta-key { width: 34%; flex: 0 0 34%; }
+.adm-meta-val { flex: 1; min-width: 0; }
+.adm-meta-row .adm-iconbtn { flex: 0 0 auto; }
 .adm-checklist { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .adm-checklist label { display: flex; gap: 8px; align-items: center; font-size: 13.5px; color: var(--adm-muted); padding: 4px 2px; cursor: pointer; }
 .adm-checklist label:hover { color: var(--adm-text); }
@@ -269,6 +342,9 @@ button { font-family: inherit; }
 }
 .adm-savebar .spacer { flex: 1; }
 .adm-hint { font-size: 12.5px; color: var(--adm-faint); line-height: 1.7; }
+.adm-sub-title { font-size: 13px; font-weight: 700; color: var(--adm-text); margin: 18px 0 10px; padding-top: 14px; border-top: 1px solid var(--adm-border); }
+[data-show-if] { display: none; }
+[data-show-if].is-shown { display: block; }
 .adm-kv { display: grid; grid-template-columns: 130px 1fr; gap: 10px 14px; font-size: 13.5px; }
 .adm-kv .k { color: var(--adm-faint); }
 .adm-empty { text-align: center; color: var(--adm-faint); padding: 54px 20px; font-size: 14px; }

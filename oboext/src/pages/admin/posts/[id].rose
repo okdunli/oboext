@@ -2,8 +2,9 @@
   // Post editor (new + existing). The route segment :id is seeded as state
   // before render; "new" loads an empty form. Everything saves through
   // /api/posts via admin.js's BlockEditor — no content is ever baked.
-  let postId = $state("");
-  let d = $data(() => __rvLoad("admin.post", { id: postId() }));
+  // The :id segment is seeded into a signal named exactly "id" before render.
+  let id = $state("");
+  let d = $data(() => __rvLoad("admin.post", { id: id() }));
 
   function p() {
     return d().post;

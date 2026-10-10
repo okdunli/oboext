@@ -12,6 +12,7 @@
   // dispatch() directly. One loader map, per-request database reads.
   import { dispatch, documents, searchRedirect, notFoundDocument } from "@server/loaders";
   import { getPost, getCategoryBySlug, getTagBySlug } from "@server/queries";
+  import { getPublishedPage } from "@server/pages";
   import { ensureMigrations } from "@server/db";
   import { getSessionFromRequest, hasAnyUser } from "@server/auth";
 
@@ -82,6 +83,10 @@
       post: async (s) => {
         await ready();
         return Boolean(await getPost(s));
+      },
+      page: async (s) => {
+        await ready();
+        return Boolean(await getPublishedPage(s));
       },
       category: async (s) => {
         await ready();

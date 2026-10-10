@@ -25,8 +25,9 @@ import {
   relatedPosts,
   type PostView,
 } from "./queries.js";
-import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor } from "./links.js";
+import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, pageUrlFor } from "./links.js";
 import { resolveCommentConfig } from "./comments-config.js";
+import { getPublishedPage, listPublishedPages } from "./pages.js";
 import * as R from "./render.js";
 import * as admin from "./admin-loaders.js";
 
@@ -254,6 +255,36 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
   };
 }
 
+async function pageDetail(payload: { slug: string }, ctx: Ctx) {
+  const page = await getPublishedPage(payload.slug);
+  if (!page) return { notFound: true };
+  const [settings, recent, items] = await Promise.all([
+    getSettings(),
+    listPosts({ status: "published", limit: 5 }),
+    listPostComments(page.id, "page"),
+  ]);
+  const config = resolveCommentConfig(settings);
+  const u = ctx.user as { id?: number; name?: string; email?: string } | undefined;
+  const me = u && u.id ? { id: u.id, name: u.name ?? "", email: u.email ?? "" } : null;
+  const commentsHtml = R.commentsSection({
+    postId: page.id,
+    postType: "page",
+    open: page.commentStatus === "open",
+    enabled: config.enabled,
+    provider: config.provider,
+    requireNameEmail: settings.requireNameEmail ?? false,
+    defaultContent: config.defaultContent,
+    me,
+    items,
+    avatar: config.avatar,
+    config,
+  });
+  return {
+    main: R.raw(R.pagePage(page, recent.items, commentsHtml)),
+    head: R.rawHead(R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin)),
+  };
+}
+
 async function archives(payload: { year?: number; month?: number }) {
   const year = Number(payload.year) || 0;
   const month = Number(payload.month) || 0;
@@ -374,10 +405,11 @@ const day = (v: Date | string | null | undefined): string | undefined => {
 };
 
 async function sitemap(ctx: Ctx): Promise<string> {
-  const [{ items }, categories, tags, cfg] = await Promise.all([
+  const [{ items }, categories, tags, pageRows, cfg] = await Promise.all([
     listPosts({ status: "published", limit: 10000, pinned: false }),
     listCategories(),
     listTags(),
+    listPublishedPages({ limit: 10000 }),
     getPermalinkConfig(),
   ]);
   const base = ctx.origin;
@@ -399,6 +431,12 @@ async function sitemap(ctx: Ctx): Promise<string> {
     urls.push(`<url><loc>${escXml(base)}${escXml(categoryUrlFor(cfg, c))}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>`);
   for (const t of tags)
     urls.push(`<url><loc>${escXml(base)}${escXml(tagUrlFor(cfg, t))}</loc><changefreq>weekly</changefreq><priority>0.4</priority></url>`);
+  for (const g of pageRows.items)
+    urls.push(
+      `<url><loc>${escXml(base)}${escXml(pageUrlFor(cfg, g))}</loc>${
+        day(g.updatedAt ?? g.publishedAt) ? `<lastmod>${day(g.updatedAt ?? g.publishedAt)}</lastmod>` : ""
+      }<changefreq>monthly</changefreq><priority>0.6</priority></url>`,
+    );
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join(
     "\n",
   )}\n</urlset>`;
@@ -459,11 +497,14 @@ export const loaders = {
   tag: tagList,
   search,
   post: postDetail,
+  page: pageDetail,
   archives,
   "admin.session": admin.adminSession,
   "admin.dashboard": admin.adminDashboard,
   "admin.posts": admin.adminPosts,
   "admin.post": admin.adminPost,
+  "admin.pages": admin.adminPages,
+  "admin.page": admin.adminPage,
   "admin.comments": admin.adminComments,
   "admin.taxonomies": admin.adminTaxonomies,
   "admin.users": admin.adminUsers,

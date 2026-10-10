@@ -428,10 +428,11 @@ export async function deletePost(user: SessionUser, id: number) {
 }
 
 export async function bulkPosts(
-  user: SessionUser,
+  user: SessionUser | null,
   ids: number[],
   action: "publish" | "draft" | "archive" | "delete",
 ) {
+  requireUser(user);
   const rows = await db
     .select({ id: posts.id, authorId: posts.authorId })
     .from(posts)
@@ -665,11 +666,12 @@ export async function createPublicComment(input: PublicCommentInput) {
 }
 
 export async function updateComment(
-  user: SessionUser,
+  user: SessionUser | null,
   id: number,
   patch: { status?: string; content?: string },
 ) {
-  if (!can(user.role, "content:update:any")) throw new ServiceError("权限不足", 403);
+  const u = requireUser(user);
+  if (!can(u.role, "content:update:any")) throw new ServiceError("权限不足", 403);
   const [existing] = await db.select().from(comments).where(eq(comments.id, id));
   if (!existing) throw new ServiceError("评论不存在", 404);
   const set: Record<string, unknown> = {};
@@ -686,8 +688,9 @@ export async function updateComment(
   return row;
 }
 
-export async function deleteComment(user: SessionUser, id: number) {
-  if (!can(user.role, "content:delete:any")) throw new ServiceError("权限不足", 403);
+export async function deleteComment(user: SessionUser | null, id: number) {
+  const u = requireUser(user);
+  if (!can(u.role, "content:delete:any")) throw new ServiceError("权限不足", 403);
   const [existing] = await db.select().from(comments).where(eq(comments.id, id));
   if (!existing) throw new ServiceError("评论不存在", 404);
   if (existing.status === "published")
@@ -848,6 +851,28 @@ export async function updateSettings(user: SessionUser, input: Record<string, un
   return row;
 }
 
+/**
+ * Unauthenticated settings bootstrap used solely by first-run /api/setup
+ * (mirrors the updateSettings() call in app/api/setup/route.ts). Only the
+ * four installer fields are accepted; /api/setup enforces no-users state.
+ */
+export async function bootstrapSiteSettings(input: Record<string, unknown>): Promise<void> {
+  const limits: Record<string, number> = {
+    siteTitle: 120,
+    siteDescription: 300,
+    tagline: 120,
+    footerText: 200,
+  };
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  for (const [k, max] of Object.entries(limits)) {
+    if (typeof input[k] === "string") set[k] = (input[k] as string).slice(0, max);
+  }
+  if (Object.keys(set).length === 1) return;
+  await db.insert(siteSettings).values({ id: 1 }).onConflictDoNothing();
+  await db.update(siteSettings).set(set).where(eq(siteSettings.id, 1));
+  invalidateSettings();
+}
+
 function publicUser(u: any) {
   const { passwordHash, ...rest } = u;
   return rest;
@@ -884,10 +909,11 @@ export async function createUser(
 }
 
 export async function updateUser(
-  actor: SessionUser,
+  actorIn: SessionUser | null,
   id: number,
   input: Partial<{ name: string; email: string; password: string; role: Role; status: string; bio: string }>,
 ) {
+  const actor = requireUser(actorIn);
   const [target] = await db.select().from(users).where(eq(users.id, id));
   if (!target) throw new ServiceError("用户不存在", 404);
   const isSelf = actor.id === id;
@@ -911,9 +937,10 @@ export async function updateUser(
   return publicUser(row);
 }
 
-export async function deleteUser(actor: SessionUser, id: number) {
-  if (!can(actor.role, "users:manage")) throw new ServiceError("权限不足", 403);
-  if (actor.id === id) throw new ServiceError("不能删除当前登录账号", 422);
+export async function deleteUser(actor: SessionUser | null, id: number) {
+  const u = requireUser(actor);
+  if (!can(u.role, "users:manage")) throw new ServiceError("权限不足", 403);
+  if (u.id === id) throw new ServiceError("不能删除当前登录账号", 422);
   const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, id));
   if (!target) throw new ServiceError("用户不存在", 404);
   await db.delete(users).where(eq(users.id, id));

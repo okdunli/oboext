@@ -26,6 +26,35 @@ const globalForDb = globalThis as unknown as {
   __oboePglite?: any;
 };
 
+/**
+ * Minimal .env.local loader. The rosezm CLI does not auto-load env files
+ * (unlike the original), so the installer-written config would otherwise only
+ * apply to the process that received the POST. Real process env wins.
+ */
+function loadEnvLocal(): void {
+  try {
+    const file = path.join(process.cwd(), ".env.local");
+    if (!fs.existsSync(file)) return;
+    const text = fs.readFileSync(file, "utf8");
+    for (const line of text.split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (!m) continue;
+      if (Object.prototype.hasOwnProperty.call(process.env, m[1])) continue;
+      let val = m[2];
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1);
+      }
+      process.env[m[1]] = val;
+    }
+  } catch {
+    // optional config — an unreadable file must not block the default driver
+  }
+}
+loadEnvLocal();
+
 let pgliteClient: any = null;
 let postgresClient: any = null;
 
@@ -137,6 +166,30 @@ export function ensureDb(): Promise<any> {
       });
   }
   return globalForDb.__oboeReady;
+}
+
+/**
+ * Hot-swap the target database (ported 1:1 from db/index.ts
+ * reconfigureDatabase): used by the installer's /api/db-config so a remote
+ * Postgres chosen in the wizard takes effect immediately, no restart. The
+ * next ensureMigrations() pass creates a fresh client and runs schema.
+ */
+export async function reconfigureDatabase(driver: Driver, url: string): Promise<void> {
+  process.env.DB_DRIVER = driver;
+  process.env.DATABASE_URL =
+    driver === "postgres" ? url : url || "./.data/pglite_live";
+
+  try {
+    if (postgresClient) await postgresClient.end({ timeout: 2 });
+    if (pgliteClient) await pgliteClient.close();
+  } catch {
+    // ignore teardown errors — a fresh client is created regardless
+  }
+  postgresClient = null;
+  pgliteClient = null;
+  globalForDb.__oboeDb = undefined;
+  globalForDb.__oboeMigrated = undefined;
+  globalForDb.__oboeReady = undefined;
 }
 
 /** Apply SQL migrations once per process; safe to await every request. */

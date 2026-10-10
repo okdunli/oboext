@@ -1,0 +1,10 @@
+<script>
+  // GET /api/emojis — emoji panel data (groups). Served as an API route
+  // because the framework's prebuild purge removes *.json from dist/public.
+  import { apiGate } from "@server/admin";
+  import data from "@server/emoji-data";
+
+  export async function GET() {
+    return apiGate(async () => data);
+  }
+</script>

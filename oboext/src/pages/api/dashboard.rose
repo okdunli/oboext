@@ -1,0 +1,8 @@
+<script>
+  // GET /api/dashboard — counters, status distribution, recent activity.
+  import { apiGate, dashboardStats } from "@server/admin";
+
+  export async function GET() {
+    return apiGate(async () => dashboardStats(getContext().user));
+  }
+</script>

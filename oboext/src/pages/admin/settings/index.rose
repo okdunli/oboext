@@ -40,13 +40,31 @@
           <label>站点描述</label>
           <textarea class="adm-textarea" name="siteDescription" rows="2" data-dv={v('siteDescription')}></textarea>
         </div>
-        <div class="adm-field">
-          <label>Logo URL</label>
-          <input class="adm-input" name="logoUrl" placeholder="/logo.svg 或 https://…" value={v('logoUrl')}>
+        <div class="adm-field full" data-img-field>
+          <label>Logo</label>
+          <div class="adm-imgfield">
+            <img class="adm-imgfield-prev" data-img-preview alt="" src={v('logoUrl')}>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;gap:8px">
+                <input class="adm-input" name="logoUrl" placeholder="/uploads/media/... 或 https://…" value={v('logoUrl')}>
+                <label class="adm-imgfield-btn" data-img-btn>⬆ 上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
+              </div>
+              <p class="adm-imgfield-err" data-img-err></p>
+            </div>
+          </div>
         </div>
-        <div class="adm-field">
-          <label>Favicon URL</label>
-          <input class="adm-input" name="faviconUrl" value={v('faviconUrl')}>
+        <div class="adm-field full" data-img-field>
+          <label>Favicon</label>
+          <div class="adm-imgfield">
+            <img class="adm-imgfield-prev" data-img-preview alt="" src={v('faviconUrl')}>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;gap:8px">
+                <input class="adm-input" name="faviconUrl" placeholder="/uploads/media/... 或 https://…" value={v('faviconUrl')}>
+                <label class="adm-imgfield-btn" data-img-btn>⬆ 上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
+              </div>
+              <p class="adm-imgfield-err" data-img-err></p>
+            </div>
+          </div>
         </div>
         <div class="adm-field">
           <label>备案号</label>
@@ -294,9 +312,18 @@
           <label>robots 指令</label>
           <input class="adm-input" name="seoRobots" placeholder="index,follow" value={v('seoRobots', 'index,follow')}>
         </div>
-        <div class="adm-field">
-          <label>默认分享图 URL</label>
-          <input class="adm-input" name="ogImageUrl" value={v('ogImageUrl')}>
+        <div class="adm-field full" data-img-field>
+          <label>默认分享图</label>
+          <div class="adm-imgfield">
+            <img class="adm-imgfield-prev" data-img-preview alt="" src={v('ogImageUrl')}>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;gap:8px">
+                <input class="adm-input" name="ogImageUrl" placeholder="/uploads/media/... 或 https://…" value={v('ogImageUrl')}>
+                <label class="adm-imgfield-btn" data-img-btn>⬆ 上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
+              </div>
+              <p class="adm-imgfield-err" data-img-err></p>
+            </div>
+          </div>
         </div>
         <div class="adm-field">
           <label>Twitter 卡片样式</label>

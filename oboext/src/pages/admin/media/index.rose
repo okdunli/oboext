@@ -1,0 +1,121 @@
+<script>
+  // Media library (port of components/MediaLibrary.tsx). The grid SSRs live
+  // from the database; upload (multipart), selection, bulk delete, alt edit,
+  // copy-link, preview and drag&drop are enhanced by admin.js. Files land in
+  // content/uploads and are served at /uploads/* by _middleware.rose.
+  let d = $data(() => __rvLoad("admin.media", {}));
+  function items() {
+    return d().items || [];
+  }
+  function dataJson() {
+    return JSON.stringify(d());
+  }
+  function isImage(m) {
+    return String(m.mimeType || "").indexOf("image/") === 0;
+  }
+  function sizeText(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1024 / 1024).toFixed(1) + " MB";
+  }
+</script>
+
+<head>
+  <title>媒体库 - 管理后台</title>
+</head>
+
+<form class="adm-card adm-media-upload" data-media-upload-form>
+  <div class="adm-card-bd">
+    <div class="adm-dropzone" data-media-drop role="button" tabindex="0">
+      <input type="file" class="adm-hidden-file" data-media-file>
+      <div class="adm-dz-icon">⬆</div>
+      <p class="adm-dz-text" data-media-dz-text>点击选择文件，或拖拽到此处上传</p>
+      <p class="adm-dz-hint">支持图片、文档等任意类型</p>
+    </div>
+    <div class="adm-upload-row">
+      <div class="adm-field" style="flex:1;min-width:240px">
+        <span class="adm-hint" style="display:block;margin-bottom:4px">备注（作为图片替代文本，留空默认使用上传文件名）</span>
+        <input class="adm-input" data-media-alt placeholder="图片描述，利于 SEO 与无障碍">
+      </div>
+      <button type="submit" class="adm-btn adm-btn-green" data-media-submit disabled>上传</button>
+      <span class="adm-media-msg" data-media-msg></span>
+    </div>
+  </div>
+</form>
+
+<div class="adm-toolbar" style="margin-top:16px">
+  <label class="adm-check-line"><input type="checkbox" data-media-all> 全选</label>
+  <span style="flex:1"></span>
+  <span class="adm-hint" data-media-count>已选 0 / 0</span>
+  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-media-bulk disabled>批量删除</button>
+</div>
+
+<div class="adm-media-grid" data-media-grid data-media={dataJson()}>
+  {#each items() as m}
+  <div class="adm-media-card" data-media-id={m.id}>
+    <label class="adm-media-check">
+      <input type="checkbox" class="adm-media-sel" value={m.id}>
+    </label>
+    {#if isImage(m)}
+    <img class="adm-media-thumb" src={m.url} alt={m.alt || m.filename} loading="lazy" data-media-preview-btn>
+    {/if}
+    {#if !isImage(m)}
+    <div class="adm-media-file" data-media-preview-btn><span class="ic">📄</span><span>{m.mimeType}</span></div>
+    {/if}
+    <div class="adm-media-meta">
+      <p class="adm-media-name" title={m.filename}>{m.filename}</p>
+      <p class="adm-hint">{sizeText(m.size)}</p>
+      <div class="adm-media-actions">
+        <div class="row-actions">
+          <button type="button" class="adm-iconbtn" data-media-preview-btn title="查看 / 详情">🔍</button>
+          <button type="button" class="adm-iconbtn" data-media-copy data-url={m.url} title="复制链接">🔗</button>
+          <button type="button" class="adm-iconbtn" data-media-edit-btn title="编辑信息">✎</button>
+        </div>
+        <button type="button" class="adm-iconbtn danger" data-media-del data-url={"/api/media/" + m.id} data-confirm="删除该媒体？此操作不可恢复。" title="删除">🗑</button>
+      </div>
+    </div>
+  </div>
+  {/each}
+</div>
+
+<div class={"adm-empty adm-media-empty" + (items().length ? " is-hidden" : "")} data-media-empty style="padding:48px 16px">
+  <div style="font-size:32px;margin-bottom:8px">🖼</div>
+  <p>还没有媒体文件。</p>
+  <p class="adm-hint">使用上方上传区添加你的第一张图片或文档。</p>
+</div>
+
+<!-- edit alt text modal -->
+<div class="adm-modal" data-media-edit hidden>
+  <div class="adm-modal-box">
+    <div class="adm-modal-hd">
+      <strong>编辑媒体信息</strong>
+      <button type="button" class="adm-iconbtn" data-media-edit-close>✕</button>
+    </div>
+    <div class="adm-modal-bd">
+      <label class="adm-field" style="display:block">
+        <span class="adm-hint" style="display:block;margin-bottom:4px">备注（作为图片替代文本 alt，利于 SEO 与无障碍）</span>
+        <textarea class="adm-textarea" rows="3" data-media-edit-alt></textarea>
+      </label>
+      <div class="adm-hint" style="margin-top:10px">
+        实际文件名
+        <div class="adm-media-realname" data-media-edit-name></div>
+      </div>
+      <img class="adm-media-edit-img" data-media-edit-img alt="">
+    </div>
+    <div class="adm-modal-ft">
+      <button type="button" class="adm-btn adm-btn-ghost" data-media-edit-close>取消</button>
+      <button type="button" class="adm-btn" data-media-edit-save>保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- preview modal -->
+<div class="adm-modal" data-media-preview hidden>
+  <button type="button" class="adm-modal-x" data-media-preview-close>✕</button>
+  <div class="adm-modal-preview" data-media-preview-inner>
+    <img class="adm-media-preview-img" data-media-preview-img alt="">
+    <a class="adm-btn adm-btn-ghost adm-media-preview-open" target="_blank" rel="noopener" data-media-preview-open>打开文件</a>
+    <div class="adm-media-preview-meta" data-media-preview-meta></div>
+  </div>
+</div>

@@ -506,6 +506,7 @@ export const loaders = {
   "admin.pages": admin.adminPages,
   "admin.page": admin.adminPage,
   "admin.comments": admin.adminComments,
+  "admin.media": admin.adminMedia,
   "admin.taxonomies": admin.adminTaxonomies,
   "admin.users": admin.adminUsers,
   "admin.settings": admin.adminSettings,

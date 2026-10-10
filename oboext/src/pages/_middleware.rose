@@ -89,6 +89,19 @@
       }
     }
 
+    // ----------------------------------------------- user uploads (content/)
+    // Served by app code (not the framework's dist static root): files live in
+    // content/uploads and must survive rebuilds. Public GETs/HEADs only.
+    if (rp.indexOf("/uploads/") === 0) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return new Response("Method not allowed", {
+          status: 405,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+      return reg.uploads.serve(rp, request.method);
+    }
+
     // --------------------------------------------------- XML / txt documents
     if (rp === "/sitemap.xml") {
       return new Response(await reg.documents.sitemap(ctx), {

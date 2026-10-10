@@ -57,6 +57,55 @@ loadEnvLocal();
 
 let pgliteClient: any = null;
 let postgresClient: any = null;
+let appLockPath: string | null = null;
+
+/**
+ * Single-instance interlock for a PGlite data directory. PGlite's own
+ * postmaster.pid carries a WASM virtual PID (-42) that is never alive on the
+ * host, so sweepStalePgLocks() cannot detect a SECOND process opening the same
+ * directory. Two concurrent openers (a stale server + a restart, or a
+ * multi-worker cluster) silently interleave file syncs and can tear
+ * pg_control/WAL — "could not locate a valid checkpoint record" on the next
+ * boot. This lock uses the REAL OS pid and atomically claims the directory.
+ */
+function acquireAppLock(dataDir: string): void {
+  const lockPath = dataDir + ".app-lock";
+  const reclaim = (): void => {
+    try {
+      fs.writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      const holder = Number.parseInt(
+        fs.readFileSync(lockPath, "utf8").trim() || "0",
+        10,
+      );
+      if (holder && holder !== process.pid && pidIsAlive(holder)) {
+        throw new Error(
+          `PGlite data directory ${dataDir} is already open in another oboext process (pid ${holder}). ` +
+            "PGlite supports one process per data directory — stop that server first. " +
+            `If it crashed without cleaning up, delete ${lockPath} and retry.`,
+        );
+      }
+      fs.writeFileSync(lockPath, String(process.pid));
+    }
+  };
+  reclaim();
+  appLockPath = lockPath;
+}
+
+function releaseAppLock(): void {
+  if (!appLockPath) return;
+  try {
+    if (fs.existsSync(appLockPath)) {
+      if (fs.readFileSync(appLockPath, "utf8").trim() === String(process.pid)) {
+        fs.rmSync(appLockPath, { force: true });
+      }
+    }
+  } catch {
+    // best effort — stale locks are reclaimed on next acquireAppLock()
+  }
+  appLockPath = null;
+}
 
 function pidIsAlive(pid: number): boolean {
   try {
@@ -101,6 +150,8 @@ function registerGracefulShutdown(): void {
     if (!client) return Promise.resolve();
     return client.close().catch((err: unknown) => {
       console.error("[db] PGlite close error:", err);
+    }).finally(() => {
+      releaseAppLock();
     });
   };
   const onSignal = (signal: NodeJS.Signals) => {
@@ -116,6 +167,9 @@ function registerGracefulShutdown(): void {
   process.prependOnceListener("SIGTERM", () => onSignal("SIGTERM"));
   process.once("beforeExit", () => {
     void closeDb();
+  });
+  process.on("exit", () => {
+    releaseAppLock();
   });
 }
 
@@ -141,6 +195,7 @@ async function createDb(): Promise<any> {
   const url = process.env.DATABASE_URL || "./.data/pglite_live";
   const dir = path.resolve(url);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
+  acquireAppLock(dir);
   sweepStalePgLocks(dir);
 
   const pglitePkg = "@electric-sql/" + "pglite";
@@ -187,6 +242,7 @@ export async function reconfigureDatabase(driver: Driver, url: string): Promise<
   }
   postgresClient = null;
   pgliteClient = null;
+  releaseAppLock();
   globalForDb.__oboeDb = undefined;
   globalForDb.__oboeMigrated = undefined;
   globalForDb.__oboeReady = undefined;

@@ -1,0 +1,112 @@
+<script>
+  // Comment moderation — reads the live DB per request. Actions go through
+  // /api/comments/:id (PATCH status | DELETE) via admin.js delegation.
+  let d = $data(() =>
+    __rvLoad("admin.comments", {
+      status: __rvQs().get("status") || "",
+      page: Number(__rvQs().get("page") || 1),
+    }),
+  );
+  const items = d().items;
+  function fmt(iso) {
+    if (!iso) return "—";
+    const dt = new Date(iso);
+    const pad = (n) => String(n).padStart(2, "0");
+    return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) +
+      " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes());
+  }
+  function label(s) {
+    return s === "published" ? "已通过" : s === "pending" ? "待审核" : "垃圾";
+  }
+  function tabClass(s) {
+    return (__rvQs().get("status") || "") === s ? "is-active" : "";
+  }
+  function hasPrev() {
+    return d().page > 1;
+  }
+  function hasNext() {
+    return d().page * d().limit < d().total;
+  }
+  function hasPager() {
+    return d().total > d().limit || d().page > 1;
+  }
+  function emptyHint() {
+    return items.length ? [] : [1];
+  }
+  // each-predicate wrapper: same-kind blocks can't nest in .rose templates
+  function pager() {
+    return hasPager() ? [1] : [];
+  }
+  function statusQ() {
+    return __rvQs().get("status") || "";
+  }
+  function href(p) {
+    return "/admin/comments?page=" + p + (statusQ() ? "&status=" + statusQ() : "");
+  }
+</script>
+
+<head>
+  <title>评论 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div class="adm-tabs">
+    <a class={tabClass("")} href="/admin/comments">全部</a>
+    <a class={tabClass("pending")} href="/admin/comments?status=pending">待审核</a>
+    <a class={tabClass("published")} href="/admin/comments?status=published">已通过</a>
+    <a class={tabClass("spam")} href="/admin/comments?status=spam">垃圾</a>
+  </div>
+  <span style="flex:1"></span>
+  <span class="adm-hint">共 {d().total} 条</span>
+</div>
+
+<div class="adm-card adm-table-wrap">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th style="width:150px">作者</th>
+        <th>评论</th>
+        <th style="width:170px">所属文章</th>
+        <th style="width:80px">状态</th>
+        <th style="width:130px">日期</th>
+        <th style="width:210px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each items as c}
+      <tr>
+        <td>
+          <div class="title">{c.authorName || "匿名"}</div>
+          <div class="sub">{c.authorEmail || ""}</div>
+        </td>
+        <td style="max-width:380px">
+          <div style="white-space:pre-wrap;line-height:1.6">{esc(c.content)}</div>
+        </td>
+        <td class="adm-hint">{c.postTitle}</td>
+        <td><span class={"adm-tag " + c.status}>{label(c.status)}</span></td>
+        <td class="adm-hint">{fmt(c.createdAt)}</td>
+        <td>
+          <div class="row-actions" style="flex-wrap:wrap;gap:4px">
+            <button class="adm-iconbtn" data-adm-act="comment" data-id={c.id} data-what="published">通过</button>
+            <button class="adm-iconbtn" data-adm-act="comment" data-id={c.id} data-what="pending">待审</button>
+            <button class="adm-iconbtn" data-adm-act="comment" data-id={c.id} data-what="spam">垃圾</button>
+            <button class="adm-iconbtn danger" data-adm-act="comment" data-id={c.id} data-what="delete">删除</button>
+          </div>
+        </td>
+      </tr>
+      {/each}
+    </tbody>
+  </table>
+  {#each emptyHint() as _}
+  <div class="adm-empty">这里还没有评论。</div>
+  {/each}
+</div>
+
+{#each pager() as _}
+<div class="adm-pager">
+  第 {d().page} 页
+  <span style="flex:1"></span>
+  {#if hasPrev()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(d().page - 1)}>上一页</a>{/if}
+  {#if hasNext()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(d().page + 1)}>下一页</a>{/if}
+</div>
+{/each}

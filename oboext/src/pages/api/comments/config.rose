@@ -1,0 +1,13 @@
+<script>
+  // GET /api/comments/config — public, client-safe comment provider config.
+  import { apiGate } from "@server/admin";
+  import { getSettings } from "@server/queries";
+  import { resolveCommentConfig } from "@server/comments-config";
+
+  export async function GET() {
+    return apiGate(async () => {
+      const settings = await getSettings();
+      return resolveCommentConfig(settings);
+    });
+  }
+</script>

@@ -1,0 +1,52 @@
+<script>
+  // /api/comments
+  //   GET   admin comment list (?status=&limit=&offset=), requires content:read
+  //   POST  public comment submission (guests allowed; logged-in identity
+  //         overrides the guest fields server-side, like the original)
+  import { apiGate, readBody, publicListComments, createPublicComment } from "@server/admin";
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const q = new URL(request.url).searchParams;
+      return publicListComments(getContext().user || null, {
+        post: q.get("post"),
+        postType: q.get("postType"),
+        parent: q.get("parentId"),
+        status: q.get("status"),
+      });
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const ctx = getContext();
+      const postId = Number(body.postId);
+      if (!Number.isInteger(postId)) {
+        return new Response(JSON.stringify({ error: "缺少 postId" }), {
+          status: 422,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      }
+      const out = await createPublicComment({
+        postId,
+        postType: body.postType === "page" ? "page" : "post",
+        parentId: body.parentId ? Number(body.parentId) : null,
+        authorName: body.authorName == null ? "" : String(body.authorName),
+        authorEmail: body.authorEmail == null ? null : String(body.authorEmail),
+        authorUrl: body.authorUrl == null ? null : String(body.authorUrl),
+        content: String(body.content || ""),
+        user: ctx.user || null,
+        ip: ctx.ip || null,
+        siteHost: request.headers.get("host"),
+      });
+      return new Response(
+        JSON.stringify({ id: out.comment.id, isPublic: out.isPublic, status: out.comment.status }),
+        {
+          status: 201,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        },
+      );
+    });
+  }
+</script>

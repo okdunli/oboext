@@ -2,7 +2,20 @@
   // skyscraper chrome: sticky nav, sidebar/toolbox/login drawers, dark mode,
   // scroll-reveal. Delegated listeners + onMount/onCleanup; chrome HTML comes
   // from the live database through the "chrome" loader ($data, per request).
+  // Admin pages (/admin/*) bring their own shell: they render a bare slot and
+  // the "chrome" loader short-circuits to an empty stub for their path.
   let chrome = $data(() => __rvLoad("chrome", {}));
+
+  function adminPath() {
+    const p =
+      typeof window !== "undefined"
+        ? window.location.pathname
+        : String(getContext().pathname || "");
+    return p.indexOf("/admin") === 0;
+  }
+  function publicPath() {
+    return !adminPath();
+  }
 
   let __disposers = [];
   let __disappearTimer = null;
@@ -281,7 +294,12 @@
   <link rel="icon" href="data:,">
 </head>
 
+{#if adminPath()}
+<slot />
+{/if}
+{#if publicPath()}
 <script src="/public/noflash.js"></script>
+<script src="/public/comments.js"></script>
 <div class="th-skyscraper">
 {chrome().nav}
   <div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">
@@ -289,3 +307,4 @@
   </div></div><aside class="sidebar-column with-separate-line"><div class="sidebar-content">{chrome().aside}</div></aside></div></main></div>
 {chrome().footer}
 </div>
+{/if}

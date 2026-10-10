@@ -218,7 +218,7 @@ export async function compileComponent(filePath: string, publicDir: string, scop
 
   const scriptMatch = sourceNoBlocks.match(COMPONENT_RE);
   const rawScript = scriptMatch?.[1] ?? '';
-  const usesContext = /getContext\s*\(/.test(rawScript);
+  const usesContext = /getContext\s*\(/.test(rawScript) || /\$store\s*\(/.test(rawScript);
   const hasParams = /(?:^|\n)\s*export\s+(?:(?:const|let|var)\s+|(?:async\s+)?function\s+)params\b/.test(rawScript);
   const revalidateMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+revalidate\s*=\s*(\d+)\s*;?/);
   const revalidate = revalidateMatch ? Number(revalidateMatch[1]) : undefined;
@@ -783,7 +783,7 @@ closes.push(__head);
 __html += "<!--\u27e6h:" + __hi + "\u27e7-->" + __head() + "<!--\u27e6/h:" + __hi + "\u27e7-->";`
     : '';
   return `
-import { state, $data, hasState, esc, refresh, onMount, onCleanup, getContext, $t, bestLocale } from './runtime.js';
+import { state, $data, hasState, esc, refresh, onMount, onCleanup, getContext, $t, bestLocale, $cookies, $sessionCookie, $store } from './runtime.js';
 
 ${exports}
 
@@ -817,7 +817,7 @@ __html += "<!--\u27e6h:" + __hi + "\u27e7-->" + __head() + "<!--\u27e6/h:" + __h
     : '';
 
   return `
-import { state, $data, hasState, esc, refresh, onMount, onCleanup, getContext, $t, bestLocale } from './runtime.js';
+import { state, $data, hasState, esc, refresh, onMount, onCleanup, getContext, $t, bestLocale, $cookies, $sessionCookie, $store } from './runtime.js';
 
 ${exports}
 
@@ -886,6 +886,9 @@ export async function buildProject(root: string, outDir: string): Promise<{ rout
   await Promise.all(stale.map((f) => fs.promises.rm(path.join(outDir, f), { force: true })));
 
   const files = await scanRoseFiles(root);
+  if (files.length === 0) {
+    throw new Error(`no .rose pages found under ${path.join(root, 'src', 'pages')} - run rosefd from a project root, or pass one: rosefd build <dir>`);
+  }
   const infos = files.map((f) => ({ ...getRouteInfo(f, root) }));
   const plugins = await loadPlugins(root);
   const scopeKeys = files.map((f) =>
@@ -1005,10 +1008,18 @@ export async function buildProject(root: string, outDir: string): Promise<{ rout
 
   const serverEntry = `
 ${serverImports}
-import { setState, clearRequestState, serializeState, resetRequestContext, isLocale, setLocales, localeList } from './runtime.js';
+import { setState, clearRequestState, serializeState, resetRequestContext, isLocale, setLocales, localeList, setStoreTransport, applyStorePatch } from './runtime.js';
 
 // I18n: the dictionaries baked at build time from src/locales/*.json.
 setLocales(${localesJson}, '${defaultLocale}');
+
+// The store transport.
+if (typeof process !== 'undefined' && typeof process.send === 'function') {
+  setStoreTransport((name, value) => process.send({ type: 'rosefd:store', name, value }));
+  process.on('message', (msg) => {
+    if (msg && msg.type === 'rosefd:store') applyStorePatch(msg.name, msg.value);
+  });
+}
 
 export { localeList };
 export const defaultLocale = '${defaultLocale}';

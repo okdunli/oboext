@@ -1,0 +1,47 @@
+<script>
+  // First-run installer. Shown only while the users table is empty (the
+  // middleware redirects away /admin/setup afterwards).
+  let session = $data(() => __rvLoad("admin.session", {}));
+</script>
+
+<head>
+  <title>安装 - oboext</title>
+</head>
+
+<div class="adm-auth">
+  <div class="adm-auth-side">
+    <div class="adm-auth-brand"><span class="adm-auth-mark">O</span> oboext 安装程序</div>
+    <div>
+      <h1>创建管理员账号</h1>
+      <p>再差一步就完成了。设置第一个管理员账号（拥有全部权限），安装完成后会自动登录并进入仪表盘。</p>
+      <ul>
+        <li>数据库已自动迁移（本地 PGlite / 生产 Postgres）</li>
+        <li>会话密钥自动生成于 .data/.auth-secret</li>
+        <li>生产环境请设置环境变量 AUTH_SECRET</li>
+      </ul>
+    </div>
+    <div class="adm-hint">oboext on rosefd</div>
+  </div>
+  <div class="adm-auth-main">
+    <div class="adm-auth-card">
+      <div class="adm-steps"><i class="on"></i><i class="on"></i><i class="on"></i></div>
+      <h2>管理员信息</h2>
+      <p class="adm-auth-sub">请妥善保管登录凭据</p>
+      <form data-adm-form="setup">
+        <div class="adm-field">
+          <label>邮箱</label>
+          <input class="adm-input" type="email" name="email" autocomplete="email" required autofocus>
+        </div>
+        <div class="adm-field">
+          <label>昵称</label>
+          <input class="adm-input" name="name" autocomplete="nickname" required>
+        </div>
+        <div class="adm-field">
+          <label>密码（至少 6 位）</label>
+          <input class="adm-input" type="password" name="password" autocomplete="new-password" minlength="6" required>
+        </div>
+        <button class="adm-btn adm-btn-block" type="submit">完成安装</button>
+      </form>
+    </div>
+  </div>
+</div>

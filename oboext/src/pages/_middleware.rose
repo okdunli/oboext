@@ -20,10 +20,18 @@
       await reg.ready();
     }
 
+    // Session: cms_session cookie (or Bearer) -> getContext().user. Every
+    // pages/api/*.rose handler reads that; the /admin wall below uses it too.
+    if (reg && reg.auth) {
+      const u = await reg.auth.userFromRequest(request);
+      if (u) getContext().user = u;
+    }
+
     const u = new URL(request.url);
     const p = u.pathname;
 
-    // Framework 0.1.0 bug: any query string 404s the router. Re-enter the
+    // Framework bug (still present in 0.1.2, reported upstream): any query
+    // string 404s the SSR router. Re-enter the
     // server at the bare pathname (same process, loopback); that second pass
     // carries the real URL in x-rv-url and renders normally. /api/* already
     // strips the query for routing, so it is excluded.
@@ -58,6 +66,28 @@
     if (!reg) return;
 
     const rp = real.pathname;
+
+    // ------------------------------------------------- /admin login wall
+    // Whitelist: /admin/login and /admin/setup. First run (no users) sends
+    // everyone to setup; once initialized setup redirects away; every other
+    // /admin page without a session bounces to login.
+    if (rp.indexOf("/admin") === 0) {
+      const user = getContext().user;
+      if (rp === "/admin/setup") {
+        if (await reg.auth.hasAnyUser()) {
+          return Response.redirect(
+            new URL(user ? "/admin" : "/admin/login", real.origin),
+            302,
+          );
+        }
+      } else if (rp === "/admin/login") {
+        if (user) return Response.redirect(new URL("/admin", real.origin), 302);
+        if (!(await reg.auth.hasAnyUser()))
+          return Response.redirect(new URL("/admin/setup", real.origin), 302);
+      } else if (!user) {
+        return Response.redirect(new URL("/admin/login", real.origin), 302);
+      }
+    }
 
     // --------------------------------------------------- XML / txt documents
     if (rp === "/sitemap.xml") {

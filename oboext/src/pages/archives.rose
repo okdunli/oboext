@@ -1,0 +1,17 @@
+<script>
+  // Archive timeline. Bare: year/month index. ?year=Y groups that year by
+  // month; ?year=Y&month=M shows the month's posts as cards.
+  let result = $data(() =>
+    __rvLoad("archives", {
+      year: Number(__rvQs().get("year") || 0),
+      month: Number(__rvQs().get("month") || 0),
+    })
+  );
+</script>
+
+<head>
+  <title>{result().headTitle}</title>
+  <meta name="description" content="按年月浏览全部文章">
+</head>
+
+{result().main}

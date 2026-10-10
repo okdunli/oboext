@@ -1,0 +1,20 @@
+ALTER TABLE "categories" ADD COLUMN IF NOT EXISTS "order" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "comment_provider" text DEFAULT 'builtin' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "artalk_server" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "artalk_site" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "giscus_repo" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "giscus_repo_id" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "giscus_category" text DEFAULT 'General' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "giscus_category_id" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "giscus_mapping" text DEFAULT 'pathname' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "giscus_reactions" boolean DEFAULT true NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "giscus_theme" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "waline_server" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "twikoo_env_id" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "disqus_shortname" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "utterances_repo" text DEFAULT '' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "utterances_term" text DEFAULT 'pathname' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "avatar_source" text DEFAULT 'gravatar' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "avatar_size" integer DEFAULT 80 NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "avatar_default" text DEFAULT 'identicon' NOT NULL;--> statement-breakpoint
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "avatar_rating" text DEFAULT 'g' NOT NULL;

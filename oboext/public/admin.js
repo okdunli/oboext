@@ -1187,6 +1187,15 @@
     var byId = {};
     (boot.widgets || []).forEach(function (w) { byId[w.id] = w; });
 
+    var themeSel = root.querySelector("[data-wg-theme]");
+    if (themeSel && !themeSel.__wgBound) {
+      themeSel.__wgBound = true;
+      themeSel.value = boot.theme || themeSel.value;
+      themeSel.addEventListener("change", function () {
+        location.search = "?theme=" + encodeURIComponent(themeSel.value);
+      });
+    }
+
     function esc(s) {
       return String(s == null ? "" : s)
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -1546,6 +1555,495 @@
     });
   }
 
+  function initThemeManager() {
+    var root = document.querySelector("[data-th-manager]");
+    if (!root || root.__thbound) return;
+    root.__thbound = true;
+    var boot = {};
+    try { boot = JSON.parse(root.getAttribute("data-th") || "{}"); } catch (e) { return; }
+
+    function list() { return boot.themes || []; }
+    function activeTheme() {
+      return list().filter(function (t) { return t.active; })[0] || list()[0] || null;
+    }
+    function reloadSoon() { setTimeout(function () { location.reload(); }, 450); }
+    function fail(err) { toast(err.message || "请求失败", "err"); }
+
+    root.addEventListener("click", function (e) {
+      var b;
+      if ((b = e.target.closest("[data-th-create]"))) {
+        e.preventDefault();
+        var input = root.querySelector("[data-th-new-name]");
+        var name = (input.value || "").trim();
+        if (!name) return toast("请输入主题名称");
+        var base = activeTheme();
+        b.disabled = true;
+        api("POST", "/api/themes", { name: name, config: base ? base.config : {} })
+          .then(function (row) {
+            toast("已创建", "ok");
+            location.href = "/admin/themes/" + row.slug;
+          })
+          .catch(function (err) { fail(err); b.disabled = false; });
+        return;
+      }
+      if ((b = e.target.closest("[data-th-activate]"))) {
+        var card = b.closest("[data-th-id]");
+        var slug = card.getAttribute("data-th-slug");
+        api("PATCH", "/api/settings", { activeThemeSlug: slug })
+          .then(function () { toast("已启用", "ok"); reloadSoon(); }).catch(fail);
+        return;
+      }
+      if ((b = e.target.closest("[data-th-delete]"))) {
+        var id = b.closest("[data-th-id]").getAttribute("data-th-id");
+        if (!confirm("确定删除该主题？其主题文件夹也会被删除。")) return;
+        api("DELETE", "/api/themes/" + id)
+          .then(function () { toast("已删除", "ok"); reloadSoon(); }).catch(fail);
+      }
+    });
+
+    root.addEventListener("change", function (e) {
+      if (!(e.target.hasAttribute && e.target.hasAttribute("data-th-zip"))) return;
+      var f0 = e.target.files && e.target.files[0];
+      e.target.value = "";
+      if (!f0) return;
+      var box = root.querySelector("[data-th-upload]");
+      var msg = box.querySelector(".adm-th-upload-msg");
+      var btn = box.querySelector(".adm-th-upload-btn");
+      btn.classList.add("is-busy");
+      msg.className = "adm-th-upload-msg";
+      msg.textContent = "正在上传安装…";
+      var fd = new FormData();
+      fd.append("file", f0);
+      fetch("/api/themes/upload", { method: "POST", body: fd })
+        .then(async function (res) {
+          var data = {};
+          try { data = await res.json(); } catch (err) {}
+          if (!res.ok) throw new Error(data.error || "安装失败 (" + res.status + ")");
+          msg.classList.add("is-ok");
+          msg.textContent = "安装成功";
+          toast("主题已安装", "ok");
+          reloadSoon();
+        })
+        .catch(function (err) {
+          msg.classList.add("is-err");
+          msg.textContent = err.message;
+        })
+        .finally(function () { btn.classList.remove("is-busy"); });
+    });
+  }
+
+  function initThemePanel() {
+    var root = document.querySelector("[data-th-panel]");
+    if (!root || root.__thpbound) return;
+    root.__thpbound = true;
+    var panel;
+    try { panel = JSON.parse(root.getAttribute("data-th-panel-data") || "{}"); } catch (e) { return; }
+    if (!panel.theme) return;
+
+    var appearance = panel.appearanceSchema || [];
+    var own = panel.settingsSchema || [];
+    var allSections = appearance.concat(own);
+    var fields = allSections.reduce(function (a, s) { return a.concat(s.fields || []); }, []);
+    var draft = Object.assign({}, panel.config || {}, panel.settings || {});
+    var activeKey = (appearance[0] && appearance[0].key) || (own[0] && own[0].key) || "";
+    var catsCache = null;
+    var catOptions = [];
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+
+    function fieldVisible(f) {
+      if (!f.showIf) return true;
+      var cur = String(draft[f.showIf.key] == null ? "" : draft[f.showIf.key]);
+      var eq = [].concat(f.showIf.equals).map(String);
+      return eq.indexOf(cur) >= 0;
+    }
+
+    function switchTrack(on) {
+      return '<span class="track' + (on ? " is-on" : "") + '"><i></i></span>';
+    }
+
+    function fieldHtml(f) {
+      var v = draft[f.key];
+      var show = fieldVisible(f) ? "" : " hidden";
+      var half = f.half ? " half" : "";
+      var html = '<div class="adm-thp-fld' + half + '" data-fld="' + esc(f.key) + '"' + show + ">";
+      if (f.type === "group") {
+        return '<div class="adm-thp-group" data-fld="' + esc(f.key) + '">' +
+          '<p>' + esc(f.label) + "</p>" +
+          (f.help ? '<p class="adm-thp-help">' + esc(f.help) + "</p>" : "") + "</div>";
+      }
+      if (f.type === "switch") {
+        html += '<button type="button" class="adm-wg-switch" data-k="' + esc(f.key) + '" data-t="switch">' +
+          "<span>" + esc(f.label) + "</span>" + switchTrack(!!v) + "</button>";
+        if (f.help) html += '<p class="adm-thp-help">' + esc(f.help) + "</p>";
+        return html + "</div>";
+      }
+      html += '<label class="adm-thp-label">' + esc(f.label) + "</label>";
+      if (f.type === "color") {
+        var hex = /^#[0-9a-f]{6}$/i.test(String(v || "")) ? String(v) : "#000000";
+        html += '<div class="adm-thp-color"><input type="color" class="adm-thp-colorpick" data-k="' +
+          esc(f.key) + '" data-t="color" value="' + hex + '">' +
+          '<input class="adm-input adm-thp-monospace" data-k="' + esc(f.key) +
+          '" data-t="text" value="' + esc(v == null ? "" : v) +
+          '" placeholder="' + esc(f.placeholder || "#000000 / rgba() / gradient") + '"></div>';
+      } else if (f.type === "select") {
+        html += '<select class="adm-select" data-k="' + esc(f.key) + '" data-t="select">' +
+          (f.options || []).map(function (o) {
+            return '<option value="' + esc(o.value) + '"' +
+              (String(o.value) === String(v == null ? "" : v) ? " selected" : "") + ">" +
+              esc(o.label) + "</option>";
+          }).join("") + "</select>";
+      } else if (f.type === "range") {
+        var num = Number(v == null ? f.default || 0 : v) || 0;
+        html += '<div class="adm-thp-range"><input type="range" data-k="' + esc(f.key) +
+          '" data-t="range" min="' + (f.min != null ? f.min : 0) + '" max="' +
+          (f.max != null ? f.max : 100) + '" step="' + (f.step != null ? f.step : 1) +
+          '" value="' + num + '"><span class="adm-thp-range-val" data-range-val="' +
+          esc(f.key) + '">' + esc(String(v == null ? f.default || 0 : v)) + esc(f.unit || "") +
+          "</span></div>";
+      } else if (f.type === "number") {
+        html += '<input class="adm-input" type="number" data-k="' + esc(f.key) +
+          '" data-t="number"' + (f.min != null ? ' min="' + f.min + '"' : "") +
+          (f.max != null ? ' max="' + f.max + '"' : "") +
+          ' value="' + esc(Number(v == null ? f.default || 0 : v) || 0) + '">';
+      } else if (f.type === "textarea" || f.type === "code") {
+        html += '<textarea class="adm-textarea' + (f.type === "code" ? " adm-thp-code" : "") +
+          '" rows="' + (f.type === "code" ? 9 : 3) + '" data-k="' + esc(f.key) +
+          '" data-t="text" placeholder="' + esc(f.placeholder || "") + '">' +
+          esc(v == null ? "" : v) + "</textarea>";
+      } else if (f.type === "image") {
+        var u = String(v || "");
+        html += '<div class="adm-wg-img"><img class="adm-wg-img-prev" alt="" src="' + esc(u) + '">' +
+          '<div class="adm-wg-img-row"><input class="adm-input" data-k="' + esc(f.key) +
+          '" data-t="text" placeholder="/uploads/media/... 或 https://..." value="' + esc(u) + '">' +
+          '<label class="adm-imgfield-btn">⬆ 上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-key="' +
+          esc(f.key) + '"></label></div></div>';
+      } else if (f.type === "links") {
+        var items = Array.isArray(v) ? v : [];
+        html += '<div class="adm-wg-links" data-repeat="links" data-k="' + esc(f.key) + '">' +
+          items.map(linkRowHtml).join("") +
+          '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>＋ 添加一项</button></div>';
+      } else if (f.type === "categoryRows") {
+        var cats = Array.isArray(v) ? v : [];
+        html += '<div class="adm-thp-cats" data-repeat="cats" data-k="' + esc(f.key) + '">' +
+          cats.map(function (it) { return catRowHtml(it, ""); }).join("") +
+          '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>＋ 添加分类区块</button>' +
+          '<p class="adm-thp-cats-state">正在加载分类…</p></div>';
+        loadCats();
+      } else {
+        var isFont = f.type === "font";
+        html += '<input class="adm-input' + (isFont ? " adm-thp-monospace" : "") +
+          '" data-k="' + esc(f.key) + '" data-t="text" value="' +
+          esc(v == null ? "" : v) + '" placeholder="' + esc(f.placeholder || "") + '"' +
+          (isFont ? ' style="font-family:' + esc(v || "inherit") + '"' : "") + ">";
+      }
+      if (f.help) html += '<p class="adm-thp-help">' + esc(f.help) + "</p>";
+      return html + "</div>";
+    }
+
+    function linkRowHtml(it) {
+      it = it || {};
+      return '<div class="adm-wg-link-row" data-repeat-row>' +
+        '<input class="adm-input" data-rk="label" placeholder="名称" value="' + esc(it.label || "") + '">' +
+        '<input class="adm-input" data-rk="url" placeholder="https://" value="' + esc(it.url || "") + '">' +
+        '<input class="adm-input" data-rk="icon" placeholder="图标" value="' + esc(it.icon || "") + '">' +
+        '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除">🗑</button></div>';
+    }
+
+    function catRowHtml(it, opts) {
+      it = it || {};
+      var have = {};
+      (opts || []).forEach(function (c) { have[c.slug] = 1; });
+      var missing = it.slug && !have[it.slug];
+      return '<div class="adm-thp-cat-row" data-repeat-row>' +
+        '<select class="adm-select" data-rk="slug">' +
+        '<option value="">— 选择分类 —</option>' +
+        (opts || []).map(function (c) {
+          return '<option value="' + esc(c.slug) + '"' + (it.slug === c.slug ? " selected" : "") + ">" +
+            esc(c.name) + "</option>";
+        }).join("") +
+        (missing ? '<option value="' + esc(it.slug) + '" selected>' + esc(it.slug) + "（已删除）</option>" : "") +
+        "</select>" +
+        '<input class="adm-input" data-rk="title" placeholder="标题留空则用分类名" value="' + esc(it.title || "") + '">' +
+        '<button type="button" class="adm-iconbtn" data-repeat-up" title="上移">↑</button>' +
+        '<button type="button" class="adm-iconbtn" data-repeat-down" title="下移">↓</button>' +
+        '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除">🗑</button></div>';
+    }
+
+    function loadCats() {
+      if (catsCache) return catsCache;
+      catsCache = fetch("/api/categories")
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .catch(function () { return []; });
+      return catsCache;
+    }
+
+    loadCats().then(function (cats) {
+      cats = Array.isArray(cats) ? cats : [];
+      catOptions = cats.map(function (c) { return { slug: c.slug, name: c.name }; });
+      root.querySelectorAll('[data-repeat="cats"]').forEach(function (holder) {
+        var key = holder.getAttribute("data-k");
+        var vals = Array.isArray(draft[key]) ? draft[key] : [];
+        var state = holder.querySelector(".adm-thp-cats-state");
+        if (state) state.remove();
+        holder.querySelectorAll("[data-repeat-row]").forEach(function (r) { r.remove(); });
+        var addBtn = holder.querySelector("[data-repeat-add]");
+        vals.forEach(function (it) {
+          addBtn.insertAdjacentHTML("beforebegin", catRowHtml(it, catOptions));
+        });
+      });
+    });
+
+    function renderNav(groupEl, sections) {
+      if (!sections.length) {
+        groupEl.hidden = true;
+        return;
+      }
+      var list = groupEl.querySelector(".adm-thp-navlist");
+      list.innerHTML = sections.map(function (s) {
+        return '<button type="button" class="adm-thp-navbtn' +
+          (s.key === activeKey ? " is-active" : "") + '" data-sec="' +
+          esc(s.key) + '">' + esc(s.label) + "</button>";
+      }).join("");
+    }
+
+    function renderSection() {
+      var sec = null;
+      for (var i = 0; i < allSections.length; i++) {
+        if (allSections[i].key === activeKey) { sec = allSections[i]; break; }
+      }
+      var body = root.querySelector("[data-thp-body]");
+      if (!sec) {
+        body.innerHTML = '<p class="adm-hint">该主题没有声明可配置项。</p>';
+        return;
+      }
+      var html = "<h2 class='adm-thp-sec-title'>" + esc(sec.label) + "</h2>";
+      if (sec.description) html += '<p class="adm-thp-sec-desc">' + esc(sec.description) + "</p>";
+      html += '<div class="adm-thp-form">' +
+        sec.fields.filter(function (f) { return f.type !== "hidden"; }).map(fieldHtml).join("") +
+        "</div>";
+      body.innerHTML = html;
+    }
+
+    function setActiveNav() {
+      root.querySelectorAll("[data-sec]").forEach(function (b) {
+        b.classList.toggle("is-active", b.getAttribute("data-sec") === activeKey);
+      });
+    }
+
+    function applyShowIf() {
+      root.querySelectorAll("[data-fld]").forEach(function (box) {
+        var key = box.getAttribute("data-fld");
+        var f = fields.filter(function (x) { return x.key === key; })[0];
+        if (!f || !f.showIf) return;
+        box.hidden = !fieldVisible(f);
+      });
+    }
+
+    function kebab(k) {
+      return "--" + k.replace(/[A-Z]/g, function (m) { return "-" + m.toLowerCase(); });
+    }
+    function updatePreview() {
+      var base = panel.baselineConfig || {};
+      var real = {};
+      appearance.forEach(function (s) {
+        (s.fields || []).forEach(function (f) {
+          var v = draft[f.key];
+          var s0 = typeof v === "string" ? v.trim() : "";
+          if (!s0) return;
+          if (typeof base[f.key] === "string" && String(base[f.key]).trim() === s0) return;
+          real[f.key] = s0;
+        });
+      });
+      var preset = (panel.palettes || {})[draft.palette] || {};
+      var merged = Object.assign({}, base, preset, real);
+      var decls = [];
+      Object.keys(merged).forEach(function (k) {
+        if (k === "customCss") return;
+        var v = merged[k];
+        if (v == null || String(v).trim() === "") return;
+        decls.push(kebab(k) + ":" + String(v));
+      });
+      decls.push("--bg:" + (merged.background || "#09090b"));
+      decls.push("color-scheme:" + (merged.colorScheme || "dark"));
+      root.querySelector("[data-thp-preview]").style.cssText = decls.join(";");
+    }
+
+    function setMsg(kind, text) {
+      var el = root.querySelector("[data-thp-msg]");
+      el.textContent = text || "";
+      el.className = "adm-thp-msg" + (kind ? " is-" + kind : "");
+      if (text) setTimeout(function () { if (el.textContent === text) el.textContent = ""; }, 4000);
+    }
+
+    root.addEventListener("click", function (e) {
+      var secBtn = e.target.closest && e.target.closest("[data-sec]");
+      if (secBtn) {
+        activeKey = secBtn.getAttribute("data-sec");
+        renderSection();
+        setActiveNav();
+        return;
+      }
+      var sw = e.target.closest && e.target.closest('[data-t="switch"]');
+      if (sw && root.contains(sw)) {
+        var skey = sw.getAttribute("data-k");
+        draft[skey] = !draft[skey];
+        sw.querySelector(".track").classList.toggle("is-on", !!draft[skey]);
+        applyShowIf();
+        return;
+      }
+      var addBtn = e.target.closest && e.target.closest("[data-repeat-add]");
+      if (addBtn) {
+        var holder = addBtn.closest("[data-repeat]");
+        var kind = holder.getAttribute("data-repeat");
+        if (kind === "links") {
+          addBtn.insertAdjacentHTML("beforebegin", linkRowHtml({}));
+        } else {
+          addBtn.insertAdjacentHTML("beforebegin", catRowHtml({}, catOptions));
+        }
+        return;
+      }
+      var del = e.target.closest && e.target.closest("[data-repeat-del]");
+      if (del) { del.closest("[data-repeat-row]").remove(); return; }
+      var up = e.target.closest && e.target.closest("[data-repeat-up]");
+      var down = e.target.closest && e.target.closest("[data-repeat-down]");
+      if (up || down) {
+        var row = (up || down).closest("[data-repeat-row]");
+        if (up && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
+        if (down && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
+      }
+    });
+
+    function readRepeat(holder) {
+      var rows = holder.querySelectorAll("[data-repeat-row]");
+      return [].slice.call(rows).map(function (r) {
+        var out = {};
+        r.querySelectorAll("[data-rk]").forEach(function (inp) {
+          out[inp.getAttribute("data-rk")] = inp.value;
+        });
+        return out;
+      });
+    }
+
+    root.addEventListener("input", function (e) {
+      var t = e.target;
+      if (!t.hasAttribute || !t.hasAttribute("data-k")) return;
+      var key = t.getAttribute("data-k");
+      var f = fields.filter(function (x) { return x.key === key; })[0];
+      if (f && f.type === "number") draft[key] = Number(t.value);
+      else if (f && f.type === "range") draft[key] = Number(t.value);
+      else draft[key] = t.value;
+      if (f && f.type === "font") t.style.fontFamily = t.value || "inherit";
+      var cbox = t.closest("[data-fld]");
+      if (cbox) {
+        if (t.type === "color") {
+          var txt = cbox.querySelector('input[type="text"][data-k]');
+          if (txt) txt.value = t.value;
+        } else {
+          var pick = cbox.querySelector("input[type=color]");
+          if (pick && /^#[0-9a-f]{6}$/i.test(t.value)) pick.value = t.value;
+        }
+      }
+      var rv = f && f.type === "range" && root.querySelector('[data-range-val="' + key + '"]');
+      if (rv) rv.textContent = t.value + (f.unit || "");
+      applyShowIf();
+      updatePreview();
+    });
+    root.addEventListener("change", function (e) {
+      var t = e.target;
+      if (t.hasAttribute && t.hasAttribute("data-img-key")) {
+        var f0 = t.files && t.files[0];
+        t.value = "";
+        if (!f0) return;
+        var btn = t.parentElement;
+        btn.classList.add("is-busy");
+        var fd = new FormData();
+        fd.append("file", f0);
+        fetch("/api/media", { method: "POST", body: fd })
+          .then(async function (res) {
+            var data = {};
+            try { data = await res.json(); } catch (err) {}
+            if (!res.ok) throw new Error(data.error || "上传失败 (" + res.status + ")");
+            var url = data.url || data.path || data.src || "";
+            var ik = t.getAttribute("data-img-key");
+            draft[ik] = url;
+            var box = t.closest("[data-fld]");
+            box.querySelector("[data-k]").value = url;
+            box.querySelector(".adm-wg-img-prev").src = url;
+          })
+          .catch(function (err) { toast(err.message, "err"); })
+          .finally(function () { btn.classList.remove("is-busy"); });
+        return;
+      }
+      if (!t.hasAttribute || !t.hasAttribute("data-k")) return;
+      var key = t.getAttribute("data-k");
+      var fld = fields.filter(function (x) { return x.key === key; })[0];
+      if (fld && fld.type === "number") draft[key] = Number(t.value);
+      else if (fld && fld.type === "range") draft[key] = Number(t.value);
+      else draft[key] = t.value;
+      applyShowIf();
+      updatePreview();
+    });
+
+    function collectDraft() {
+      root.querySelectorAll("[data-repeat]").forEach(function (holder) {
+        draft[holder.getAttribute("data-k")] = readRepeat(holder);
+      });
+      return draft;
+    }
+
+    root.querySelector("[data-thp-save]").addEventListener("click", async function () {
+      var btn = root.querySelector("[data-thp-save]");
+      var label = root.querySelector("[data-thp-save-label]");
+      btn.disabled = true;
+      label.textContent = "保存中…";
+      try {
+        await api("PUT", "/api/themes/" + encodeURIComponent(panel.theme.slug) + "/settings", collectDraft());
+        setMsg("ok", "已保存，刷新前台即可看到效果");
+        toast("已保存", "ok");
+      } catch (err) {
+        setMsg("err", err.message);
+      } finally {
+        btn.disabled = false;
+        label.textContent = "保存";
+      }
+    });
+
+    root.querySelector("[data-thp-reset]").addEventListener("click", async function () {
+      if (!confirm("恢复为主题自带的默认配置？当前的自定义修改会丢失。")) return;
+      var btn = root.querySelector("[data-thp-reset]");
+      btn.disabled = true;
+      try {
+        var fresh = await api("DELETE", "/api/themes/" + encodeURIComponent(panel.theme.slug) + "/settings");
+        panel = fresh;
+        draft = Object.assign({}, panel.config || {}, panel.settings || {});
+        renderNav(root.querySelector('[data-thp-nav-group="appearance"]'), panel.appearanceSchema || []);
+        renderNav(root.querySelector('[data-thp-nav-group="settings"]'), panel.settingsSchema || []);
+        renderSection();
+        updatePreview();
+        setMsg("ok", "已恢复主题默认值");
+      } catch (err) {
+        setMsg("err", err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    renderNav(root.querySelector('[data-thp-nav-group="appearance"]'), appearance);
+    renderNav(root.querySelector('[data-thp-nav-group="settings"]'), own);
+    var areaUl = root.querySelector("[data-thp-areas]");
+    areaUl.innerHTML = (panel.widgetAreas || []).map(function (a) {
+      return "<li><span>" + esc(a.label) + "</span><code>" + esc(a.key) + "</code>" +
+        (a.description ? '<em>' + esc(a.description) + "</em>" : "") + "</li>";
+    }).join("");
+    renderSection();
+    updatePreview();
+  }
+
   function initWidgets() {
     markActiveNav();
     hydrateControls();
@@ -1555,6 +2053,8 @@
     initMenus();
     initWidgetManager();
     initMenuSettings();
+    initThemeManager();
+    initThemePanel();
   }
 
   function init() {

@@ -827,6 +827,7 @@ const SETTINGS_FIELDS = {
     "artalkServer", "artalkSite", "giscusRepo", "giscusRepoId", "giscusCategory",
     "giscusCategoryId", "giscusMapping", "giscusTheme", "walineServer", "twikooEnvId",
     "disqusShortname", "utterancesRepo", "utterancesTerm",
+    "activeThemeSlug",
   ],
   num: ["avatarSize", "postsPerPage", "feedItems", "excerptLength"],
   bool: ["commentsEnabled", "requireNameEmail", "commentModeration", "giscusReactions"],

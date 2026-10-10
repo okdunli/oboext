@@ -1,0 +1,256 @@
+import type { SettingsSchema } from "./settings-schema.js";
+import { DEFAULT_THEME_CONFIG } from "./theme-tokens.js";
+
+const D = DEFAULT_THEME_CONFIG;
+
+export const THEME_CONFIG_SCHEMA: SettingsSchema = [
+  {
+    key: "palette",
+    label: "配色",
+    icon: "Palette",
+    description:
+      "每一项都会输出为 CSS 变量（如 accentText → --accent-text），主题样式表直接用 var() 消费。支持 #hex、rgba() 与渐变。",
+    fields: [
+      { key: "background", label: "页面背景", type: "color", default: D.background, half: true },
+      { key: "surface", label: "卡片表面", type: "color", default: D.surface, half: true },
+      { key: "surfaceAlt", label: "次级表面", type: "color", default: D.surfaceAlt, half: true },
+      { key: "border", label: "描边", type: "color", default: D.border, half: true },
+      { key: "text", label: "正文文字", type: "color", default: D.text, half: true },
+      { key: "muted", label: "次要文字", type: "color", default: D.muted, half: true },
+      { key: "accent", label: "强调色", type: "color", default: D.accent, half: true },
+      { key: "accentText", label: "强调色上的文字", type: "color", default: D.accentText, half: true },
+      {
+        key: "accentSoft",
+        label: "强调色淡底",
+        type: "color",
+        default: D.accentSoft,
+        help: "用于选中态、标签底色，建议使用 rgba() 半透明值。",
+      },
+      { key: "link", label: "链接", type: "color", default: D.link, half: true },
+      { key: "linkHover", label: "链接悬停", type: "color", default: D.linkHover, half: true },
+      { key: "success", label: "成功色", type: "color", default: D.success, half: true },
+      { key: "warning", label: "警告色", type: "color", default: D.warning, half: true },
+      { key: "danger", label: "危险色", type: "color", default: D.danger, half: true },
+      { key: "codeBg", label: "代码块底色", type: "color", default: D.codeBg, half: true },
+      {
+        key: "headerBg",
+        label: "顶栏背景",
+        type: "color",
+        default: D.headerBg,
+        half: true,
+        help: "半透明值配合毛玻璃效果更好。",
+      },
+      { key: "footerBg", label: "页脚背景", type: "color", default: D.footerBg, half: true },
+    ],
+  },
+  {
+    key: "shape",
+    label: "形状与动效",
+    icon: "Square",
+    fields: [
+      { key: "radius", label: "圆角", type: "text", default: D.radius, half: true, placeholder: "12px" },
+      {
+        key: "radiusLarge",
+        label: "大圆角",
+        type: "text",
+        default: D.radiusLarge,
+        half: true,
+        placeholder: "22px",
+        help: "用于卡片、弹层等大块元素。",
+      },
+      { key: "borderWidth", label: "描边宽度", type: "text", default: D.borderWidth, half: true },
+      {
+        key: "transition",
+        label: "过渡曲线",
+        type: "text",
+        default: D.transition,
+        half: true,
+        placeholder: "200ms ease",
+      },
+      {
+        key: "shadow",
+        label: "阴影",
+        type: "text",
+        default: D.shadow,
+        placeholder: "0 10px 30px rgba(0,0,0,.35)",
+      },
+    ],
+  },
+  {
+    key: "typography",
+    label: "排版",
+    icon: "Type",
+    fields: [
+      { key: "font", label: "正文字体栈", type: "font", default: D.font },
+      {
+        key: "fontHeading",
+        label: "标题字体栈",
+        type: "font",
+        default: D.fontHeading,
+        help: "填 inherit 表示与正文一致。",
+      },
+      { key: "fontMono", label: "等宽字体栈", type: "font", default: D.fontMono },
+      { key: "fontSize", label: "基准字号", type: "text", default: D.fontSize, half: true },
+      { key: "lineHeight", label: "行高", type: "text", default: D.lineHeight, half: true },
+      { key: "letterSpacing", label: "字间距", type: "text", default: D.letterSpacing, half: true },
+      {
+        key: "headingWeight",
+        label: "标题字重",
+        type: "select",
+        default: D.headingWeight,
+        half: true,
+        options: [
+          { value: "500", label: "500 Medium" },
+          { value: "600", label: "600 Semibold" },
+          { value: "700", label: "700 Bold" },
+          { value: "800", label: "800 Extrabold" },
+          { value: "900", label: "900 Black" },
+        ],
+      },
+    ],
+  },
+  {
+    key: "layout",
+    label: "布局",
+    icon: "LayoutGrid",
+    fields: [
+      { key: "containerWidth", label: "容器最大宽度", type: "text", default: D.containerWidth, half: true },
+      {
+        key: "contentWidth",
+        label: "正文阅读宽度",
+        type: "text",
+        default: D.contentWidth,
+        half: true,
+        help: "文章正文的单栏宽度，60–80 字符最舒适。",
+      },
+      {
+        key: "sidebar",
+        label: "侧边栏位置",
+        type: "select",
+        default: D.sidebar,
+        half: true,
+        options: [
+          { value: "none", label: "无侧边栏" },
+          { value: "left", label: "左侧" },
+          { value: "right", label: "右侧" },
+        ],
+        help: "侧边栏内容由「小工具」页面的 sidebar 区域决定。",
+      },
+      {
+        key: "density",
+        label: "间距密度",
+        type: "select",
+        default: D.density,
+        half: true,
+        options: [
+          { value: "compact", label: "紧凑" },
+          { value: "normal", label: "标准" },
+          { value: "relaxed", label: "宽松" },
+        ],
+      },
+      {
+        key: "listStyle",
+        label: "文章列表样式",
+        type: "select",
+        default: D.listStyle,
+        half: true,
+        options: [
+          { value: "list", label: "列表" },
+          { value: "card", label: "卡片" },
+          { value: "grid", label: "网格" },
+          { value: "masonry", label: "瀑布流" },
+          { value: "magazine", label: "杂志" },
+        ],
+      },
+      {
+        key: "gridColumns",
+        label: "网格列数",
+        type: "select",
+        default: D.gridColumns,
+        half: true,
+        options: [
+          { value: "2", label: "2 列" },
+          { value: "3", label: "3 列" },
+          { value: "4", label: "4 列" },
+        ],
+        showIf: { key: "listStyle", equals: ["grid", "masonry"] },
+      },
+      {
+        key: "headerMode",
+        label: "顶栏行为",
+        type: "select",
+        default: D.headerMode,
+        options: [
+          { value: "static", label: "静止" },
+          { value: "sticky", label: "吸顶" },
+          { value: "hide-on-scroll", label: "下滑隐藏 / 上滑显示" },
+        ],
+      },
+    ],
+  },
+  {
+    key: "effects",
+    label: "视觉效果",
+    icon: "Sparkles",
+    fields: [
+      {
+        key: "glass",
+        label: "毛玻璃",
+        type: "select",
+        default: D.glass,
+        half: true,
+        options: [
+          { value: "off", label: "关闭" },
+          { value: "on", label: "开启" },
+        ],
+      },
+      {
+        key: "glassBlur",
+        label: "模糊半径",
+        type: "text",
+        default: D.glassBlur,
+        half: true,
+        showIf: { key: "glass", equals: "on" },
+      },
+      {
+        key: "noise",
+        label: "噪点纹理",
+        type: "select",
+        default: D.noise,
+        half: true,
+        options: [
+          { value: "off", label: "关闭" },
+          { value: "on", label: "开启" },
+        ],
+      },
+      {
+        key: "gradient",
+        label: "品牌渐变",
+        type: "text",
+        default: D.gradient,
+        placeholder: "linear-gradient(135deg,#818cf8,#c084fc)",
+        help: "用于标题高亮、按钮与装饰块。",
+      },
+    ],
+  },
+  {
+    key: "advanced",
+    label: "自定义 CSS",
+    icon: "Code",
+    description: "追加到主题样式之后，可覆盖任何选择器。仅在当前主题生效。",
+    fields: [
+      {
+        key: "customCss",
+        label: "CSS",
+        type: "code",
+        default: "",
+        placeholder: ".post-title{letter-spacing:-.02em}",
+      },
+    ],
+  },
+];
+
+/** All appearance keys, for splitting a mixed payload into config vs settings. */
+export const THEME_CONFIG_KEYS: string[] = THEME_CONFIG_SCHEMA.flatMap((s) =>
+  s.fields.filter((f) => f.type !== "group").map((f) => f.key),
+);

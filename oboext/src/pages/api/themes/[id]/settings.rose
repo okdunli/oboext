@@ -1,0 +1,38 @@
+<script>
+  // /api/themes/:id/settings — :id accepts a numeric id or a slug.
+  //   GET    full panel (both schemas + resolved values + widget areas)
+  //   PUT    save a mixed appearance/theme-settings payload, return panel
+  //   DELETE reset to manifest defaults, return panel
+  import { apiGate, readBody, requireCap } from "@server/admin";
+  import { getThemePanel, updateThemePanel, resetThemePanel } from "@server/themes";
+
+  function pathId(request) {
+    return new URL(request.url).pathname.split("/").filter(Boolean)[2];
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return getThemePanel(pathId(request));
+    });
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const body = await readBody(request);
+      const payload = body && typeof body === "object" ? body : {};
+      await updateThemePanel(pathId(request), payload);
+      return getThemePanel(pathId(request));
+    });
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const id = pathId(request);
+      await resetThemePanel(id);
+      return getThemePanel(id);
+    });
+  }
+</script>

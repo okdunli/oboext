@@ -26,6 +26,8 @@
     if (p.indexOf("/admin/tags") === 0) return "标签";
     if (p.indexOf("/admin/users") === 0) return "用户";
     if (p.indexOf("/admin/widgets") === 0) return "小工具";
+    if (p.indexOf("/admin/themes") === 0)
+      return /\/admin\/themes\/[^/]+/.test(p) ? "主题设置" : "主题";
     if (p.indexOf("/admin/menus") === 0) return "菜单";
     if (p.indexOf("/admin/menu-settings") === 0) return "菜单与首页";
     if (p.indexOf("/admin/settings") === 0) return "站点设置";

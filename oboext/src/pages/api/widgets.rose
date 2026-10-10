@@ -1,0 +1,58 @@
+<script>
+  // /api/widgets
+  //   GET  ?theme=<slug> areas + types + instances (settings:manage)
+  //   POST create an instance {area,type,themeSlug?,title?,config?}
+  //   PATCH {ids:number[]} persist one area's ordering
+  import { apiGate, readBody, jsonFail, requireCap } from "@server/admin";
+  import {
+    WIDGET_AREAS,
+    WIDGET_TYPES,
+    THEME_SLUG,
+    listWidgets,
+    createWidget,
+    reorderWidgets,
+  } from "@server/widgets";
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const slug = new URL(request.url).searchParams.get("theme") || THEME_SLUG;
+      return {
+        theme: slug,
+        areas: WIDGET_AREAS,
+        types: WIDGET_TYPES,
+        widgets: await listWidgets(slug),
+      };
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const area = typeof body?.area === "string" ? body.area.trim() : "";
+      const type = typeof body?.type === "string" ? body.type.trim() : "";
+      if (!area || !type) return jsonFail("缺少 area 或 type", 422);
+      const row = await createWidget(getContext().user, {
+        area,
+        type,
+        themeSlug: typeof body.themeSlug === "string" && body.themeSlug ? body.themeSlug : THEME_SLUG,
+        title: typeof body.title === "string" ? body.title : undefined,
+        config: body.config && typeof body.config === "object" ? body.config : undefined,
+      });
+      return new Response(JSON.stringify(row), {
+        status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+
+  export async function PATCH(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      if (!body || !Array.isArray(body.ids)) return jsonFail("ids 必须是数组", 422);
+      const ids = body.ids.map(Number).filter((n) => Number.isInteger(n));
+      await reorderWidgets(getContext().user, ids);
+      return { ok: true, count: ids.length };
+    });
+  }
+</script>

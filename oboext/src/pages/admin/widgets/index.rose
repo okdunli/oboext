@@ -1,0 +1,160 @@
+<script>
+  // Widget manager (port of components/WidgetManager.tsx). The theme declares
+  // areas, the registry declares types; instances live in the widgets table.
+  // rose's {#each} has no index binding and nested directives are unsupported
+  // by the compiler, so sections + rows + picker items are flattened into ONE
+  // stream of typed items; {#if} predicates stay IIFE thunks (a bare
+  // fn(item) inside an each compiles to fn(__s)() — a double call). The editor
+  // modal is built client-side by admin.js from the embedded payload.
+  let d = $data(() => __rvLoad("admin.widgets", {}));
+
+  function themes() {
+    return d().themes || [];
+  }
+  function typeLabel(t) {
+    const f = (d().types || []).find((x) => x.type === t);
+    return f ? f.label : t;
+  }
+  function rowsOf(key) {
+    return (d().widgets || [])
+      .filter((w) => w.area === key)
+      .sort((a, b) => a.order - b.order);
+  }
+  // Flat render stream: head -> row* -> (empty) -> picker(head -> type* ->
+  // close) + add button -> tail, per area.
+  function flat() {
+    const out = [];
+    (d().areas || []).forEach((a) => {
+      const rows = rowsOf(a.key);
+      out.push({ kind: "head", key: a.key, label: a.label, description: a.description || "", count: rows.length });
+      rows.forEach((w, i) => {
+        out.push({
+          kind: "row",
+          area: a.key,
+          id: w.id,
+          wtype: w.type,
+          title: w.title || "",
+          enabled: !!w.enabled,
+          upDisabled: i === 0,
+          downDisabled: i === rows.length - 1,
+        });
+      });
+      if (!rows.length) out.push({ kind: "empty", area: a.key });
+      out.push({ kind: "picker-head", area: a.key });
+      (d().types || []).forEach((t) => {
+        out.push({ kind: "type", area: a.key, wtype: t.type, tlabel: t.label, tdesc: t.description });
+      });
+      out.push({ kind: "tail", area: a.key });
+    });
+    return out;
+  }
+  function wgRowTitle(x) {
+    return x.title || typeLabel(x.wtype) || x.wtype;
+  }
+  function wgRowClass(x) {
+    return "adm-wg-row" + (x.enabled ? " is-on" : " is-off");
+  }
+  function wgUpClass(x) {
+    return "adm-iconbtn" + (x.upDisabled ? " is-disabled" : "");
+  }
+  function wgDownClass(x) {
+    return "adm-iconbtn" + (x.downDisabled ? " is-disabled" : "");
+  }
+  function wgEye(x) {
+    return x.enabled ? "👁" : "🚫";
+  }
+  function wgEyeTitle(x) {
+    return x.enabled ? "隐藏" : "显示";
+  }
+  function payload() {
+    return JSON.stringify(d());
+  }
+</script>
+
+<head>
+  <title>小工具 - 管理后台</title>
+</head>
+
+<div class="adm-wg-head">
+  <h1 class="adm-h1"><span class="adm-h1-ic">🧩</span> 小工具</h1>
+  <p class="adm-wg-intro">
+    把小工具放到主题声明的<span class="adm-wg-hl">「区域」</span>里——侧边栏、页脚以及主题自定义的模块位。
+    每个小工具都有自己的设置项，由类型声明自动生成表单。侧边栏需要在
+    <span class="adm-wg-hl-ok">「主题 → 布局 → 侧边栏位置」</span>中先选择左侧或右侧才会显示。
+  </p>
+  <div class="adm-wg-toolbar">
+    <div class="adm-wg-theme">
+      <span class="adm-wg-theme-label">配置主题</span>
+      <div class="adm-wg-select-wrap">
+        <select class="adm-select" data-wg-theme>
+          {#each themes() as t}
+          <option value={t.slug}>{t.name}</option>
+          {/each}
+        </select>
+      </div>
+    </div>
+    <p class="adm-wg-hint">小工具按主题独立保存，切换主题不会丢失另一套布局</p>
+  </div>
+</div>
+
+<div class="adm-wg-grid" data-wg-manager data-wg={payload()}>
+  {#each flat() as x}
+
+  {#if (() => x.kind === "head")()}
+  <section class="adm-wg-area">
+    <div class="adm-wg-area-hd">
+      <h3 class="adm-wg-area-title">▦ {x.label}
+        <span class="adm-wg-key">{x.key}</span>
+      </h3>
+      <span class="adm-wg-count">{x.count} 项</span>
+    </div>
+    <p class="adm-wg-desc">{x.description}</p>
+    <div class="adm-wg-rows">
+  {/if}
+
+  {#if (() => x.kind === "row")()}
+      <div class={wgRowClass(x)} data-wg-id={x.id} data-wg-area={x.area}>
+        <div class="adm-wg-arrows">
+          <button type="button" class={wgUpClass(x)} data-wg-move="-1" title="上移">↑</button>
+          <button type="button" class={wgDownClass(x)} data-wg-move="1" title="下移">↓</button>
+        </div>
+        <div class="adm-wg-info">
+          <p class="adm-wg-name">{wgRowTitle(x)}</p>
+          <p class="adm-wg-mono">{x.wtype}</p>
+        </div>
+        <button type="button" class="adm-iconbtn" data-wg-toggle title={wgEyeTitle(x)}>{wgEye(x)}</button>
+        <button type="button" class="adm-iconbtn" data-wg-edit title="设置">⚙</button>
+        <button type="button" class="adm-iconbtn danger" data-wg-del title="删除">🗑</button>
+      </div>
+  {/if}
+
+  {#if (() => x.kind === "empty")()}
+      <p class="adm-wg-empty">该区域为空</p>
+  {/if}
+
+  {#if (() => x.kind === "head")()}
+    </div>
+    <div class="adm-wg-picker" data-wg-picker data-wg-area={x.key} hidden>
+      <div class="adm-wg-picker-hd">
+        <span>选择类型</span>
+        <button type="button" class="adm-iconbtn" data-wg-picker-x title="取消">✕</button>
+      </div>
+      <div class="adm-wg-picker-list">
+  {/if}
+
+  {#if (() => x.kind === "type")()}
+        <button type="button" class="adm-wg-type" data-wg-add data-wg-area={x.area} data-type={x.wtype}>
+          <span class="adm-wg-type-label">{x.tlabel}</span>
+          <span class="adm-wg-type-desc">{x.tdesc}</span>
+        </button>
+  {/if}
+
+  {#if (() => x.kind === "tail")()}
+      </div>
+    </div>
+    <button type="button" class="adm-wg-addbtn" data-wg-add-open data-wg-area={x.area}>＋ 添加小工具</button>
+  </section>
+  {/if}
+
+  {/each}
+</div>

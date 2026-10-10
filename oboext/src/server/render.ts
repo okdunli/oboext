@@ -10,6 +10,7 @@
  */
 import type { Block } from "./schema.js";
 import type { PostView, TaxRef } from "./queries.js";
+import { getAvatarUrl, type AvatarSource } from "./avatar.js";
 
 export const RAW_KEY = "__rvraw";
 export type RawHtml = { __rvraw: string; __rvhead?: 1 };
@@ -413,7 +414,180 @@ export function postHead(p: PostView, siteTitle: string, siteDescription: string
   ].filter(Boolean).join("");
 }
 
-export function postPage(p: PostView, related: PostView[]): string {
+export type FlatComment = {
+  id: number;
+  parentId: number | null;
+  authorName: string;
+  authorEmail: string | null;
+  authorUrl: string | null;
+  content: string;
+  createdAt: Date | string;
+};
+
+export type CommentModel = {
+  postId: number;
+  postType: string;
+  open: boolean;
+  enabled: boolean;
+  provider: string;
+  requireNameEmail: boolean;
+  defaultContent: string;
+  me: { id: number; name: string; email: string } | null;
+  items: FlatComment[];
+  avatar: { source: AvatarSource; size: number; default: string; rating: string };
+  config: Record<string, unknown>;
+};
+
+const DFLT_AVATAR_BG = "linear-gradient(135deg,#dce8f7,#bcd6f3)";
+
+function safeCommentUrl(u?: string | null): string | null {
+  if (!u) return null;
+  const t = u.trim();
+  return /^https?:\/\//i.test(t) ? t : null;
+}
+
+function fmtCommentDate(v: Date | string): string {
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+const ICON_REPLY =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>';
+const ICON_SMILE =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg>';
+const ICON_USER =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+const ICON_MAIL =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>';
+const ICON_LINK =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+const ICON_RESET =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>';
+const ICON_SEND =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>';
+
+type CommentNode = FlatComment & { children: CommentNode[] };
+
+function buildCommentTree(flat: FlatComment[]): CommentNode[] {
+  const byId = new Map<number, CommentNode>();
+  flat.forEach((c) => byId.set(c.id, { ...c, children: [] }));
+  const roots: CommentNode[] = [];
+  flat.forEach((c) => {
+    const node = byId.get(c.id)!;
+    if (c.parentId && byId.has(c.parentId)) byId.get(c.parentId)!.children.push(node);
+    else roots.push(node);
+  });
+  return roots;
+}
+
+function renderCommentNodes(
+  nodes: CommentNode[],
+  m: CommentModel,
+  depth: number,
+  parentName?: string,
+): string {
+  const inner = nodes
+    .map((n) => {
+      const url = safeCommentUrl(n.authorUrl);
+      const name = url
+        ? `<div class="name has-url"><a href="${esc(url)}" target="_blank" rel="nofollow noopener noreferrer">${esc(n.authorName)}</a></div>`
+        : `<div class="name"><span>${esc(n.authorName)}</span></div>`;
+      const avatar = getAvatarUrl(n.authorEmail, m.avatar);
+      const bg = avatar ? `background-image:url(&quot;${esc(avatar)}&quot;)` : "";
+      const reply = m.open
+        ? `<span><div class="flex-shrink-0 reply flex items-center" data-comment-reply=${n.id} title="回复">${ICON_REPLY}</div></span>`
+        : "";
+      const parentInfo = parentName
+        ? `<span class="parent-info">回复 ${esc(parentName)}：</span>`
+        : "";
+      const children = n.children.length
+        ? renderCommentNodes(n.children, m, depth + 1, n.authorName)
+        : "";
+      return (
+        `<li id="comment-item-${n.id}"><div class="wrapper flex">` +
+        `<div class="avatar relative flex-shrink-0" style="${bg || DFLT_AVATAR_BG}"><div class="highlight"></div></div>` +
+        `<div class="body flex-grow"><div class="flex items-start">` +
+        `<div class="flex-grow flex items-center justify-between info">${name}<div class="date">${fmtCommentDate(n.createdAt)}</div></div>` +
+        `${reply}</div>` +
+        `<div class="content has-emoji">${parentInfo}${esc(n.content)}</div>` +
+        `</div></div>${children}</li>`
+      );
+    })
+    .join("");
+  return `<ul class="comment-list${depth === 0 ? "" : " sub-list"}">${inner}</ul>`;
+}
+
+function builtinCommentsHtml(m: CommentModel): string {
+  if (!m.open) return '<div class="sf-comment-close">本文已关闭评论。</div>';
+
+  const meBox = m.me
+    ? '<div class="sf-comment-me">' +
+      `<span class="sf-comment-me-avatar">${esc((m.me.name || "?").charAt(0).toUpperCase())}</span>` +
+      '<span class="sf-comment-me-meta">' +
+      `<span class="sf-comment-me-name">${esc(m.me.name)}</span>` +
+      `<span class="sf-comment-me-email">${esc(m.me.email)}</span>` +
+      "</span></div>"
+    : "";
+  const guestFields = m.me
+    ? ""
+    : '<div class="guest-info fields flex gx-3 mx-5">' +
+      '<div class="item"><input type="text" class="comment-field" name="authorName" autocomplete="nickname" placeholder=' +
+      `"昵称${m.requireNameEmail ? " *" : ""}` +
+      `>${`<i>${ICON_USER}</i>`}</div>` +
+      '<div class="item"><input type="email" class="comment-field" name="authorEmail" autocomplete="email" placeholder=' +
+      `"邮箱${m.requireNameEmail ? " *" : ""}` +
+      `>${`<i>${ICON_MAIL}</i>`}</div>` +
+      `<div class="item"><input type="url" class="comment-field" name="authorUrl" autocomplete="url" placeholder="个人首页">${`<i>${ICON_LINK}</i>`}</div>` +
+      "</div>";
+
+  const form =
+    '<form class="comment-form sf-comment-form my-5" novalidate data-comment-form ' +
+    `data-post-id=${m.postId} data-post-type=${esc(m.postType)} data-require=${m.requireNameEmail ? "1" : "0"}>` +
+    '<input type="hidden" name="parentId" value="">' +
+    meBox +
+    '<div class="input">' +
+    `<textarea name="content" placeholder="请输入...">${esc(m.defaultContent || "")}</textarea></div>` +
+    '<div class="funcs mx-5">' +
+    `<button type="button" aria-label="表情" title="表情" data-comment-emoji>${ICON_SMILE}</button>` +
+    '<span class="emoji-panel-wrap" data-emoji-panel aria-hidden="true"></span>' +
+    "</div>" +
+    guestFields +
+    '<div class="mt-5 form-actions text-right">' +
+    `<button type="button" class="cancel" data-comment-cancel style="display:none">${ICON_RESET}取消回复</button>` +
+    `<button type="submit" class="btn-submit">${ICON_SEND}<span data-submit-label>发表评论</span></button>` +
+    "</div></form>";
+
+  const tree = m.items.length
+    ? renderCommentNodes(buildCommentTree(m.items), m, 0)
+    : '<div class="sf-comment-close">还没有评论，来抢沙发吧。</div>';
+  return '<div data-comment-notice class="sf-comment-close" style="display:none;color:var(--sk-primary)"></div>' + form + tree;
+}
+
+export function commentsSection(m: CommentModel): string {
+  if (!m.enabled || m.provider === "none") {
+    return '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
+      '<div class="sf-comment-close">评论已关闭。</div></section>';
+  }
+  if (m.provider !== "builtin") {
+    return '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
+      '<div data-comment-provider=' + esc(m.provider) +
+      " data-config=" + esc(JSON.stringify(m.config)) +
+      ' class="sf-comment-provider"></div></section>';
+  }
+  return (
+    '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
+    builtinCommentsHtml(m) +
+    "</section>"
+  );
+}
+
+export function postPage(
+  p: PostView,
+  related: PostView[],
+  commentsHtml = "",
+): string {
   const cat = p.categories[0] ?? null;
   const meta =
     '<div class="meta">' +
@@ -452,8 +626,9 @@ export function postPage(p: PostView, related: PostView[]): string {
     '<section class="sk-section"><h2 class="title_style_01">相关文章</h2>' +
     cardRow(related, false) +
     "</section>" +
-    '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
-    '<div class="sf-comment-close">加载评论中…</div></section>' +
+    (commentsHtml ||
+      '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
+        '<div class="sf-comment-close">评论已关闭。</div></section>') +
     "</div>"
   );
 }

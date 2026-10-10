@@ -18,6 +18,7 @@ import {
   incrementViews,
   listCategories,
   listPosts,
+  listPostComments,
   listTags,
   popularPosts,
   randomPosts,
@@ -25,7 +26,9 @@ import {
   type PostView,
 } from "./queries.js";
 import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor } from "./links.js";
+import { resolveCommentConfig } from "./comments-config.js";
 import * as R from "./render.js";
+import * as admin from "./admin-loaders.js";
 
 export type Ctx = {
   query: URLSearchParams;
@@ -33,6 +36,7 @@ export type Ctx = {
   pathname: string;
   ip: string;
   ua: string;
+  user?: unknown;
 };
 
 const pageNum = (v: unknown): number => Math.max(1, Number(v) || 1);
@@ -216,9 +220,10 @@ async function search(payload: { q?: string; page?: number; all?: boolean }) {
 async function postDetail(payload: { slug: string }, ctx: Ctx) {
   const post = await getPost(payload.slug);
   if (!post) return { notFound: true };
-  const [related, settings] = await Promise.all([
+  const [related, settings, items] = await Promise.all([
     relatedPosts(post, 4),
     getSettings(),
+    listPostComments(post.id, "post"),
   ]);
   if (ctx.ip || ctx.ua) {
     try {
@@ -227,8 +232,24 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
       /* */
     }
   }
+  const config = resolveCommentConfig(settings);
+  const u = ctx.user as { id?: number; name?: string; email?: string } | undefined;
+  const me = u && u.id ? { id: u.id, name: u.name ?? "", email: u.email ?? "" } : null;
+  const commentsHtml = R.commentsSection({
+    postId: post.id,
+    postType: "post",
+    open: post.commentStatus === "open",
+    enabled: config.enabled,
+    provider: config.provider,
+    requireNameEmail: settings.requireNameEmail ?? false,
+    defaultContent: config.defaultContent,
+    me,
+    items,
+    avatar: config.avatar,
+    config,
+  });
   return {
-    main: R.raw(R.postPage(post, related)),
+    main: R.raw(R.postPage(post, related, commentsHtml)),
     head: R.rawHead(R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin)),
   };
 }
@@ -439,11 +460,22 @@ export const loaders = {
   search,
   post: postDetail,
   archives,
+  "admin.session": admin.adminSession,
+  "admin.dashboard": admin.adminDashboard,
+  "admin.posts": admin.adminPosts,
+  "admin.post": admin.adminPost,
+  "admin.comments": admin.adminComments,
+  "admin.taxonomies": admin.adminTaxonomies,
+  "admin.users": admin.adminUsers,
+  "admin.settings": admin.adminSettings,
 };
 export type LoaderKey = keyof typeof loaders;
 
 /** Server-only dispatch used by pages and by /api/data. */
 export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unknown> {
+  if (key === "chrome" && ctx.pathname && ctx.pathname.indexOf("/admin") === 0) {
+    return { siteTitle: "管理后台", siteDescription: "", nav: "", aside: "", footer: "" };
+  }
   const fn = (loaders as Record<string, (p: any, c: Ctx) => Promise<unknown>>)[key];
   if (!fn) throw new Error(`unknown loader: ${key}`);
   return fn(payload ?? {}, ctx);

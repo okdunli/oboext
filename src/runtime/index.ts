@@ -97,7 +97,10 @@ export function ifMark(
   const i = closes.length;
   let snap: { html: string; closes: Close[] } | null = null;
   closes.push(() => {
-    if (!cond()) return null;
+    if (!cond()) {
+      snap = null;
+      return null;
+    }
     if (!snap) {
       const c: Close[] = [];
       snap = { html: String(fn(scope, c)), closes: c };
@@ -207,16 +210,24 @@ export function wire(root: Node, closes: Array<unknown>, scope?: unknown): Clean
   while (walker.nextNode()) comments.push(walker.currentNode as Comment);
 
   const nested = new Set<Comment>();
+  const open: number[] = [];
   for (let i = 0; i < comments.length; i++) {
     const m = (comments[i].nodeValue ?? '').match(MARK_RE);
-    if (!m || (m[1] !== 'i' && m[1] !== 'l')) continue;
-    for (let j = i + 1; j < comments.length; j++) {
-      const em = (comments[j].nodeValue ?? '').match(END_RE);
-      if (em && em[1] === m[1] && +em[2] === +m[2]) {
-        for (let k = i + 1; k < j; k++) nested.add(comments[k]);
-        break;
-      }
+    if (m && (m[1] === 'i' || m[1] === 'l')) {
+      open.push(i);
+      continue;
     }
+    const em = (comments[i].nodeValue ?? '').match(END_RE);
+    if (!em) continue;
+    const key = em[1] + em[2];
+    let at = -1;
+    for (let k = open.length - 1; k >= 0; k--) {
+      const om = (comments[open[k]].nodeValue ?? '').match(MARK_RE)!;
+      if (om[1] + om[2] === key) { at = k; break; }
+    }
+    if (at < 0) continue;
+    for (let k = open[at] + 1; k < i; k++) nested.add(comments[k]);
+    open.length = at;
   }
 
   const ends = new Map<number, Comment>();
@@ -278,7 +289,10 @@ export function wire(root: Node, closes: Array<unknown>, scope?: unknown): Clean
           st.__st = undefined;
         }
         const r = (closes[idx] as (s?: unknown) => unknown)(scope) as { html: string; closes: unknown[] } | null;
-        if (!r) return;
+        if (!r) {
+          st.__ever = true;
+          return;
+        }
         let frag: DocumentFragment;
         if (st.__ever) {
           frag = tpl(r.html);

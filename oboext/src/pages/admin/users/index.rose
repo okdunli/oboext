@@ -1,0 +1,103 @@
+<script>
+  // User management (admin only — the sidebar link itself is admin-gated and
+  // the API enforces users:read/users:manage). Reads live rows per request.
+  let users = $data(() => __rvLoad("admin.users", {}));
+  function list() {
+    return users() || [];
+  }
+  function roleLabel(r) {
+    return r === "admin" ? "管理员" : r === "editor" ? "编辑" : r === "subscriber" ? "订阅者" : "作者";
+  }
+  function fmt(iso) {
+    if (!iso) return "—";
+    const dt = new Date(iso);
+    const pad = (n) => String(n).padStart(2, "0");
+    return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate());
+  }
+  function userJson(u) {
+    return JSON.stringify(u);
+  }
+  function emptyHint() {
+    return list().length ? [] : [1];
+  }
+</script>
+
+<head>
+  <title>用户 - 管理后台</title>
+</head>
+
+<div class="adm-grid adm-cols-2">
+  <div class="adm-card">
+    <div class="adm-card-hd"><strong id="user-form-title">新增用户</strong></div>
+    <div class="adm-card-bd">
+      <form data-adm-form="user">
+        <input type="hidden" name="id">
+        <div class="adm-field">
+          <label>昵称</label>
+          <input class="adm-input" name="name" required placeholder="显示名称">
+        </div>
+        <div class="adm-field">
+          <label>邮箱</label>
+          <input class="adm-input" type="email" name="email" required placeholder="login@example.com">
+        </div>
+        <div class="adm-field">
+          <label>密码</label>
+          <input class="adm-input" type="password" name="password" placeholder="至少 6 位">
+        </div>
+        <div class="adm-field">
+          <label>角色</label>
+          <select class="adm-select" name="role">
+            <option value="author">作者（仅管理自己的内容）</option>
+            <option value="editor">编辑（管理所有内容）</option>
+            <option value="admin">管理员（全部权限）</option>
+            <option value="subscriber">订阅者（只读）</option>
+          </select>
+        </div>
+        <div class="adm-field">
+          <label>简介</label>
+          <textarea class="adm-textarea" name="bio" rows="3" placeholder="个人简介（可选）"></textarea>
+        </div>
+        <button class="adm-btn" type="submit">新增用户</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="adm-card adm-table-wrap">
+    <table class="adm-table">
+      <thead>
+        <tr>
+          <th>用户</th>
+          <th style="width:90px">角色</th>
+          <th style="width:100px">注册日期</th>
+          <th style="width:130px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each list() as u}
+        <tr>
+          <td>
+            <div class="title">{u.name}</div>
+            <div class="sub">{u.email}</div>
+          </td>
+          <td><span class={"adm-tag role-" + u.role}>{roleLabel(u.role)}</span></td>
+          <td class="adm-hint">{fmt(u.createdAt)}</td>
+          <td>
+            <div class="row-actions">
+              <button class="adm-iconbtn" data-adm-act="user-edit" data-user={userJson(u)}>编辑</button>
+              <button
+                class="adm-iconbtn danger"
+                data-adm-act="delete"
+                data-url={"/api/users/" + u.id}
+                data-confirm={"确认删除用户「" + u.name + "」？该操作不可撤销。"}
+              >删除</button>
+            </div>
+          </td>
+        </tr>
+        {/each}
+      </tbody>
+    </table>
+    {#each emptyHint() as _}
+    <div class="adm-empty">还没有用户。</div>
+    {/each}
+  </div>
+</div>

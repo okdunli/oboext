@@ -1,0 +1,18 @@
+<script>
+  // /api/users — GET list, POST create (users:manage)
+  import { apiGate, readBody, adminListUsers, createUser } from "@server/admin";
+
+  export async function GET() {
+    return apiGate(async () => adminListUsers(getContext().user));
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const row = await createUser(getContext().user, await readBody(request));
+      return new Response(JSON.stringify(row), {
+        status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+</script>

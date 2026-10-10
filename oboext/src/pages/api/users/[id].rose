@@ -1,0 +1,18 @@
+<script>
+  // /api/users/:id — PUT update, DELETE (never yourself)
+  import { apiGate, readBody, updateUser, deleteUser } from "@server/admin";
+
+  function pathId(request) {
+    return Number(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () =>
+      updateUser(getContext().user, pathId(request), await readBody(request)),
+    );
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => deleteUser(getContext().user, pathId(request)));
+  }
+</script>

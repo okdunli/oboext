@@ -131,6 +131,146 @@
         <div><div class="t">评论先审后放</div><div class="d">新评论进入待审核队列，通过后才显示</div></div>
         <input type="checkbox" name="commentModeration" data-bool data-on={on('commentModeration', false)}>
       </label>
+      <div class="adm-form-grid" style="margin-top:14px">
+        <div class="adm-field full">
+          <label>待审关键词</label>
+          <textarea class="adm-textarea" name="commentModerationWords" rows="2" placeholder="每行一个，如：广告、赌博" data-dv={v('commentModerationWords')}></textarea>
+          <div class="adm-hint">每行一个；命中的评论标记为待审核。</div>
+        </div>
+        <div class="adm-field full">
+          <label>评论框默认内容</label>
+          <textarea class="adm-textarea" name="commentDefaultContent" rows="2" placeholder="留空则不预填" data-dv={v('commentDefaultContent')}></textarea>
+          <div class="adm-hint">访客打开文章时评论框自动填入的文字，可自由修改后提交。</div>
+        </div>
+      </div>
+
+      <div class="adm-sub-title">评论系统</div>
+      <div class="adm-form-grid">
+        <div class="adm-field full">
+          <label>评论来源</label>
+          <select class="adm-select" name="commentProvider" data-val={v('commentProvider', 'builtin')} data-showif-trigger>
+            <option value="builtin">系统自带（内置数据库）</option>
+            <option value="artalk">Artalk（自建）</option>
+            <option value="giscus">Giscus（GitHub 讨论）</option>
+            <option value="waline">Waline（valine 继任）</option>
+            <option value="twikoo">腾讯云开发评论（私有部署）</option>
+            <option value="disqus">Disqus</option>
+            <option value="utterances">Utterances（GitHub Issues）</option>
+            <option value="none">不显示评论</option>
+          </select>
+          <div class="adm-hint">选择「系统自带」使用本站数据库存储评论；其余为第三方评论服务。</div>
+        </div>
+
+        <div class="adm-field" data-show-if="commentProvider=artalk">
+          <label>Artalk 服务端地址</label>
+          <input class="adm-input" name="artalkServer" placeholder="https://comments.example.com" value={v('artalkServer')}>
+        </div>
+        <div class="adm-field" data-show-if="commentProvider=artalk">
+          <label>Artalk 站点名称</label>
+          <input class="adm-input" name="artalkSite" placeholder="我的博客" value={v('artalkSite')}>
+        </div>
+
+        <div class="adm-field" data-show-if="commentProvider=giscus">
+          <label>Giscus 仓库</label>
+          <input class="adm-input" name="giscusRepo" placeholder="owner/repo" value={v('giscusRepo')}>
+        </div>
+        <div class="adm-field" data-show-if="commentProvider=giscus">
+          <label>仓库 ID</label>
+          <input class="adm-input" name="giscusRepoId" value={v('giscusRepoId')}>
+        </div>
+        <div class="adm-field" data-show-if="commentProvider=giscus">
+          <label>分类</label>
+          <input class="adm-input" name="giscusCategory" value={v('giscusCategory', 'General')}>
+        </div>
+        <div class="adm-field" data-show-if="commentProvider=giscus">
+          <label>分类 ID</label>
+          <input class="adm-input" name="giscusCategoryId" placeholder="DIC_kwDOExample" value={v('giscusCategoryId')}>
+        </div>
+        <div class="adm-field" data-show-if="commentProvider=giscus">
+          <label>讨论映射</label>
+          <select class="adm-select" name="giscusMapping" data-val={v('giscusMapping', 'pathname')}>
+            <option value="pathname">路径名（推荐）</option>
+            <option value="url">URL</option>
+            <option value="title">标题</option>
+            <option value="og-desc">Og 描述</option>
+            <option value="issue-number">Issue 编号</option>
+            <option value="specific-term">特定词条</option>
+          </select>
+        </div>
+        <div class="adm-field" data-show-if="commentProvider=giscus">
+          <label>启用 Reaction</label>
+          <label class="adm-switch" style="margin-top:6px">
+            <div><div class="t">显示表情回应</div></div>
+            <input type="checkbox" name="giscusReactions" data-bool data-on={on('giscusReactions', true)}>
+          </label>
+        </div>
+        <div class="adm-field full" data-show-if="commentProvider=giscus">
+          <label>主题（可选）</label>
+          <input class="adm-input" name="giscusTheme" placeholder="preferred_color_scheme / dark / light" value={v('giscusTheme')}>
+        </div>
+
+        <div class="adm-field full" data-show-if="commentProvider=waline">
+          <label>Waline 服务端地址</label>
+          <input class="adm-input" name="walineServer" placeholder="https://waline.example.com" value={v('walineServer')}>
+        </div>
+        <div class="adm-field full" data-show-if="commentProvider=twikoo">
+          <label>评论环境 ID</label>
+          <input class="adm-input" name="twikooEnvId" placeholder="your-env-id" value={v('twikooEnvId')}>
+          <div class="adm-hint">腾讯云 / Vercel / 私有部署的环境 ID 或域名。</div>
+        </div>
+        <div class="adm-field full" data-show-if="commentProvider=disqus">
+          <label>Disqus 站点短名</label>
+          <input class="adm-input" name="disqusShortname" placeholder="example" value={v('disqusShortname')}>
+        </div>
+        <div class="adm-field" data-show-if="commentProvider=utterances">
+          <label>Utterances 仓库</label>
+          <input class="adm-input" name="utterancesRepo" placeholder="owner/repo" value={v('utterancesRepo')}>
+        </div>
+        <div class="adm-field" data-show-if="commentProvider=utterances">
+          <label>Issue 映射</label>
+          <select class="adm-select" name="utterancesTerm" data-val={v('utterancesTerm', 'pathname')}>
+            <option value="pathname">路径名（推荐）</option>
+            <option value="url">URL</option>
+            <option value="title">标题</option>
+            <option value="issue-number">Issue 编号</option>
+            <option value="og-desc">Og 描述</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="adm-sub-title">头像</div>
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>头像源</label>
+          <select class="adm-select" name="avatarSource" data-val={v('avatarSource', 'gravatar')}>
+            <option value="gravatar">Gravatar（国际）</option>
+            <option value="cn-gravatar">Gravatar 国内镜像</option>
+            <option value="cravatar">Cravatar（酷家）</option>
+            <option value="weavatar">WeAvatar</option>
+            <option value="libravatar">Libravatar</option>
+            <option value="qq">QQ 邮箱 → QQ 头像</option>
+            <option value="none">无头像</option>
+          </select>
+          <div class="adm-hint">仅对「系统自带」评论生效。QQ 邮箱会自动解析为 QQ 头像。</div>
+        </div>
+        <div class="adm-field">
+          <label>头像尺寸</label>
+          <input class="adm-input" type="number" min="16" max="200" name="avatarSize" data-num value={v('avatarSize', 80)}>
+        </div>
+        <div class="adm-field">
+          <label>内容分级</label>
+          <select class="adm-select" name="avatarRating" data-val={v('avatarRating', 'g')}>
+            <option value="g">G</option>
+            <option value="pg">PG</option>
+            <option value="r">R</option>
+            <option value="x">X</option>
+          </select>
+        </div>
+        <div class="adm-field">
+          <label>缺省头像</label>
+          <input class="adm-input" name="avatarDefault" placeholder="identicon / mp / retro / robohash" value={v('avatarDefault', 'identicon')}>
+        </div>
+      </div>
     </div>
   </div>
 

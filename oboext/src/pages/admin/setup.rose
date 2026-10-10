@@ -1,47 +1,96 @@
 <script>
-  // First-run installer. Shown only while the users table is empty (the
-  // middleware redirects away /admin/setup afterwards).
+  // First-run installer (pixel-port of app/admin/setup/page.tsx): database
+  // driver + image storage radio cards, site info, first admin. The submit
+  // flow (admin.js, data-adm-form="setup") POSTs /api/db-config first, then
+  // /api/setup. Shown only while the users table is empty — the middleware
+  // redirects /admin/setup away afterwards.
+  // The session binding keeps this route dynamic (per-request render, never
+  // prerendered at build time where there is no request context).
   let session = $data(() => __rvLoad("admin.session", {}));
 </script>
 
 <head>
-  <title>安装 - oboext</title>
+  <title>初始化 - oboext</title>
 </head>
 
-<div class="adm-auth">
-  <div class="adm-auth-side">
-    <div class="adm-auth-brand"><span class="adm-auth-mark">O</span> oboext 安装程序</div>
-    <div>
-      <h1>创建管理员账号</h1>
-      <p>再差一步就完成了。设置第一个管理员账号（拥有全部权限），安装完成后会自动登录并进入仪表盘。</p>
-      <ul>
-        <li>数据库已自动迁移（本地 PGlite / 生产 Postgres）</li>
-        <li>会话密钥自动生成于 .data/.auth-secret</li>
-        <li>生产环境请设置环境变量 AUTH_SECRET</li>
-      </ul>
-    </div>
-    <div class="adm-hint">oboext on rosefd</div>
-  </div>
-  <div class="adm-auth-main">
-    <div class="adm-auth-card">
-      <div class="adm-steps"><i class="on"></i><i class="on"></i><i class="on"></i></div>
-      <h2>管理员信息</h2>
-      <p class="adm-auth-sub">请妥善保管登录凭据</p>
-      <form data-adm-form="setup">
-        <div class="adm-field">
-          <label>邮箱</label>
-          <input class="adm-input" type="email" name="email" autocomplete="email" required autofocus>
-        </div>
-        <div class="adm-field">
-          <label>昵称</label>
-          <input class="adm-input" name="name" autocomplete="nickname" required>
-        </div>
-        <div class="adm-field">
-          <label>密码（至少 6 位）</label>
-          <input class="adm-input" type="password" name="password" autocomplete="new-password" minlength="6" required>
-        </div>
-        <button class="adm-btn adm-btn-block" type="submit">完成安装</button>
-      </form>
-    </div>
-  </div>
+<div class="su-wrap">
+  <form class="su-card" data-adm-form="setup" novalidate>
+    <h1 class="su-title">初始化 oboext</h1>
+    <p class="su-lead">检测到系统尚未配置，请创建站长账号并填写站点信息。</p>
+
+    <fieldset class="su-group">
+      <legend>数据库</legend>
+      <div class="su-radios">
+        <label class="su-radio is-on" data-su-card="driver-pglite">
+          <input type="radio" name="driver" value="pglite" checked data-su="driver">
+          本地内置 (PGlite)
+        </label>
+        <label class="su-radio" data-su-card="driver-postgres">
+          <input type="radio" name="driver" value="postgres" data-su="driver">
+          远程数据库
+        </label>
+      </div>
+      <div class="su-panel" data-su-panel="driver-pglite">
+        <p class="su-hint">推荐：零配置、无需外部服务，数据保存在本地 .data 目录。</p>
+      </div>
+      <div class="su-panel" data-su-panel="driver-postgres" hidden>
+        <p class="su-hint">推荐 Neon（免费档，空闲自动休眠不烧额度）或 Supabase。连接串形如：</p>
+        <code class="su-code">postgresql://user:pass@host:5432/dbname?sslmode=require</code>
+        <label class="su-label">连接串</label>
+        <input class="adm-input su-input" name="dbUrl" placeholder="postgresql://…" spellcheck="false">
+      </div>
+    </fieldset>
+
+    <fieldset class="su-group">
+      <legend>图片存储</legend>
+      <div class="su-radios">
+        <label class="su-radio is-on" data-su-card="storage-local">
+          <input type="radio" name="storage" value="local" checked data-su="storage">
+          本地 (方案 A)
+        </label>
+        <label class="su-radio" data-su-card="storage-vercel-blob">
+          <input type="radio" name="storage" value="vercel-blob" data-su="storage">
+          Vercel Blob (方案 B)
+        </label>
+      </div>
+      <div class="su-panel" data-su-panel="storage-local">
+        <p class="su-hint">图片写入 content/uploads 并随 Git 提交，由 Vercel 构建部署。适合静态、少量图片。</p>
+      </div>
+      <div class="su-panel" data-su-panel="storage-vercel-blob" hidden>
+        <p class="su-hint">后台传图自动上云，无需手动 Git 提交，适合频繁传图。免费额度内够用，超量后按量计费。令牌在 Vercel 面板的 Storage → Blob 中创建：</p>
+        <label class="su-label">BLOB_READ_WRITE_TOKEN</label>
+        <input class="adm-input su-input" name="blobToken" placeholder="vercel_blob_rw_…" spellcheck="false">
+      </div>
+    </fieldset>
+
+    <fieldset class="su-group">
+      <legend>站点信息</legend>
+      <label class="su-label">站点名称</label>
+      <input class="adm-input su-input" name="siteTitle" value="oboext" required>
+      <label class="su-label">站点描述</label>
+      <input class="adm-input su-input" name="siteDescription" value="一个 Serverless 友好的内容管理系统">
+      <label class="su-label">副标题 / 标语</label>
+      <input class="adm-input su-input" name="tagline">
+      <label class="su-label">页脚文字</label>
+      <input class="adm-input su-input" name="footerText">
+    </fieldset>
+
+    <fieldset class="su-group su-group-last">
+      <legend>站长账号</legend>
+      <label class="su-label">姓名</label>
+      <input class="adm-input su-input" name="name" autocomplete="name" required autofocus>
+      <label class="su-label">邮箱</label>
+      <input class="adm-input su-input" type="email" name="email" autocomplete="email" required>
+      <label class="su-label">密码（至少 8 位）</label>
+      <input class="adm-input su-input" type="password" name="password" autocomplete="new-password" minlength="8" required>
+    </fieldset>
+
+    <p class="su-error" data-setup-error hidden></p>
+
+    <button class="adm-btn adm-btn-block su-submit" type="submit">
+      <span data-setup-label>完成初始化</span>
+    </button>
+
+    <p class="su-back"><a href="/">← 返回站点首页</a></p>
+  </form>
 </div>

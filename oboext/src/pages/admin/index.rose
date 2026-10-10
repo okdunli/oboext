@@ -3,8 +3,14 @@
   let st = $data(() => __rvLoad("admin.dashboard", {}));
   const counts = st().counts;
   const postStatus = st().postStatus;
-  const recentPosts = st().recentPosts;
-  const recentComments = st().recentComments;
+  // NB: {#each} compiles its expression as a zero-arg call — arrays exposed to
+  // the template must ride function accessors.
+  function recentPosts() {
+    return st().recentPosts;
+  }
+  function recentComments() {
+    return st().recentComments;
+  }
   function fmtDate(iso) {
     if (!iso) return "—";
     const d = new Date(iso);
@@ -73,7 +79,7 @@
       <table class="adm-table">
         <thead><tr><th>标题</th><th>状态</th><th>更新时间</th></tr></thead>
         <tbody>
-          {#each recentPosts as p}
+          {#each recentPosts() as p}
           <tr>
             <td><a href={"/admin/posts/" + p.id}><div class="title">{short(p.title, 28)}</div></a></td>
             <td><span class={"adm-tag " + p.status}>{statusLabel(p.status)}</span></td>
@@ -92,7 +98,7 @@
       <table class="adm-table">
         <thead><tr><th>评论</th><th>状态</th><th>时间</th></tr></thead>
         <tbody>
-          {#each recentComments as c}
+          {#each recentComments() as c}
           <tr>
             <td>
               <div class="title">{short(c.content, 24)}</div>

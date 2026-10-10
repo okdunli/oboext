@@ -7,7 +7,11 @@
       page: Number(__rvQs().get("page") || 1),
     }),
   );
-  const items = d().items;
+  // NB: {#each} compiles its expression as a zero-arg call, so iteration
+  // targets must be function accessors, never bare arrays.
+  function rows() {
+    return d().items;
+  }
   function fmt(iso) {
     if (!iso) return "—";
     const dt = new Date(iso);
@@ -31,7 +35,7 @@
     return d().total > d().limit || d().page > 1;
   }
   function emptyHint() {
-    return items.length ? [] : [1];
+    return rows().length ? [] : [1];
   }
   // each-predicate wrapper: same-kind blocks can't nest in .rose templates
   function pager() {
@@ -73,7 +77,7 @@
       </tr>
     </thead>
     <tbody>
-      {#each items as c}
+      {#each rows() as c}
       <tr>
         <td>
           <div class="title">{c.authorName || "匿名"}</div>

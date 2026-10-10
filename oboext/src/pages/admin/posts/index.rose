@@ -8,7 +8,11 @@
       page: Number(__rvQs().get("page") || 1),
     }),
   );
-  const items = data().items;
+  // NB: {#each} compiles its expression as a zero-arg call, so iteration
+  // targets must be function accessors, never bare arrays.
+  function rows() {
+    return data().items;
+  }
   function fmtDate(iso) {
     if (!iso) return "—";
     const d = new Date(iso);
@@ -45,7 +49,7 @@
     return data().total > data().limit || data().page > 1;
   }
   function emptyHint() {
-    return items.length ? [] : [1];
+    return rows().length ? [] : [1];
   }
   // same-kind blocks can't nest ({#if} in {#if} pairs wrongly), so the pager
   // wrapper rides an each-predicate while the prev/next flags stay {#if}
@@ -92,7 +96,7 @@
       </tr>
     </thead>
     <tbody>
-      {#each items as p}
+      {#each rows() as p}
       <tr>
         <td><input type="checkbox" class="adm-check" value={p.id}></td>
         <td>

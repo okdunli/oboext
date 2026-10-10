@@ -130,6 +130,18 @@
       return;
     }
 
+    if (act === "add-meta") {
+      e.preventDefault();
+      var ed = window.__admEditor;
+      if (ed && ed.kind === "page") {
+        ed.metas.push({ key: "", value: "" });
+        ed.renderMetas();
+        var box = ed.root.querySelector("[data-adm-metas]");
+        if (box && box.lastElementChild) box.lastElementChild.querySelector("input").focus();
+      }
+      return;
+    }
+
     if (act === "tax-edit" || act === "tax-new") {
       e.preventDefault();
       var tform = document.querySelector(t.getAttribute("data-form"));
@@ -186,11 +198,15 @@
         toast("欢迎回来，" + r.user.name, "ok");
         window.location.href = "/admin";
       } else if (kind === "setup") {
-        await api("POST", "/api/setup", {
-          email: form.email.value, name: form.name.value, password: form.password.value,
-        });
-        toast("安装完成", "ok");
-        window.location.href = "/admin";
+        try {
+          await submitSetup(form);
+          toast("安装完成", "ok");
+          window.location.href = "/admin";
+        } catch (err) {
+          var errEl = form.querySelector("[data-setup-error]");
+          if (errEl) { errEl.textContent = err.message; errEl.hidden = false; }
+          if (btn) btn.disabled = false;
+        }
       } else if (kind === "create-category" || kind === "create-tag") {
         var base = kind === "create-category" ? "/api/categories" : "/api/tags";
         var id = form.querySelector('[name=id]').value;
@@ -213,7 +229,7 @@
         else await api("POST", "/api/users", body);
         toast("用户已保存", "ok");
         setTimeout(function () { window.location.reload(); }, 500);
-      } else if (kind === "post") {
+      } else if (kind === "post" || kind === "page") {
         var as = e.submitter && e.submitter.getAttribute("data-save-as");
         await window.__admEditor.save(as || "");
       }
@@ -231,12 +247,76 @@
       "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
   }
 
+  async function submitSetup(form) {
+    var field = function (n) {
+      var el = form.elements[n];
+      return el ? String(el.value).trim() : "";
+    };
+    var checked = function (n) {
+      var el = form.querySelector('input[name="' + n + '"]:checked');
+      return el ? el.value : "";
+    };
+    var driver = checked("driver") || "pglite";
+    var storage = checked("storage") || "local";
+    var dbUrl = field("dbUrl");
+    var blobToken = field("blobToken");
+    var label = form.querySelector("[data-setup-label]");
+
+    if (driver === "postgres" && !dbUrl) throw new Error("选择远程数据库时请填写连接串");
+    if (storage === "vercel-blob" && !blobToken)
+      throw new Error("选择 Vercel Blob 时请填写 Blob 读写令牌");
+
+    if (label) label.textContent = "初始化中…";
+    try {
+      var dbRes = await fetch("/api/db-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ driver: driver, url: dbUrl, storage: storage, blobToken: blobToken }),
+      });
+      if (!dbRes.ok) {
+        var dbErr = await dbRes.json().catch(function () { return {}; });
+        throw new Error(dbErr.error || dbErr.message || "数据库配置失败");
+      }
+      await api("POST", "/api/setup", {
+        siteTitle: field("siteTitle"),
+        siteDescription: field("siteDescription"),
+        tagline: field("tagline"),
+        footerText: field("footerText"),
+        email: field("email"),
+        name: field("name"),
+        password: form.elements["password"].value,
+      });
+    } catch (err) {
+      if (label) label.textContent = "完成初始化";
+      throw err;
+    }
+  }
+
+  document.addEventListener("change", function (e) {
+    var input = e.target;
+    if (!input || !input.hasAttribute || !input.hasAttribute("data-su")) return;
+    var group = input.getAttribute("data-su");
+    document.querySelectorAll("[data-su-card^='" + group + "-']").forEach(function (card) {
+      var radio = card.querySelector("input");
+      card.classList.toggle("is-on", !!radio && radio.checked);
+    });
+    document.querySelectorAll("[data-su-panel^='" + group + "-']").forEach(function (panel) {
+      panel.hidden = panel.getAttribute("data-su-panel") !== group + "-" + input.value;
+    });
+  });
+
   function BlockEditor(root) {
     this.root = root;
-    this.data = JSON.parse(root.getAttribute("data-post") || "{}");
+    this.kind = root.getAttribute("data-adm-form") === "page" ? "page" : "post";
+    this.data = JSON.parse(
+      root.getAttribute(this.kind === "page" ? "data-page" : "data-post") || "{}",
+    );
+    this.entity = this.kind === "page" ? this.data.page : this.data.post;
     this.listEl = root.querySelector(".adm-blocks");
-    this.blocks = (this.data.post && this.data.post.content) || [];
+    this.blocks = (this.entity && this.entity.content) || [];
+    this.metas = (this.kind === "page" && this.entity && this.entity.metaList) || [];
     this.render();
+    this.renderMetas();
   }
   BlockEditor.TYPES = [
     ["paragraph", "段落"], ["heading", "标题"], ["image", "图片"],
@@ -348,30 +428,85 @@
       });
     });
   };
+  BlockEditor.prototype.renderMetas = function () {
+    if (this.kind !== "page") return;
+    var box = this.root.querySelector("[data-adm-metas]");
+    if (!box) return;
+    box.innerHTML = "";
+    this.metas.forEach(function (m) {
+      var row = document.createElement("div");
+      row.className = "adm-meta-row";
+      var k = document.createElement("input");
+      k.className = "adm-input adm-meta-key";
+      k.placeholder = "键";
+      k.value = m.key || "";
+      var v = document.createElement("input");
+      v.className = "adm-input adm-meta-val";
+      v.placeholder = "值";
+      v.value = m.value || "";
+      var del = document.createElement("button");
+      del.type = "button";
+      del.className = "adm-iconbtn danger";
+      del.textContent = "✕";
+      del.addEventListener("click", function () {
+        row.remove();
+      });
+      row.appendChild(k);
+      row.appendChild(v);
+      row.appendChild(del);
+      box.appendChild(row);
+    });
+  };
+  BlockEditor.prototype.collectMetas = function () {
+    var box = this.root.querySelector("[data-adm-metas]");
+    if (!box) return [];
+    return Array.prototype.map.call(box.querySelectorAll(".adm-meta-row"), function (row) {
+      return {
+        key: row.querySelector(".adm-meta-key").value,
+        value: row.querySelector(".adm-meta-val").value,
+      };
+    });
+  };
   BlockEditor.prototype.payload = function (status) {
     this.collect();
     var form = this.root;
     var body = formObject(form);
     body.content = this.blocks;
-    body.categoryIds = Array.prototype.map.call(
-      form.querySelectorAll('[name="categoryIds[]"]:checked'), function (c) { return Number(c.value); });
-    body.tagIds = Array.prototype.map.call(
-      form.querySelectorAll('[name="tagIds[]"]:checked'), function (c) { return Number(c.value); });
+    if (this.kind === "post") {
+      body.categoryIds = Array.prototype.map.call(
+        form.querySelectorAll('[name="categoryIds[]"]:checked'), function (c) { return Number(c.value); });
+      body.tagIds = Array.prototype.map.call(
+        form.querySelectorAll('[name="tagIds[]"]:checked'), function (c) { return Number(c.value); });
+      body.pinned = !!form.querySelector('[name=pinned]') && form.querySelector('[name=pinned]').checked;
+    } else {
+      var pid = form.querySelector('[name=parentId]');
+      if (pid && pid.value !== "") body.parentId = Number(pid.value);
+      body.metas = this.collectMetas();
+    }
     if (status) body.status = status;
-    body.pinned = form.querySelector('[name=pinned]').checked;
     if (body.commentStatus === "on") body.commentStatus = "open";
     return body;
   };
   BlockEditor.prototype.save = async function (status) {
     var body = this.payload(status);
-    var id = this.data.post ? this.data.post.id : null;
+    var base = this.kind === "page" ? "/api/pages" : "/api/posts";
+    var listPath = this.kind === "page" ? "/admin/pages/" : "/admin/posts/";
+    var id = this.entity ? this.entity.id : null;
     var saved;
-    if (id) saved = await api("PUT", "/api/posts/" + id, body);
-    else saved = await api("POST", "/api/posts", body);
+    if (id) saved = await api("PUT", base + "/" + id, body);
+    else saved = await api("POST", base, body);
     toast("已保存", "ok");
-    if (!id) window.history.replaceState(null, "", "/admin/posts/" + saved.id);
-    this.data.post = saved;
-    this.root.setAttribute("data-post", JSON.stringify(this.data));
+    if (!id) window.history.replaceState(null, "", listPath + saved.id);
+    this.entity = saved;
+    if (this.kind === "page") {
+      this.data.page = saved;
+      this.root.setAttribute("data-page", JSON.stringify(this.data));
+    } else {
+      this.data.post = saved;
+      this.root.setAttribute("data-post", JSON.stringify(this.data));
+    }
+    this.metas = (this.kind === "page" && saved.metaList) || this.metas;
+    this.renderMetas();
     var btn = this.root.querySelector("[type=submit]");
     if (btn) btn.disabled = false;
     return saved;
@@ -382,31 +517,37 @@
     if (!root || root.__bound) return;
     root.__bound = true;
     window.__admEditor = new BlockEditor(root);
-    var post = window.__admEditor.data.post;
-    if (post) {
-      (post.categoryIds || []).forEach(function (id) {
-        var cb = root.querySelector('[name="categoryIds[]"][value="' + id + '"]');
-        if (cb) cb.checked = true;
-      });
-      (post.tagIds || []).forEach(function (id) {
-        var cb = root.querySelector('[name="tagIds[]"][value="' + id + '"]');
-        if (cb) cb.checked = true;
-      });
-      ["status", "commentStatus", "authorId"].forEach(function (name) {
+    var editor = window.__admEditor;
+    var entity = editor.entity;
+    if (entity) {
+      if (editor.kind === "post") {
+        (entity.categoryIds || []).forEach(function (id) {
+          var cb = root.querySelector('[name="categoryIds[]"][value="' + id + '"]');
+          if (cb) cb.checked = true;
+        });
+        (entity.tagIds || []).forEach(function (id) {
+          var cb = root.querySelector('[name="tagIds[]"][value="' + id + '"]');
+          if (cb) cb.checked = true;
+        });
+        var authorEl = root.querySelector("[name=authorId]");
+        if (authorEl && entity.authorId != null && entity.authorId !== "")
+          authorEl.value = String(entity.authorId);
+        var pin = root.querySelector("[name=pinned]");
+        if (pin) pin.checked = !!entity.pinned;
+      }
+      ["status", "commentStatus"].forEach(function (name) {
         var el = root.querySelector("[name=" + name + "]");
-        if (el && post[name] != null && post[name] !== "") el.value = String(post[name]);
+        if (el && entity[name] != null && entity[name] !== "") el.value = String(entity[name]);
       });
-      var pin = root.querySelector("[name=pinned]");
-      if (pin) pin.checked = !!post.pinned;
       var pa = root.querySelector("[name=publishedAt]");
-      if (pa && post.publishedAt) pa.value = toLocalInput(post.publishedAt);
+      if (pa && entity.publishedAt) pa.value = toLocalInput(entity.publishedAt);
     }
 
     var timer = null;
     root.addEventListener("input", function () {
       clearTimeout(timer);
       timer = setTimeout(function () {
-        var p = window.__admEditor.data.post;
+        var p = window.__admEditor.entity;
         if (!p || p.status !== "draft") return;
         window.__admEditor.save().catch(function (e) { toast(e.message, "err"); });
       }, 2500);
@@ -441,7 +582,19 @@
     document.querySelectorAll("input[type=checkbox][data-on]").forEach(function (cb) {
       cb.checked = cb.getAttribute("data-on") === "1";
     });
+    applyShowIf();
   }
+
+  function applyShowIf() {
+    document.querySelectorAll("[data-show-if]").forEach(function (el) {
+      var pair = (el.getAttribute("data-show-if") || "").split("=");
+      var ctrl = document.getElementsByName(pair[0])[0];
+      el.classList.toggle("is-shown", !!ctrl && ctrl.value === pair[1]);
+    });
+  }
+  document.addEventListener("change", function (e) {
+    if (e.target && e.target.tagName === "SELECT") applyShowIf();
+  });
 
   function initWidgets() {
     markActiveNav();

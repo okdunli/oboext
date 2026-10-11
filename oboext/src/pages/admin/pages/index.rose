@@ -52,7 +52,7 @@
     <a class={__rvQs().get("status") === "archived" ? "is-active" : ""} href="/admin/pages?status=archived">已归档</a>
   </div>
   <span style="flex:1"></span>
-  <a class="adm-btn" href="/admin/pages/new"><span class="adm-ic" style="--i:url(/public/plus.svg)"></span>新建页面</a>
+  <a class="adm-btn" href="/admin/pages/new"><span class="adm-ic" style="--i:url(/public/icons/plus.svg)"></span>新建页面</a>
 </div>
 
 <div class="adm-card adm-table-wrap">

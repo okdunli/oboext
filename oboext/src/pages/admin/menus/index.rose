@@ -107,22 +107,22 @@
       {/if}
       <input class="adm-input adm-menu-icon" data-f="icon" value={r.icon} placeholder="图标标识" title="图标标识（lucide 名称，如 house）">
       <div class="adm-menu-tools">
-        <button type="button" class="adm-iconbtn" data-menu-act="up" title="上移" aria-label="上移"><span class="adm-ic adm-ic-sm" style="--i:url(/public/chevron-up.svg)"></span></button>
-        <button type="button" class="adm-iconbtn" data-menu-act="down" title="下移" aria-label="下移"><span class="adm-ic adm-ic-sm" style="--i:url(/public/chevron-down.svg)"></span></button>
-        <button type="button" class="adm-iconbtn" data-menu-act="indent" title="作为上一项的子项" aria-label="缩进"><span class="adm-ic adm-ic-sm" style="--i:url(/public/corner-down-right.svg)"></span></button>
+        <button type="button" class="adm-iconbtn" data-menu-act="up" title="上移" aria-label="上移"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-up.svg)"></span></button>
+        <button type="button" class="adm-iconbtn" data-menu-act="down" title="下移" aria-label="下移"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-down.svg)"></span></button>
+        <button type="button" class="adm-iconbtn" data-menu-act="indent" title="作为上一项的子项" aria-label="缩进"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/corner-down-right.svg)"></span></button>
         {#if (() => menuIsIndented(r))()}
-        <button type="button" class="adm-iconbtn" data-menu-act="outdent" title="升回顶级" aria-label="升回顶级"><span class="adm-ic adm-ic-sm" style="--i:url(/public/corner-up-left.svg)"></span></button>
+        <button type="button" class="adm-iconbtn" data-menu-act="outdent" title="升回顶级" aria-label="升回顶级"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/corner-up-left.svg)"></span></button>
         {/if}
-        <button type="button" class="adm-iconbtn danger" data-menu-act="del" title="删除" aria-label="删除"><span class="adm-ic adm-ic-sm" style="--i:url(/public/trash-2.svg)"></span></button>
+        <button type="button" class="adm-iconbtn danger" data-menu-act="del" title="删除" aria-label="删除"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span></button>
       </div>
     </div>
     {/each}
   </div>
 
   <div class={emptyClass()} data-menu-empty>
-    <div style="margin-bottom:8px;display:flex;justify-content:center"><span class="adm-ic" style="width:32px;height:32px;--i:url(/public/compass.svg)"></span></div>
+    <div style="margin-bottom:8px;display:flex;justify-content:center"><span class="adm-ic" style="width:32px;height:32px;--i:url(/public/icons/compass.svg)"></span></div>
     <p>这个菜单还没有项目。</p>
   </div>
 
-  <button type="button" class="adm-btn adm-btn-ghost adm-menu-add" data-menu-add><span class="adm-ic adm-ic-sm" style="--i:url(/public/plus.svg)"></span>添加菜单项</button>
+  <button type="button" class="adm-btn adm-btn-ghost adm-menu-add" data-menu-add><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/plus.svg)"></span>添加菜单项</button>
 </div>

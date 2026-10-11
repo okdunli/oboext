@@ -1,0 +1,114 @@
+<script>
+  // 404 page settings admin — port of oboext app/admin/notfound/page.tsx.
+  // Uses data-adm-form="notfound" for admin.js to handle submission.
+  let cfg = $data(() => __rvLoad("notFoundConfig", {}));
+
+  function v(k, dflt) {
+    const x = cfg()[k];
+    return x == null || x === "" ? (dflt == null ? "" : dflt) : x;
+  }
+  function on(k) {
+    return cfg()[k] ? "1" : "0";
+  }
+</script>
+
+<head>
+  <title>404 页面设置 - 管理后台</title>
+</head>
+
+<form data-adm-form="notfound">
+  <div class="adm-toolbar">
+    <div style="display: flex; align-items: center; gap: 0.5rem;">
+      <span class="adm-ic" style="--i: url(/public/icons/file-question.svg); width: 22px; height: 22px; color: #818cf8;"></span>
+      <strong style="font-size:16px">404 页面</strong>
+    </div>
+    <span style="flex:1"></span>
+    <button class="adm-btn" type="submit">保存更改</button>
+  </div>
+
+  <div data-adm-msg></div>
+
+  <div class="adm-section-title">文案</div>
+  <div class="adm-card">
+    <div class="adm-card-bd">
+      <div class="adm-field">
+        <label>标题</label>
+        <input class="adm-input" name="title" value={v('title', '404 - 页面走丢了')} maxlength="120">
+      </div>
+      <div class="adm-field" style="margin-top: 1rem;">
+        <label>说明正文</label>
+        <textarea class="adm-textarea" name="message" rows="4" maxlength="500" data-dv={v('message', '您访问的页面不存在或已被移动，请检查网址是否正确，或返回首页继续浏览。')} style="min-height: 6rem; resize: vertical;"></textarea>
+        <div class="adm-hint">纯文本，按空行分段，最多 500 字。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-section-title" style="margin-top: 1.5rem;">模块开关</div>
+  <div class="adm-card">
+    <div class="adm-card-bd">
+      <div class="adm-field">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <label style="margin-bottom: 0.25rem;">显示搜索框</label>
+            <div class="adm-hint">访客输入关键词后跳转站内搜索结果页。</div>
+          </div>
+          <label class="adm-switch">
+            <input type="checkbox" name="showSearch" value="1" data-on={on('showSearch')}>
+            <span class="adm-switch-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="adm-field" style="margin-top: 1.5rem;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <label style="margin-bottom: 0.25rem;">显示最近文章</label>
+            <div class="adm-hint">列出最新 6 篇已发布文章，帮助访客继续浏览。</div>
+          </div>
+          <label class="adm-switch">
+            <input type="checkbox" name="showRecent" value="1" data-on={on('showRecent')}>
+            <span class="adm-switch-slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+
+<style>
+  .adm-switch {
+    position: relative;
+    display: inline-block;
+    width: 2.75rem;
+    height: 1.5rem;
+    cursor: pointer;
+  }
+  .adm-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .adm-switch-slider {
+    position: absolute;
+    inset: 0;
+    background: #52525b;
+    border-radius: 9999px;
+    transition: background 0.2s;
+  }
+  .adm-switch-slider::before {
+    content: "";
+    position: absolute;
+    width: 1.25rem;
+    height: 1.25rem;
+    left: 0.125rem;
+    top: 0.125rem;
+    background: #fff;
+    border-radius: 9999px;
+    transition: transform 0.2s;
+  }
+  .adm-switch input:checked + .adm-switch-slider {
+    background: #6366f1;
+  }
+  .adm-switch input:checked + .adm-switch-slider::before {
+    transform: translateX(1.25rem);
+  }
+</style>

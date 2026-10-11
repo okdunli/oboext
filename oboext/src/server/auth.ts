@@ -10,9 +10,9 @@
  * plain header strings: sessionCookieHeader()/clearSessionCookieHeader() build
  * Set-Cookie values the API routes attach to their Response.
  */
-import fs from "node:fs";
-import path from "node:path";
-import crypto from "node:crypto";
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
 import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
 bcrypt.setRandomFallback((len: number) => Array.from(crypto.randomBytes(len)));

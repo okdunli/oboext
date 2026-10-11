@@ -32,10 +32,13 @@ import * as R from "./render.js";
 import * as admin from "./admin-loaders.js";
 import { getMenuByLocation } from "./menus.js";
 import { getAreaWidgets } from "./widgets.js";
-import { getActiveThemeSlug, getActiveThemeRenderConfig } from "./themes.js";
+import { getActiveThemeSlug, getActiveThemeRenderConfig, getThemeManifest } from "./themes.js";
 import { themeToCss } from "./theme-tokens.js";
+import { skyscraperBridgeRoot, skyscraperBridgeDark } from "./theme-bridge.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
+import { getNotFoundSettings } from "./not-found-config.js";
+import { getThemeChrome, type MenuItem } from "./theme-chrome.js";
 
 export type Ctx = {
   query: URLSearchParams;
@@ -143,31 +146,54 @@ async function chromeData(pathname: string) {
     getAreaWidgets(themeSlug, "sidebar"),
     getAreaWidgets(themeSlug, "footer"),
   ]);
+  const skBase = (getThemeManifest(themeSlug)?.config ?? {}) as Parameters<
+    typeof skyscraperBridgeRoot
+  >[1];
+  const skBridge =
+    themeSlug === "skyscraper"
+      ? {
+          root: skyscraperBridgeRoot(renderConfig, skBase),
+          dark: skyscraperBridgeDark(renderConfig, skBase),
+        }
+      : { root: "", dark: "" };
   const varsHtml =
     pathname.indexOf("/admin") === 0
       ? ""
-      : `<style id="rv-theme-vars">:root{${themeToCss(renderConfig)}}</style>` +
+      : `<style id="rv-theme-vars">:root{${themeToCss(renderConfig)}${skBridge.root ? ";" + skBridge.root : ""}}` +
+        (skBridge.dark ? `[data-color-scheme="dark"]{${skBridge.dark}}` : "") +
+        `</style>` +
         (typeof renderConfig.customCss === "string" && renderConfig.customCss
           ? `<style id="rv-theme-custom">${renderConfig.customCss}</style>`
           : "");
   const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
   const menuItems: R.SkyItem[] =
     sideMenu && sideMenu.items.length ? (sideMenu.items as R.SkyItem[]) : SIDEBAR_FALLBACK;
+  const tc = getThemeChrome(themeSlug);
+  const headerMenu = await getMenuByLocation("header");
+  const headerItems: MenuItem[] = (headerMenu?.items ?? []) as MenuItem[];
+  const footerHtml = tc.footer(
+    settings,
+    R.widgetAreaHtml(footerWidgets, "sk-footer-widgets"),
+  );
   return {
     siteTitle: settings.siteTitle ?? "",
     siteDescription: settings.siteDescription ?? "",
     varsHtml,
-    navHtml: R.topNav(settings),
-    asideHtml:
-      R.sidebarMenu(menuItems, pathname) +
-      R.tagCloud(tags) +
-      R.blogStats(stats) +
-      R.popularWidget(popular) +
-      R.widgetAreaHtml(sideWidgets, "sk-widget-area"),
-    footerHtml: R.footerHtml(
-      settings,
-      R.widgetAreaHtml(footerWidgets, "sk-footer-widgets"),
-    ),
+    themeSlug,
+    cssHref: tc.cssHref(),
+    bodyFix: tc.bodyFix(),
+    headExtra: tc.headExtra(),
+    navHtml: tc.nav(settings, headerItems),
+    bodyOpen: tc.bodyOpen(settings, headerItems),
+    bodyClose: tc.bodyClose(settings, footerHtml),
+    asideHtml: tc.aside({
+      menu: R.sidebarMenu(menuItems, pathname),
+      tagCloud: R.tagCloud(tags),
+      stats: R.blogStats(stats),
+      popular: R.popularWidget(popular),
+      widgets: R.widgetAreaHtml(sideWidgets, "sk-widget-area"),
+    }),
+    footerHtml,
   };
 }
 
@@ -184,8 +210,13 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
   return {
     siteTitle: d.siteTitle,
     siteDescription: d.siteDescription,
-    themeHead: d.varsHtml,
+    themeHead: d.varsHtml + d.headExtra,
+    themeSlug: d.themeSlug,
+    cssHref: d.cssHref,
+    bodyFix: d.bodyFix,
     nav: d.navHtml,
+    bodyOpen: d.bodyOpen,
+    bodyClose: d.bodyClose,
     aside: d.asideHtml,
     footer: d.footerHtml,
     pluginFooter,
@@ -194,28 +225,32 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
 }
 
 async function home() {
-  const [all, popular, random, catRows, cfg] = await Promise.all([
+  const [all, popular, random, catRows, cfg, settings, themeSlug] = await Promise.all([
     listPosts({ status: "published", limit: 12 }),
     listPosts({ status: "published", limit: 4, orderBy: "views" }),
     randomPosts(20),
     listCategories(),
     getPermalinkConfig(),
+    getSettings(),
+    getActiveThemeSlug(),
   ]);
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const items = all.items;
+  const tc = getThemeChrome(themeSlug);
   return {
-    main: R.homeHtml({
+    main: tc.home({
       hero: items.slice(0, 4),
       latest: items.slice(4, 12),
       liked: popular.items,
       random,
       cats,
+      settings,
     }),
   };
 }
 
 async function blogList(payload: { page?: number }) {
-  const settings = await getSettings();
+  const [settings, themeSlug] = await Promise.all([getSettings(), getActiveThemeSlug()]);
   const perPage = settings.postsPerPage || 10;
   const page = pageNum(payload.page);
   const { items, total } = await listPosts({
@@ -224,9 +259,10 @@ async function blogList(payload: { page?: number }) {
     offset: (page - 1) * perPage,
   });
   const totalPages = Math.max(1, Math.ceil(total / perPage));
+  const tc = getThemeChrome(themeSlug);
   return {
     headTitle: `全部文章 - ${settings.siteTitle ?? ""}`,
-    main: R.listPage({
+    main: tc.listPage({
       title: "全部文章",
       sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
       items,
@@ -239,10 +275,11 @@ async function blogList(payload: { page?: number }) {
 
 async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) {
   const page = pageNum(payload.page);
-  const [category, settings, cfg] = await Promise.all([
+  const [category, settings, cfg, themeSlug] = await Promise.all([
     getCategoryBySlug(payload.slug),
     getSettings(),
     getPermalinkConfig(),
+    getActiveThemeSlug(),
   ]);
   if (!category) return { notFound: true };
   const perPage = settings.postsPerPage || 10;
@@ -269,10 +306,11 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
       { label: category.name, href: catUrl },
     ],
   });
+  const tc = getThemeChrome(themeSlug);
   return {
     headTitle: `分类：${category.name} - ${settings.siteTitle ?? ""}`,
     pluginHead,
-    main: R.listPage({
+    main: tc.listPage({
       title: `分类：${category.name}`,
       sub,
       items,
@@ -285,10 +323,11 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
 
 async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
   const page = pageNum(payload.page);
-  const [tag, settings, cfg] = await Promise.all([
+  const [tag, settings, cfg, themeSlug] = await Promise.all([
     getTagBySlug(payload.slug),
     getSettings(),
     getPermalinkConfig(),
+    getActiveThemeSlug(),
   ]);
   if (!tag) return { notFound: true };
   const perPage = settings.postsPerPage || 10;
@@ -312,10 +351,11 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
       { label: `#${tag.name}`, href: tagUrl },
     ],
   });
+  const tc = getThemeChrome(themeSlug);
   return {
     headTitle: `标签：#${tag.name} - ${settings.siteTitle ?? ""}`,
     pluginHead,
-    main: R.listPage({
+    main: tc.listPage({
       title: `标签：#${tag.name}`,
       sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
       items,
@@ -354,7 +394,7 @@ async function search(payload: { q?: string; page?: number; all?: boolean }) {
   const settings = await getSettings();
   return {
     headTitle: `搜索 - ${settings.siteTitle ?? ""}`,
-    main: R.listPage({
+    main: getThemeChrome(await getActiveThemeSlug() || "skyscraper").listPage({
       title: cleaned ? `搜索：“${cleaned}”` : "搜索",
       sub: cleaned ? `共 ${total} 条结果 · 第 ${page}/${totalPages} 页` : "在顶部搜索框输入关键词",
       items,
@@ -370,10 +410,11 @@ async function search(payload: { q?: string; page?: number; all?: boolean }) {
 async function postDetail(payload: { slug: string }, ctx: Ctx) {
   const post = await getPost(payload.slug);
   if (!post) return { notFound: true };
-  const [related, settings, items] = await Promise.all([
+  const [related, settings, items, themeSlug] = await Promise.all([
     relatedPosts(post, 4),
     getSettings(),
     listPostComments(post.id, "post"),
+    getActiveThemeSlug(),
   ]);
   if (ctx.ip || ctx.ua) {
     try {
@@ -418,8 +459,17 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
       { label: post.title, href: post.url },
     ],
   };
+  const tc = getThemeChrome(themeSlug);
+  const bodyHtml = R.buildPostBody(post);
+  const metaHtml = metaPayload.items.length
+    ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--muted)">${metaPayload.items.map((m) => `<span>${R.esc(m.label)}：${R.esc(m.value)}</span>`).join("")}</div>`
+    : "";
+  const tagsHtml = (post.tags || []).length
+    ? `<div style="margin-top:32px;display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border);padding-top:24px">${(post.tags || []).map((t) => `<a href="${R.esc(t.url || `/blog/tag/${t.slug}`)}" style="font-size:12px;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:4px 12px;border-radius:9999px">#${R.esc(t.name)}</a>`).join("")}</div>`
+    : "";
+  const shareHtml = R.shareBar(post);
   return {
-    main: R.postPage(post, related, commentsHtml, metaPayload.items),
+    main: tc.postPage({ post, bodyHtml, related, commentsHtml, metaHtml, tagsHtml, shareHtml }),
     head:
       R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
       (await pluginHeadHtml(headContext)),
@@ -429,10 +479,11 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
 async function pageDetail(payload: { slug: string }, ctx: Ctx) {
   const page = await getPublishedPage(payload.slug);
   if (!page) return { notFound: true };
-  const [settings, recent, items] = await Promise.all([
+  const [settings, recent, items, themeSlug] = await Promise.all([
     getSettings(),
     listPosts({ status: "published", limit: 5 }),
     listPostComments(page.id, "page"),
+    getActiveThemeSlug(),
   ]);
   const config = resolveCommentConfig(settings);
   const u = ctx.user as { id?: number; name?: string; email?: string } | undefined;
@@ -466,8 +517,9 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
       { label: page.title, href: page.url },
     ],
   };
+  const tc = getThemeChrome(themeSlug);
   return {
-    main: R.pagePage(page, recent.items, commentsHtml),
+    main: tc.pagePage({ page, bodyHtml: R.buildPostBody(page), recent: recent.items, commentsHtml }),
     head:
       R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
       (await pluginHeadHtml(headContext)),
@@ -478,8 +530,9 @@ async function archives(payload: { year?: number; month?: number }) {
   const year = Number(payload.year) || 0;
   const month = Number(payload.month) || 0;
   const esc = R.esc;
-  const settings = await getSettings();
+  const [settings, themeSlug] = await Promise.all([getSettings(), getActiveThemeSlug()]);
   const siteTitle = settings.siteTitle ?? "";
+  const tc = getThemeChrome(themeSlug);
   if (year && month >= 1 && month <= 12) {
     const { items } = await listPosts({
       status: "published",
@@ -490,7 +543,7 @@ async function archives(payload: { year?: number; month?: number }) {
     });
     return {
       headTitle: `${year} 年 ${month} 月 - ${siteTitle}`,
-      main: R.listPage({
+      main: tc.listPage({
         title: `${year} 年 ${month} 月`,
         sub: `共 ${items.length} 篇`,
         items,
@@ -498,7 +551,7 @@ async function archives(payload: { year?: number; month?: number }) {
         totalPages: 1,
         hrefFor: () => "#",
         showPager: false,
-        extra: `<div class="sk-search-all"><a href="/archives?year=${year}">← ${year} 年</a> &nbsp; <a href="/archives">全部归档</a></div>`,
+        extra: `<div style="margin-bottom:24px"><a href="/archives?year=${year}">← ${year} 年</a> &nbsp; <a href="/archives">全部归档</a></div>`,
       }),
     };
   }
@@ -522,31 +575,31 @@ async function archives(payload: { year?: number; month?: number }) {
         const lis = list
           .map(
             (p) =>
-              `<li><a href="${R.esc(p.url)}">${R.esc(p.title)}</a> <em>${
+              `<li style="padding:4px 0"><a href="${R.esc(p.url)}">${R.esc(p.title)}</a> <em style="color:var(--muted,#9aa3b2);font-size:12px">${
                 p.publishedAt ? new Date(p.publishedAt).getDate() : ""
               } 日</em></li>`,
           )
           .join("");
-        return `<section class="sk-archive-year"><h2>${year} 年 ${m} 月 <span>${list.length}</span></h2><ul>${lis}</ul></section>`;
+        return `<section style="margin-bottom:24px"><h2 style="font-size:18px;font-weight:600;margin-bottom:8px">${year} 年 ${m} 月 <span style="color:var(--muted,#9aa3b2);font-size:14px">${list.length}</span></h2><ul style="list-style:none;padding:0;margin:0">${lis}</ul></section>`;
       })
       .join("");
     return {
       headTitle: `${year} 年 - ${siteTitle}`,
       main:
-        `<section class="sk-section sk-list-page"><h1 class="title_style_01">${year} 年</h1>` +
-        `<div class="sk-list-sub sk-muted">共 ${items.length} 篇</div>` +
-        `<div class="sk-search-all"><a href="/archives">← 返回归档</a></div>${sections}</section>`,
+        `<div><h1 style="font-size:28px;font-weight:700;margin:0 0 8px">${year} 年</h1>` +
+        `<p style="color:var(--muted,#9aa3b2);margin:0 0 24px;font-size:14px">共 ${items.length} 篇</p>` +
+        `<div style="margin-bottom:24px"><a href="/archives">← 返回归档</a></div>${sections}</div>`,
     };
   }
   const groups = await archiveGroups();
   const items = groups
     .map(
       (y) =>
-        `<section class="sk-archive-year"><h2>${y.year} <span>${y.total}</span></h2><ul>` +
+        `<section style="margin-bottom:24px"><h2 style="font-size:20px;font-weight:600;margin-bottom:8px">${y.year} <span style="color:var(--muted,#9aa3b2);font-size:14px">${y.total}</span></h2><ul style="list-style:none;padding:0;margin:0">` +
         y.months
           .map(
             (m) =>
-              `<li><a href="/archives?year=${y.year}&month=${m.month}">${y.year} 年 ${m.month} 月</a> <em>${m.count}</em></li>`,
+              `<li style="padding:4px 0"><a href="/archives?year=${y.year}&month=${m.month}">${y.year} 年 ${m.month} 月</a> <em style="color:var(--muted,#9aa3b2);font-size:12px">${m.count}</em></li>`,
           )
           .join("") +
         `</ul></section>`,
@@ -555,8 +608,8 @@ async function archives(payload: { year?: number; month?: number }) {
   return {
     headTitle: `文章归档 - ${siteTitle}`,
     main:
-      `<section class="sk-section sk-list-page"><h1 class="title_style_01">文章归档</h1>` +
-      `<div class="sk-list-sub sk-muted">${esc("按年月浏览全部文章")}</div>${items}</section>`,
+      `<div><h1 style="font-size:28px;font-weight:700;margin:0 0 8px">文章归档</h1>` +
+      `<p style="color:var(--muted,#9aa3b2);margin:0 0 24px;font-size:14px">${esc("按年月浏览全部文章")}</p>${items}</div>`,
   };
 }
 
@@ -683,6 +736,16 @@ async function robots(ctx: Ctx): Promise<string> {
   return `${payload.lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
 }
 
+async function notFound(_p: unknown, _ctx: Ctx) {
+  const settings = await getNotFoundSettings();
+  let recent: Array<{ url: string; title: string }> = [];
+  if (settings.showRecent) {
+    const result = await listPosts({ status: "published", limit: 6 });
+    recent = (result.items || []).map((p: PostView) => ({ url: p.url, title: p.title }));
+  }
+  return { settings, recent };
+}
+
 export const loaders = {
   chrome,
   home,
@@ -693,6 +756,7 @@ export const loaders = {
   post: postDetail,
   page: pageDetail,
   archives,
+  notFound,
   "admin.session": admin.adminSession,
   "admin.dashboard": admin.adminDashboard,
   "admin.posts": admin.adminPosts,
@@ -711,6 +775,7 @@ export const loaders = {
   "admin.taxonomies": admin.adminTaxonomies,
   "admin.users": admin.adminUsers,
   "admin.settings": admin.adminSettings,
+  "notFoundConfig": admin.notFoundConfig,
 };
 export type LoaderKey = keyof typeof loaders;
 
@@ -746,18 +811,38 @@ export const documents = { sitemap, feed, robots };
 export async function notFoundDocument(ctx: Ctx): Promise<string> {
   const c = await chromeData((ctx && ctx.pathname) || "/");
   const pluginFooter = await pluginFooterHtml();
-  const settings = await getSettings();
-  const title = settings.siteTitle ?? "";
+  const siteSettings = await getSettings();
+  const siteTitle = siteSettings.siteTitle ?? "";
+  const nf = await getNotFoundSettings();
+  const lines = (nf.message || "").split(/\n+/).map(l => l.trim()).filter(Boolean);
+  const msgHtml = lines.map(l => `<p>${R.esc(l)}</p>`).join("");
+  const searchHtml = nf.showSearch
+    ? `<form class="nf-search" action="/search" method="get"><input type="search" name="q" placeholder="搜索文章…" aria-label="搜索文章"><button type="submit"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> 搜索</button></form>`
+    : "";
+  let recentHtml = "";
+  if (nf.showRecent) {
+    const result = await listPosts({ status: "published", limit: 6 });
+    const items = result.items || [];
+    if (items.length > 0) {
+      const lis = items.map((p: PostView) => `<li><a href="${R.esc(p.url)}">${R.esc(p.title)}</a></li>`).join("");
+      recentHtml = `<div class="nf-recent"><h2>最近文章</h2><ul>${lis}</ul></div>`;
+    }
+  }
   const card =
-    '<section class="sk-section sk-list-page"><h1 class="title_style_01">404</h1>' +
-    '<div class="sk-list-sub sk-muted">抱歉，您访问的内容不存在或已被移除。</div>' +
-    '<div class="sk-search-all"><a href="/">← 返回首页</a> &nbsp; <a href="/blog">浏览所有文章</a></div></section>';
+    `<div class="nf-wrap"><div class="nf-box"><span class="nf-icon"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16.24 7.76l-2.12 6.12-6.12 2.12 2.12-6.12z"/></svg></span>` +
+    `<h1 class="nf-title">${R.esc(nf.title)}</h1>` +
+    `<div class="nf-message">${msgHtml}</div>` +
+    searchHtml +
+    `<div class="nf-home"><a href="/"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> 返回首页</a></div>` +
+    recentHtml +
+    `</div></div>`;
+  const nfStyle = `.nf-wrap{display:flex;justify-content:center;padding:4rem 1rem}.nf-box{width:100%;max-width:36rem;text-align:center}.nf-icon{display:inline-flex;align-items:center;justify-content:center;width:4rem;height:4rem;border-radius:9999px;border:1px solid var(--primary-color,var(--accent,#1f8bff));color:var(--primary-color,var(--accent,#1f8bff));margin-bottom:1.5rem}.nf-title{font-size:1.875rem;font-weight:700;color:var(--text-color,var(--text,#1f2937));margin:0}.nf-message{margin-top:.75rem;font-size:.875rem;line-height:1.5;color:var(--muted-color,var(--muted,#6b7280))}.nf-message p{margin:.25rem 0}.nf-search{display:flex;max-width:28rem;margin:1.75rem auto 0;gap:.5rem}.nf-search input{flex:1;height:2.5rem;border-radius:9999px;border:1px solid var(--border-color,var(--border,#e5e7eb));background:var(--surface-color,var(--surface,#fff));color:var(--text-color,var(--text,#1f2937));padding:0 1rem;font-size:.875rem;outline:none}.nf-search button{display:inline-flex;align-items:center;gap:.375rem;height:2.5rem;padding:0 1.25rem;border-radius:9999px;background:var(--primary-color,var(--accent,#1f8bff));color:#fff;font-size:.875rem;font-weight:500;border:none;cursor:pointer}.nf-home{margin-top:1.5rem}.nf-home a{display:inline-flex;align-items:center;gap:.375rem;font-size:.875rem;font-weight:500;color:var(--primary-color,var(--accent,#1f8bff));text-decoration:none}.nf-recent{margin-top:2.5rem;border-radius:1rem;border:1px solid var(--border-color,var(--border,#e5e7eb));background:var(--surface-color,var(--surface,#fff));padding:1.5rem;text-align:left}.nf-recent h2{font-size:.875rem;font-weight:600;margin:0 0 .75rem}.nf-recent ul{list-style:none;padding:0;margin:0}.nf-recent li{margin-bottom:.5rem}.nf-recent a{display:block;font-size:.875rem;color:var(--muted-color,var(--muted,#6b7280));text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}`;
   return (
     `<!DOCTYPE html>\n<html lang="zh-CN"><head><meta charset="UTF-8">` +
     `<meta name="viewport" content="width=device-width, initial-scale=1">` +
-    `<title>404 - ${R.esc(title)}</title>` +
+    `<title>404 - ${R.esc(siteTitle)}</title>` +
     `<meta name="robots" content="noindex">` +
-    `<link rel="stylesheet" href="/public/theme.css">${c.varsHtml}<link rel="icon" href="data:,">` +
+    `<link rel="stylesheet" href="/public/theme.css">${c.varsHtml}<style>${nfStyle}</style><link rel="icon" href="data:,">` +
     `</head><body><div class="th-skyscraper">${c.navHtml}` +
     `<div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">${card}</div></div>` +
     `<aside class="sidebar-column with-separate-line"><div class="sidebar-content">${c.asideHtml}</div></aside>` +

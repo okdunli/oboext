@@ -4,8 +4,8 @@
  * Nothing is imported here — discovery stays cheap and side-effect free so
  * the admin can list disabled plugins too.
  */
-import fs from "node:fs";
-import path from "node:path";
+import fs from "fs";
+import path from "path";
 import type { SettingsSchema } from "./settings-schema.js";
 
 export interface PluginManifest {

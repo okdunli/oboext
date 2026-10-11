@@ -27,6 +27,7 @@ import {
   getThemeMeta,
   getActiveThemeSlug,
   getThemePanel,
+  isPublicThemePorted,
 } from "./themes.js";
 import {
   buildAdminMenuAll,
@@ -178,6 +179,7 @@ export async function adminThemes(_p: unknown, ctx: Ctx) {
     themes: rows.map((t) => ({
       ...t,
       active: t.slug === activeSlug,
+      ported: isPublicThemePorted(t.slug),
       meta: getThemeMeta(t.slug),
     })),
   };
@@ -218,4 +220,11 @@ export async function adminSettings(_p: unknown, ctx: Ctx) {
   const user = requireUser(ctx);
   if (user.role !== "admin") throw new ServiceError("权限不足", 403);
   return getSettings();
+}
+
+export async function notFoundConfig(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (user.role !== "admin") throw new ServiceError("权限不足", 403);
+  const { getNotFoundSettings } = await import("./not-found-config.js");
+  return getNotFoundSettings();
 }

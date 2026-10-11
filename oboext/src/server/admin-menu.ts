@@ -83,6 +83,7 @@ const CORE_GROUPS: MenuGroup[] = [
     superOnly: true,
     children: [
       { href: "/admin/settings", label: "站点设置", glyph: "settings" },
+      { href: "/admin/notfound", label: "404 页面", glyph: "file-question" },
       { href: "/admin/menu-settings", label: "菜单与首页", glyph: "panel-left", locked: true },
       { href: "/admin/users", label: "用户", glyph: "users" },
     ],
@@ -199,7 +200,8 @@ async function upsertOption(key: string, value: unknown): Promise<void> {
 }
 
 export type NavItem =
-  | { kind: "gstart"; label: string }
+  | { kind: "dash"; href: string; label: string; glyph: string; active: boolean }
+  | { kind: "gstart"; id: string; label: string; glyph: string; active: boolean }
   | { kind: "link"; href: string; label: string; glyph: string; active: boolean }
   | { kind: "gend" };
 
@@ -223,19 +225,23 @@ export function shellNav(
   if (!hidden.has(ADMIN_HOME_DEFAULT)) {
     const href =
       prefs.homePath === ADMIN_HOME_DEFAULT ? ADMIN_HOME_DEFAULT : "/admin/dashboard";
-    out.push({ kind: "gstart", label: "概览" });
     out.push({
-      kind: "link",
+      kind: "dash",
       href,
       label: DASHBOARD_LEAF.label,
       glyph: DASHBOARD_LEAF.glyph || "layout-dashboard",
       active: pathname === href,
     });
-    out.push({ kind: "gend" });
   }
 
   for (const g of filterGroupsForShell(role, prefs.hiddenHrefs)) {
-    out.push({ kind: "gstart", label: g.label });
+    out.push({
+      kind: "gstart",
+      id: g.id,
+      label: g.label,
+      glyph: g.glyph || "",
+      active: g.children.some(isActive),
+    });
     for (const l of g.children) {
       out.push({
         kind: "link",
@@ -280,13 +286,38 @@ export function shellNavHtml(
   prefs: MenuPrefs,
 ): string {
   const items = shellNav(role, pathname, prefs);
+  const caret =
+    '<span class="adm-nav-caret adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-down.svg)"></span>';
   let html = "";
   for (const n of items) {
-    if (n.kind === "gstart") {
+    if (n.kind === "dash") {
       html +=
-        '<div class="adm-nav-group"><div class="adm-nav-title">' +
+        '<a class="adm-nav-dash' +
+        (n.active ? " is-active" : "") +
+        '" href="' +
+        escAttr(n.href) +
+        '">' +
+        (n.glyph ? admIcon(n.glyph, 17) : "") +
+        "<span>" +
         escText(n.label) +
-        "</div>";
+        "</span></a>";
+    } else if (n.kind === "gstart") {
+      html +=
+        '<div class="adm-nav-group" data-nav-group="' +
+        escAttr(n.id) +
+        '"><button type="button" class="adm-nav-ghdr' +
+        (n.active ? " is-group-active" : "") +
+        '" aria-expanded="' +
+        (n.active ? "true" : "false") +
+        '">' +
+        (n.glyph ? admIcon(n.glyph, 15) : "") +
+        '<span class="adm-nav-glabel">' +
+        escText(n.label) +
+        "</span>" +
+        caret +
+        '</button><div class="adm-nav-leaves"' +
+        (n.active ? "" : " hidden") +
+        ">";
     } else if (n.kind === "link") {
       html +=
         '<a' +
@@ -294,12 +325,12 @@ export function shellNavHtml(
         ' href="' +
         escAttr(n.href) +
         '">' +
-        (n.glyph ? admIcon(n.glyph, 17) : "") +
+        (n.glyph ? admIcon(n.glyph, 15) : "") +
         "<span>" +
         escText(n.label) +
         "</span></a>";
     } else {
-      html += "</div>";
+      html += "</div></div>";
     }
   }
   return html;

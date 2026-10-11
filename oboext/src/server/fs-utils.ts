@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs from "fs";
 
 export function rmSyncRetry(target: string, attempts = 8): void {
   let lastErr: unknown;

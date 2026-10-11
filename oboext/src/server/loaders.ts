@@ -32,7 +32,7 @@ import * as R from "./render.js";
 import * as admin from "./admin-loaders.js";
 import { getMenuByLocation } from "./menus.js";
 import { getAreaWidgets } from "./widgets.js";
-import { getActiveThemeSlug, getActiveThemeRenderConfig, getThemeManifest } from "./themes.js";
+import { getActiveThemeSlug, getActiveThemeRenderConfig, getActiveThemeSettings, getThemeManifest } from "./themes.js";
 import { themeToCss } from "./theme-tokens.js";
 import { skyscraperBridgeRoot, skyscraperBridgeDark } from "./theme-bridge.js";
 import { HOOKS, applyFilters } from "./hooks.js";
@@ -224,6 +224,40 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
   };
 }
 
+function bmClamp(v: unknown, dft: number, min: number, max: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return dft;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+function bmStrOr(v: unknown, dft: string): string {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s || dft;
+}
+const BM_RANK_KEYS = ["most_comments", "most_likes", "most_reads"] as const;
+type BmRankKey = (typeof BM_RANK_KEYS)[number];
+function bmRankOrderFrom(v: unknown): BmRankKey[] {
+  const SHORT: Record<string, BmRankKey> = { comments: "most_comments", likes: "most_likes", reads: "most_reads" };
+  const parsed = String(v ?? "").split(",").map((s) => SHORT[s.trim()]).filter((k): k is BmRankKey => !!k);
+  const order = Array.from(new Set(parsed));
+  for (const k of BM_RANK_KEYS) if (!order.includes(k)) order.push(k);
+  return order;
+}
+function bmRankDefaultFrom(v: unknown, fallback: BmRankKey): BmRankKey {
+  const key = `most_${String(v ?? "").trim()}`;
+  return (BM_RANK_KEYS as readonly string[]).includes(key) ? (key as BmRankKey) : fallback;
+}
+function bmToRankPost(p: any): { id: number; url: string; title: string; thumbnail: string | null; likes: number; comments: number; views: number } {
+  return {
+    id: p.id,
+    url: p.url,
+    title: p.title,
+    thumbnail: p.featuredImage ?? null,
+    likes: p.likes ?? 0,
+    comments: p.commentsCount ?? 0,
+    views: p.views ?? 0,
+  };
+}
+
 async function home() {
   const [all, popular, random, catRows, cfg, settings, themeSlug] = await Promise.all([
     listPosts({ status: "published", limit: 12 }),
@@ -237,6 +271,74 @@ async function home() {
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const items = all.items;
   const tc = getThemeChrome(themeSlug);
+
+  if (themeSlug !== "bluemix") {
+    return {
+      main: tc.home({
+        hero: items.slice(0, 4),
+        latest: items.slice(4, 12),
+        liked: popular.items,
+        random,
+        cats,
+        settings,
+      }),
+    };
+  }
+
+  const ts = await getActiveThemeSettings();
+  const blogIndex = blogIndexUrlFor(cfg);
+  const showHero = ts.showHero !== false;
+  const recentCount = bmClamp(ts.homeRecentCount, 8, 1, 24);
+  const catCount = bmClamp(ts.homeCategoryCount, 5, 1, 10);
+  const bannerMax = bmClamp(ts.bannerMaxCount, 5, 1, 10);
+  const mode = ts.homeCategoryMode === "custom" || ts.homeCategoryMode === "off" ? (ts.homeCategoryMode as string) : "auto";
+  const rows: { category: any; title: string; icon: string | null }[] = [];
+  if (mode === "auto") {
+    for (const c of cats) rows.push({ category: c, title: c.name, icon: (c as any).icon ?? null });
+  } else if (mode === "custom" && Array.isArray(ts.homeCategories)) {
+    const seen = new Set<string>();
+    for (const r of ts.homeCategories as { slug?: string; title?: string; icon?: string | null }[]) {
+      const slug = String(r?.slug ?? "");
+      if (!slug || seen.has(slug)) continue;
+      const category = cats.find((c) => c.slug === slug);
+      if (!category) continue;
+      seen.add(slug);
+      rows.push({ category, title: String(r?.title ?? "").trim() || category.name, icon: typeof r?.icon === "string" && r.icon.trim() ? r.icon.trim() : null });
+    }
+  }
+  const [recent, ...sectionLists] = await Promise.all([
+    listPosts({ status: "published", limit: Math.max(recentCount, bannerMax, 8), context: "home" }),
+    ...rows.map((r) => listPosts({ status: "published", categorySlug: r.category.slug, limit: catCount })),
+  ]);
+  const sections = rows
+    .map((row, i) => ({ row, posts: (sectionLists[i]?.items ?? []) as any[] }))
+    .filter((s) => s.posts.length > 0);
+
+  const showRankings = ts.showRankings !== false;
+  let rankings: { most_comments: any[]; most_likes: any[]; most_reads: any[] } | null = null;
+  if (showRankings) {
+    const [rc, rl, rv] = await Promise.all([
+      listPosts({ status: "published", orderBy: "comments", limit: 3, pinned: false }),
+      listPosts({ status: "published", orderBy: "likes", limit: 3, pinned: false }),
+      listPosts({ status: "published", orderBy: "views", limit: 3, pinned: false }),
+    ]);
+    rankings = {
+      most_comments: rc.items.map(bmToRankPost),
+      most_likes: rl.items.map(bmToRankPost),
+      most_reads: rv.items.map(bmToRankPost),
+    };
+  }
+  const rankOrder = bmRankOrderFrom(ts.rankOrder);
+  const rankTabs = {
+    labels: {
+      most_comments: bmStrOr(ts.rankLabelComments, "热评文章"),
+      most_likes: bmStrOr(ts.rankLabelLikes, "大家喜欢"),
+      most_reads: bmStrOr(ts.rankLabelReads, "阅读最多"),
+    },
+    order: rankOrder,
+    defaultTab: bmRankDefaultFrom(ts.rankOrder, rankOrder[0]),
+  };
+
   return {
     main: tc.home({
       hero: items.slice(0, 4),
@@ -245,6 +347,15 @@ async function home() {
       random,
       cats,
       settings,
+      recent: recent.items as any[],
+      sections: sections as any,
+      rankings,
+      rankTabs,
+      themeSettings: ts,
+      blogIndex,
+      showHero,
+      bannerMax,
+      recentCount,
     }),
   };
 }
@@ -410,11 +521,13 @@ async function search(payload: { q?: string; page?: number; all?: boolean }) {
 async function postDetail(payload: { slug: string }, ctx: Ctx) {
   const post = await getPost(payload.slug);
   if (!post) return { notFound: true };
-  const [related, settings, items, themeSlug] = await Promise.all([
+  const [related, settings, items, themeSlug, popular, random] = await Promise.all([
     relatedPosts(post, 4),
     getSettings(),
     listPostComments(post.id, "post"),
     getActiveThemeSlug(),
+    popularPosts(4),
+    randomPosts(12),
   ]);
   if (ctx.ip || ctx.ua) {
     try {
@@ -469,7 +582,7 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     : "";
   const shareHtml = R.shareBar(post);
   return {
-    main: tc.postPage({ post, bodyHtml, related, commentsHtml, metaHtml, tagsHtml, shareHtml }),
+    main: tc.postPage({ post, bodyHtml, related, popular, random, commentsHtml, metaHtml, tagsHtml, shareHtml }),
     head:
       R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
       (await pluginHeadHtml(headContext)),

@@ -86,14 +86,14 @@
 
     const rp = real.pathname;
 
-    // ------------------------------------------------- trailing slash
-    // rosezm routes by exact pathname; "/admin/" matches no route while
-    // "/admin" maps to admin/index.rose. 301-normalize every non-root trailing
-    // slash so all "/x/" hit the same page as "/x" (URL/query preserved).
+    // ------------------------------------- trailing-slash normalisation
+    // rosezm's router 404s on "/admin/" (and any "/x/" form) while the
+    // non-trailing variant works. Normalise to the canonical form — this
+    // matches the original app (which never used trailing slashes)
+    // and satisfies the project's hard constraint "/admin/ must 301 -> /admin".
+    // Root "/" is exempt.
     if (rp.length > 1 && rp.endsWith("/")) {
-      const clean = new URL(rp.slice(0, -1), real.origin);
-      clean.search = real.search;
-      return Response.redirect(clean, 301);
+      return Response.redirect(new URL(rp.replace(/\/+$/, ""), real.origin), 301);
     }
 
     // ------------------------------------------------- /admin login wall
@@ -134,6 +134,15 @@
         });
       }
       return reg.uploads.serve(rp, request.method);
+    }
+
+    // ------------------------------------------- theme static assets
+    // /theme-assets/<slug>/<path> serves themes/<slug>/assets/<path> from disk
+    // (rankings medals, fonts, vendor scripts). Mirrors the original
+    // /theme-assets route. GET/HEAD only, traversal-protected.
+    if (rp.indexOf("/theme-assets/") === 0) {
+      const rel = rp.slice("/theme-assets/".length);
+      return reg.themeAssets.serve(rel, request.method);
     }
 
     // ------------------------------------------- plugin HTTP gateway

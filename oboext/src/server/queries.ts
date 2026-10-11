@@ -4,7 +4,7 @@
  * baked. Sticky ordering merges plugin ids (posts.pinned hook) with the
  * native posts.pinned flag, exactly as posts.ts does.
  */
-import { createHash } from "node:crypto";
+import { createHash } from "crypto";
 import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import {

@@ -1,7 +1,7 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import zlib from "node:zlib";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import zlib from "zlib";
 import { ServiceError } from "./admin.js";
 import { rmSyncRetry } from "./fs-utils.js";
 

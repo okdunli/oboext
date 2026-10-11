@@ -799,6 +799,20 @@ export async function deleteCategory(user: SessionUser, id: number) {
   return { id };
 }
 
+export async function reorderCategories(
+  user: SessionUser,
+  items: Array<{ id: number; parentId: number | null; order: number }>,
+) {
+  requireCap(user, "taxonomy:manage");
+  for (const item of items) {
+    await db
+      .update(categories)
+      .set({ parentId: item.parentId, order: item.order })
+      .where(eq(categories.id, item.id));
+  }
+  return { ok: true };
+}
+
 export async function createTag(user: SessionUser, input: { name: string; slug?: string }) {
   requireCap(user, "taxonomy:manage");
   const name = (input.name || "").trim();
@@ -855,6 +869,14 @@ const SETTINGS_FIELDS = {
 
 export async function updateSettings(user: SessionUser, input: Record<string, unknown>) {
   requireCap(user, "settings:manage");
+  if (typeof input.activeThemeSlug === "string") {
+    const { isPublicThemePorted, getThemeManifest } = await import("./themes.js");
+    const slug = input.activeThemeSlug.trim();
+    if (!getThemeManifest(slug)) throw new ServiceError("主题不存在", 422);
+    if (!isPublicThemePorted(slug)) {
+      throw new ServiceError("该主题的前台模板尚未适配，暂不能启用", 422);
+    }
+  }
   await db.insert(siteSettings).values({ id: 1 }).onConflictDoNothing();
   const set: Record<string, unknown> = { updatedAt: new Date() };
   for (const k of SETTINGS_FIELDS.str) if (k in input && typeof input[k] === "string") set[k] = input[k];

@@ -3,7 +3,7 @@
  * Supports Gravatar and its CN mirrors; numeric @qq.com mailboxes resolve
  * straight to qlogo. Uses node:crypto — never import from client code.
  */
-import { createHash } from "node:crypto";
+import { createHash } from "crypto";
 
 export type AvatarSource =
   | "gravatar"

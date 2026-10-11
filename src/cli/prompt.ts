@@ -34,7 +34,7 @@ the smallest thing that works - the compiler decides what ships.
 <h1>Posts</h1>
 <p>Total: {total}</p>
 <button on:click={() => $setState('count', count() + 1)}>+1</button>
-<form method="POST"><button formaction="?__action=like">Like</button></form>
+<form method="POST"><input type="hidden" name="__action" value="like"><button type="submit">Like</button></form>
 \`\`\`
 
 Rules the compiler enforces (breaking one fails the build):
@@ -43,6 +43,10 @@ Rules the compiler enforces (breaking one fails the build):
   type arguments ($state<Post[]>([])) are all erased from the shipped bundles.
 - $state / $data declarations are top-level statements. The declared name IS the
   getter: write count() in the template and the script, never bare count.
+- A route param (pages/blog/[id].rose) is read as state too: declare it
+  (\`let id = $state('1')\`) and read id() - the server overwrites the default
+  with the URL's value, and export const params = { id: [...] } bakes those
+  values at build time.
 - $data() is banned in components (src/components/**) - a component renders
   synchronously inside its parent. Fetch in the page or the middleware and pass
   the value down as a prop.
@@ -70,6 +74,9 @@ Rules the compiler enforces (breaking one fails the build):
   (method="POST", no JS needed - progressive enhancement) or from any event
   (on:click={like} - one POST, in-place adopt). Its return value is an
   incremental patch: $append(row) / $prepend(row) / $merge({...}).
+- A form selects its action by the __action FIELD: name the function
+  \`action\` (the default) or add <input type="hidden" name="__action"
+  value="like">. The server reads the field, not the URL.
 - Business failures: throw new ActionError('message', 422, 'field'). It lands
   in ordinary state - $actionError() reads it back, a {#boundary} contains it.
 - beforeAction(name, form) is the per-page guard that vetoes an action.

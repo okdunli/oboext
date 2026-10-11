@@ -93,3 +93,9 @@ declare function hasState(key: string): boolean;
 
 /** The best dictionary for an Accept-Language header (null when none matches). */
 declare function bestLocale(header: string | null | undefined): string | null;
+
+// Send the visitor somewhere else, the way a redirect does.
+declare function redirect(path: string, status?: 301 | 302 | 303 | 307 | 308): never;
+
+// Answer 404 with the app's own 404 route (`pages/404.rose`) and a real 404 status - call it from a page's `$data` body when the slug resolves.
+declare function notFound(): never;

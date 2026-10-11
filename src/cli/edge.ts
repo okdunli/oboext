@@ -40,29 +40,72 @@ type ServerModule = {
   setQuery(query: Record<string, string>): void;
 };
 
+// CSRF: the edge twin of the Node server's guard.
+function crossSiteWrite(request: Request): Response | null {
+  const m = request.method;
+  if (m !== 'POST' && m !== 'PUT' && m !== 'PATCH' && m !== 'DELETE') return null;
+  const origin = request.headers.get('origin');
+  if (origin) {
+    let host: string;
+    try {
+      host = new URL(origin).host;
+    } catch {
+      return new Response('Cross-site request blocked (unparsable Origin header)', { status: 403 });
+    }
+    return host === new URL(request.url).host
+      ? null
+      : new Response('Cross-site request blocked (Origin does not match Host)', { status: 403 });
+  }
+  const site = request.headers.get('sec-fetch-site');
+  if (site && site !== 'same-origin' && site !== 'same-site' && site !== 'none') {
+    return new Response(`Cross-site request blocked (sec-fetch-site: ${site})`, { status: 403 });
+  }
+  return null;
+}
+
 /**
  * Create a fetch handler from a built rosefd project.
  * @param outDir directory containing server.js and client.js
+ * @param preloaded for runtimes with NO filesystem (Cloudflare Workers /
+ *   Pages): the caller statically imports the server bundle (so the deploy
+ *   compiler bundles it in) and fetches the site's own static assets once
+ *   per isolate. Anything provided here is used verbatim; anything absent
+ *   falls back to reading it from outDir, exactly as before.
  */
-export async function createEdgeHandler(outDir: string): Promise<(request: Request) => Promise<Response>> {
-  const mod: ServerModule = await import(pathToFileURL(join(outDir, 'server.js')).href);
+export async function createEdgeHandler(
+  outDir: string,
+  preloaded?: { server?: ServerModule; client?: string; styles?: string; broken?: string[] },
+): Promise<(request: Request) => Promise<Response>> {
+  const mod: ServerModule = preloaded?.server ?? await import(pathToFileURL(join(outDir, 'server.js')).href);
   let client: string | null = null;
   let styles = '';
-  try {
-    client = await (await import('fs/promises')).readFile(join(outDir, 'client.js'), 'utf-8');
-  } catch {
-    client = null;
+  if (preloaded && 'client' in preloaded) {
+    client = preloaded.client ?? null;
+  } else {
+    try {
+      client = await (await import('fs/promises')).readFile(join(outDir, 'client.js'), 'utf-8');
+    } catch {
+      client = null;
+    }
   }
-  try {
-    styles = await (await import('fs/promises')).readFile(join(outDir, 'styles.css'), 'utf-8');
-  } catch {
-    styles = '';
+  if (preloaded && 'styles' in preloaded) {
+    styles = preloaded.styles ?? '';
+  } else {
+    try {
+      styles = await (await import('fs/promises')).readFile(join(outDir, 'styles.css'), 'utf-8');
+    } catch {
+      styles = '';
+    }
   }
   let broken = new Set<string>();
-  try {
-    broken = new Set(JSON.parse(await (await import('fs/promises')).readFile(join(outDir, 'broken.json'), 'utf-8')));
-  } catch {
-    broken = new Set();
+  if (preloaded && 'broken' in preloaded) {
+    broken = new Set(preloaded.broken);
+  } else {
+    try {
+      broken = new Set(JSON.parse(await (await import('fs/promises')).readFile(join(outDir, 'broken.json'), 'utf-8')));
+    } catch {
+      broken = new Set();
+    }
   }
 
   const pageHeaders = (pathname: string, nonce = ''): Record<string, string> => {
@@ -74,6 +117,8 @@ export async function createEdgeHandler(outDir: string): Promise<(request: Reque
   };
 
   return async function handle(request: Request): Promise<Response> {
+    const refused = crossSiteWrite(request);
+    if (refused) return refused;
     const { pathname, searchParams } = new URL(request.url);
     mod.setQuery?.(Object.fromEntries(searchParams));
     const hookCtx = mod.hasRequestHooks || mod.hasResponseHooks

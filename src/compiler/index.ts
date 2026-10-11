@@ -68,6 +68,14 @@ export interface CompileResult {
    * run on, so `buffer = true` routes are never prerendered.
    */
   buffer?: boolean;
+  /**
+   * The script calls `redirect()` or `notFound()` (the control-flow pair).
+   * Both are thrown signals whose answer is the RESPONSE's status - a 30x
+   * with a Location, or a real 404 - and a streamed response has committed
+   * its status before the render runs. Such a route is therefore buffered
+   * by construction, exactly like `buffer = true`, and never prerendered.
+   */
+  controlSignal?: boolean;
   /** the component exports `prefetch = 'off' | 'hover' | 'viewport' | 'all'` (app-global link-prefetch strategy) */
   prefetch?: string;
  /** The component exports `vitals = true` (app-global web-vitals reporting) */
@@ -387,6 +395,14 @@ export interface RequestHookContext {
   state: Record<string, unknown>;
 }
 
+// The cross-machine store bridge, handed to a plugin's `onServe`.
+export interface StoreBridge {
+  /** Install the sender: every $store write in this worker calls it. Pass null to detach. */
+  install(send: ((name: string, value: unknown) => void) | null): void;
+  /** Apply a patch that arrived from another process or machine. */
+  deliver(name: string, value: unknown): void;
+}
+
 // A plugin, in two halves.
 export interface Plugin {
   name: string;
@@ -395,8 +411,8 @@ export interface Plugin {
   onRequest?(ctx: RequestHookContext): Response | void | Promise<Response | void>;
   /** After the response exists, before it is sent. Return a Response to replace it. */
   onResponse?(ctx: RequestHookContext, res: Response): Response | void | Promise<Response | void>;
-  /** Worker start: open a connection pool, warm a cache. */
-  onServe?(meta: { port: number; workers: number }): void | Promise<void>;
+  /** Worker start: open a connection pool, warm a cache, install a cross-machine store driver. */
+  onServe?(meta: { port: number; workers: number; store: StoreBridge }): void | Promise<void>;
   /** Worker drain, before exit: close the pool. */
   onShutdown?(): void | Promise<void>;
 }
@@ -596,8 +612,9 @@ function scanSlotDecls(filePath: string): Array<{ name: string; props: string[] 
   } catch {
     return [];
   }
-  const noBlocks = src.replace(STYLE_RE, '');
-  const tpl = noBlocks.match(TEMPLATE_RE)?.[1] ?? noBlocks.replace(HEAD_RE, '').replace(COMPONENT_RE, '').trim();
+  const noScript = src.replace(COMPONENT_RE, '');
+  const noBlocks = noScript.replace(STYLE_RE, '');
+  const tpl = noBlocks.match(TEMPLATE_RE)?.[1] ?? noBlocks.replace(HEAD_RE, '').trim();
   const out: Array<{ name: string; props: string[] }> = [];
   for (const m of tpl.matchAll(/<slot\s+([^>]*?)\/?>/g)) {
     const name = /\bname\s*=\s*["'](\w+)["']/.exec(m[1]);
@@ -677,6 +694,12 @@ export async function compileComponent(filePath: string, publicDir: string, scop
     const usesContext = /getContext\s*\(/.test(rawScript);
     const hasPrerender = !usesContext && /(?:^|\n)\s*export\s+(?:const|let|var)\s+prerender\s*=\s*true\b/.test(rawScript);
     const hoisted = hoistImports(resolveRoseImports(rawScript, filePath, registry).script);
+    const ownRuntimeImports = new Set(
+      [...rawScript.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\/runtime\.js['"]/g)]
+        .flatMap((m) => m[1].split(',').map((s) => s.trim().split(/\s+as\s+/)[0]).filter(Boolean))
+    );
+    const helpers = API_RUNTIME_HELPERS.filter((n) => !ownRuntimeImports.has(n));
+    const runtimeImport = helpers.length > 0 ? `import { ${helpers.join(', ')} } from './runtime.js';\n` : '';
     return {
       ssr: '',
       client: '',
@@ -685,19 +708,20 @@ export async function compileComponent(filePath: string, publicDir: string, scop
       guardName: null,
       style: '',
       hasParams: false,
-      api: `import { getContext, $query } from './runtime.js';\n${rewriteRoseImports(`${hoisted.imports}\n${hoisted.rest}`, 'ssr').trim()}`,
+      api: `${runtimeImport}${rewriteRoseImports(`${hoisted.imports}\n${hoisted.rest}`, 'ssr').trim()}`,
       apiMethods,
       hasPrerender,
       usesContext,
     };
   }
 
-  const sourceNoHead = source.replace(HEAD_RE, '');
+  const sourceNoScript = source.replace(COMPONENT_RE, '');
+  const sourceNoHead = sourceNoScript.replace(HEAD_RE, '');
   const styleMatch = sourceNoHead.match(STYLE_RE);
   const scopedStyle = styleMatch?.[1] ? scopeCss(styleMatch[1], scopeKey) : '';
   const sourceNoBlocks = sourceNoHead.replace(STYLE_RE, '');
 
-  const scriptMatch = sourceNoBlocks.match(COMPONENT_RE);
+  const scriptMatch = source.match(COMPONENT_RE);
   const roseResolved = resolveRoseImports(scriptMatch?.[1] ?? '', filePath, registry);
   const rawScript = roseResolved.script;
   const roseImports = roseResolved.imports;
@@ -763,6 +787,7 @@ export async function compileComponent(filePath: string, publicDir: string, scop
   const csr: boolean | undefined = csrMatch ? csrMatch[1] !== 'false' : undefined;
   const bufferMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+buffer\s*=\s*(true|false)\s*;?/);
   const buffer: boolean | undefined = bufferMatch ? bufferMatch[1] !== 'false' : undefined;
+  const controlSignal = /\b(?:redirect|notFound)\s*\(/.test(rawScript) || undefined;
   if (csr === false) {
     const dead = /\son:[a-z]+\s*=/.exec(source) ?? /\b(?:onMount|onCleanup|refresh)\s*\(/.exec(rawScript);
     if (dead) {
@@ -859,7 +884,7 @@ export async function compileComponent(filePath: string, publicDir: string, scop
   }
 
   const templateMatch = sourceNoBlocks.match(TEMPLATE_RE);
-  const headContent = source.match(HEAD_RE)?.[1] ?? '';
+  const headContent = sourceNoScript.match(HEAD_RE)?.[1] ?? '';
   const rawTemplate = templateMatch
     ? templateMatch[1]
     : sourceNoBlocks.replace(COMPONENT_RE, '').trim();
@@ -911,10 +936,6 @@ if (!__had_${d.name}) set${capitalize(d.name)}(await $data(${fn}));`;
   const wired = wireEventBindings(templateCalled, actionNames);
   const eventBindings = wired.bindings;
 
-  const ssrTemplate = wired.template
-    .replace(SLOT_NAMED_RE, (_w, attrs) => `{__slot(${encodeSlotCall(attrs)})}`)
-    .replace(SLOT_RE, '{__slot__}');
-
   const stateKeys = decls.map((d) => d.name);
 
   const comps = new Map(roseImports.map((r) => {
@@ -922,6 +943,10 @@ if (!__had_${d.name}) set${capitalize(d.name)}(await $data(${fn}));`;
     const hit = registry.get(abs)!;
     return [r.name, { index: hit.index, slots: hit.slots }] as const;
   }));
+  const ssrTemplate = rewriteQuotedExprAttrs(wired.template
+    .replace(SLOT_NAMED_RE, (_w, attrs) => `{__slot(${encodeSlotCall(attrs)})}`)
+    .replace(SLOT_RE, '{__slot__}'), comps);
+  assertKnownDirectives(ssrTemplate, filePath);
   const compiledTemplate = compileTemplate(ssrTemplate, 'h', '__c', null, 0, true, comps);
   const compiledHead = headContent.trim() ? compileHead(headContent) : '';
   const hasNamedSlots = /<slot\s+[^>]*\bname\s*=/.test(template);
@@ -946,6 +971,7 @@ if (!__had_${d.name}) set${capitalize(d.name)}(await $data(${fn}));`;
     revalidate,
     csr,
     buffer,
+    controlSignal,
     prefetch,
     vitals,
     bundle,
@@ -1385,6 +1411,147 @@ function compileHead(head: string): string {
   return out;
 }
 
+/**
+ * - "errors an agent can fix" - closed on a real
+ * failure from the field. A template directive rosefd does not implement
+ * used to reach esbuild as generated code and die THERE: the oboext port
+ * wrote `{:else}` (the branch syntax every other template language has and
+ * rosefd deliberately does not - `prompt.ts` says so in one line) and got
+ * `dist/.build/comp-12.ssr.js:87: ERROR: Unexpected ":"` - a file the author
+ * never wrote, a construct never named, a fix never suggested. An unknown
+ * directive is now a build error at the .rose file, with the line, the
+ * construct and the rosefd shape that replaces it.
+ *
+ * The known set is exactly what findBlock matches: `{#if}`, `{#each}`,
+ * `{#boundary}` and their closers. There is no `{:...}` directive at all.
+ * The same gate catches the two shapes findBlock cannot match at all - an
+ * `{#each}` with no `as <name>` and an opener with no closer - which used to
+ * reach esbuild the same way (`Unexpected "#each"`, `Unexpected "#if"`).
+ * Adversarial probing found all three in one afternoon; a template compiler
+ * that emits broken code silently is the worst failure mode it has.
+ */
+const KNOWN_CLOSERS = new Set(['if', 'each', 'boundary']);
+function assertKnownDirectives(template: string, filePath: string): void {
+  const rawRanges: Array<[number, number]> = [];
+  const RAW_OPEN = /<(style|script|noscript)\b[^>]*>/gi;
+  let raw: RegExpExecArray | null;
+  while ((raw = RAW_OPEN.exec(template))) {
+    const tag = raw[1].toLowerCase();
+    const closeAt = template.toLowerCase().indexOf(`</${tag}`, raw.index + raw[0].length);
+    const gt = closeAt < 0 ? -1 : template.indexOf('>', closeAt);
+    const end = gt < 0 ? template.length : gt + 1;
+    rawRanges.push([raw.index, end]);
+    RAW_OPEN.lastIndex = end;
+  }
+  const COMMENT_RE = /<!--[\s\S]*?-->/g;
+  let note: RegExpExecArray | null;
+  while ((note = COMMENT_RE.exec(template))) rawRanges.push([note.index, note.index + note[0].length]);
+  rawRanges.sort((a, b) => a[0] - b[0]);
+  const inRaw = (idx: number): boolean => rawRanges.some(([s, e]) => idx >= s && idx < e);
+  const DIRECTIVE_RE = /\{([:/])(\w+)\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = DIRECTIVE_RE.exec(template))) {
+    if (inRaw(m.index)) continue;
+    const [, sigil, word] = m;
+    if (sigil === '/' && KNOWN_CLOSERS.has(word)) continue;
+    if (sigil === '/') {
+      throw new RoseError(
+        'E-TEMPLATE',
+        `${filePath}: {/${word}} does not close anything`,
+        { file: filePath, line: lineAt(template, m), hint: 'the closers are {/if}, {/each} and {/boundary} - one per block you opened' },
+      );
+    }
+    if (word === 'else') {
+      throw new RoseError(
+        'E-TEMPLATE',
+        `${filePath}: {:else} is not rosefd syntax - rosefd has no else branch`,
+        { file: filePath, line: lineAt(template, m), hint: 'nest a second {#if}: {#if cond}A{/if}{#if !cond}B{/if} - the negation of the first condition IS the else' },
+      );
+    }
+    throw new RoseError(
+      'E-TEMPLATE',
+      `${filePath}: {:${word}} is not a rosefd directive`,
+      { file: filePath, line: lineAt(template, m), hint: "rosefd templates support {#if}, {#each} and {#boundary} - and there is no {:else}: nest a second {#if} with the negated condition" },
+    );
+  }
+  const OPENER_RE = /\{#(if|each|boundary)\b([^}]*)\}/g;
+  while ((m = OPENER_RE.exec(template))) {
+    if (inRaw(m.index)) continue;
+    const [, kind, head] = m;
+    if (kind === 'each' && !/\bas\s+(\w+)\s*$/.test(head)) {
+      throw new RoseError(
+        'E-TEMPLATE',
+        `${filePath}: {#each ${head.trim()}} is missing its item name`,
+        { file: filePath, line: lineAt(template, m), hint: 'write {#each items() as item} - the name after `as` is what the block body reads (item.id, item.name)' },
+      );
+    }
+    const OPEN_RE = new RegExp(`\\{#${kind}\\b[^}]*\\}`, 'g');
+    const CLOSE_RE = new RegExp(`\\{/${kind}\\}`, 'g');
+    let depth = 1;
+    let i = m.index + m[0].length;
+    for (;;) {
+      OPEN_RE.lastIndex = i;
+      CLOSE_RE.lastIndex = i;
+      const nextOpen = OPEN_RE.exec(template);
+      const nextClose = CLOSE_RE.exec(template);
+      if (!nextClose) break;
+      if (nextOpen && nextOpen.index < nextClose.index) {
+        i = nextOpen.index + nextOpen[0].length;
+        continue;
+      }
+      i = nextClose.index + nextClose[0].length;
+      if (--depth === 0) break;
+    }
+    if (depth !== 0) {
+      throw new RoseError(
+        'E-TEMPLATE',
+        `${filePath}: unclosed {#${kind}} - every block needs its {/${kind}}`,
+        { file: filePath, line: lineAt(template, m), hint: `add the matching {/${kind}} (an inner {#if} or {#each} closes first, deepest first)` },
+      );
+    }
+  }
+}
+
+/**
+ * A QUOTED attribute whose value carries an expression - `class="{x}"`,
+ * `style="color:{c};"`, `href="/p{id}"` - used to be compiled as if the value
+ * were body text: the reactive markers landed INSIDE the attribute
+ * (`class="<!--⟦m:0⟧-->yes<!--⟦/m:0⟧-->"`), a class list no selector matches,
+ * and no wire pass can repair it (markers inside an attribute value are not
+ * nodes). The real CMS writes `style="background:{p.enabled ? ...};"` on
+ * every row, so this was not exotic. The unquoted form (`class={x}`) has
+ * always compiled correctly through attrMark(); this pass rewrites the quoted
+ * form into a single equivalent expression - `class={('yes')}`,
+ * `style={('background:' + (p.enabled ? …) + ';')}` - so there is ONE
+ * attribute path in the compiler instead of two, one of them broken.
+ *
+ * Component tags keep their own attribute parser (a quoted value is a string
+ * prop there, by design), and a value holding a template literal is left
+ * alone: rewriting it would need the literal-aware scanner the value does not
+ * have, and the old path was no better.
+ */
+function rewriteQuotedExprAttrs(template: string, comps: Map<string, unknown>): string {
+  const TAG_RE = /<([a-zA-Z][\w-]*)((?:\s+[\w:-]+(?:=(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*(\/?)>/g;
+  return template.replace(TAG_RE, (tag: string, name: string, attrs: string, selfClose: string) => {
+    if (comps.has(name) || !/\{/.test(attrs)) return tag;
+    const rewritten = attrs.replace(/([\w:-]+)="([^"]*)"/g, (whole: string, attr: string, value: string) => {
+      if (!/\{/.test(value) || value.includes('`')) return whole;
+      const spans = templateExprSpans(value);
+      if (spans.length === 0) return whole;
+      let expr = '';
+      let last = 0;
+      for (const s of spans) {
+        if (last < s.start) expr += (expr ? ' + ' : '') + JSON.stringify(value.slice(last, s.start));
+        expr += (expr ? ' + ' : '') + `(${s.expr})`;
+        last = s.end + 1;
+      }
+      if (last < value.length) expr += (expr ? ' + ' : '') + JSON.stringify(value.slice(last));
+      return `${attr}={${expr}}`;
+    });
+    return `<${name}${rewritten}${selfClose ? ' /' : ''}>`;
+  });
+}
+
 function compileTemplate(
   template: string,
   acc: string,
@@ -1419,6 +1586,27 @@ function compileTemplate(
     const earliest = candidates.length > 0
       ? candidates.reduce((a, b) => (a.index <= b.index ? a : b))
       : null;
+
+    const rawOpenRe = /<(style|script|noscript)\b[^>]*>/g;
+    const rawHit = rawOpenRe.exec(remaining);
+    if (rawHit && earliest && rawHit.index < earliest.index) {
+      const tag = rawHit[1].toLowerCase();
+      const closeAt = remaining.toLowerCase().indexOf(`</${tag}`, rawHit.index + rawHit[0].length);
+      const gt = closeAt < 0 ? -1 : remaining.indexOf('>', closeAt);
+      const end = gt < 0 ? remaining.length : gt + 1;
+      result += emitChunk(remaining.slice(0, end), acc, closes, scope);
+      remaining = remaining.substring(end);
+      continue;
+    }
+
+    const noteAt = remaining.indexOf('<!--');
+    if (noteAt >= 0 && (!earliest || noteAt < earliest.index)) {
+      const noteEnd = remaining.indexOf('-->', noteAt + 4);
+      const end = noteEnd < 0 ? remaining.length : noteEnd + 3;
+      result += emitChunk(remaining.slice(0, end), acc, closes, scope);
+      remaining = remaining.substring(end);
+      continue;
+    }
 
     if (!earliest) {
       result += emitChunk(remaining, acc, closes, scope);
@@ -1852,7 +2040,14 @@ function compileSlot(acc: string): string {
   return `${acc} += String(children);\n`;
 }
 
-const RUNTIME_IMPORTS = `import { state, setState, $data, hasState, esc, refresh, onMount, onCleanup, getContext, $query, $t, bestLocale, localeDir, ensureLocale, loadLocale, handlers, $cookies, $sessionCookie, $store, ActionError, $actionError, $actionErrorOrThrow, $boundaryFallback, $append, $prepend, $merge, applyStateDeltas, textMark, attrMark, ifMark, eachMark, headMark, rawMark } from './runtime.js';`;
+const RUNTIME_IMPORTS = `import { state, setState, $data, hasState, esc, refresh, onMount, onCleanup, getContext, $query, $t, bestLocale, localeDir, ensureLocale, loadLocale, handlers, $cookies, $sessionCookie, $store, ActionError, $actionError, $actionErrorOrThrow, $boundaryFallback, $append, $prepend, $merge, applyStateDeltas, textMark, attrMark, ifMark, eachMark, headMark, rawMark, redirect, notFound } from './runtime.js';`;
+
+const API_RUNTIME_HELPERS = RUNTIME_IMPORTS
+  .replace(/^import\s*\{/, '')
+  .replace(/\}\s*from[\s\S]*$/, '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 /**
  * `export let title = 'x'` -> a per-invocation const read from the
@@ -1936,6 +2131,9 @@ function generateClient(
   const handlerRegistry = eventBindings.length > 0
     ? `Object.assign(handlers, { ${eventBindings.map((b) => b.fn).join(', ')} });`
     : '';
+  const clientSetState = eventBindings.length > 0
+    ? `const $setState = (key, value) => setState(key, value);`
+    : '';
   const headCode = headFn
     ? `
 const __head = () => { let __hd = ''; ${headFn} return __hd; };
@@ -1948,7 +2146,7 @@ ${RUNTIME_IMPORTS}
 ${imports}
 
 ${exports}
-
+${clientSetState ? `\n${clientSetState}\n` : ''}
 ${namedSlots ? SLOT_HELPER : ''}
 
 export ${isComponent ? 'function' : 'async function'} render(closes, children, __props, __slots) {
@@ -2009,6 +2207,69 @@ export function buildReport(infos: RouteInfo[], compiled: CompileResult[]): stri
       return `${info.routePath}  client JS  ${why}${forced}`;
     });
 }
+
+/**
+ * The mount entry - the migration door. A foreign
+ * page (the legacy half of a micro-frontend, or an old app adopting rosefd
+ * one route at a time) marks containers and includes this one file:
+ *
+ *   <div data-rosefd="/checkout"></div>
+ *   <script type="module" src="/mount.js"></script>
+ *
+ * Each container fetches its route's own document - the same one-request,
+ * zero-hydration shape a standalone page gets - adopts the server's DOM in
+ * place, and navigates inside itself: the host page keeps its URL, its
+ * history, its <head> and every node outside the container. It imports the
+ * same /client.js the documents use (mode B's entry, or the inline build's
+ * bundle), so there is no second runtime and no hydration.
+ *
+ * Written verbatim, not minified: it ships once per app (not once per
+ * document) and the servers compress it like any other asset. The cost to a
+ * normal rosefd document is zero bytes - nothing references it unless the
+ * host page does.
+ */
+const MOUNT_ENTRY = `// Rose Frame Driver mount: embed this app inside a foreign page.
+import { start, postForm } from '/client.js';
+
+for (const el of document.querySelectorAll('[data-rosefd]')) {
+  const route = el.getAttribute('data-rosefd');
+  const doc = await fetch(route).then((r) => (r.ok ? r.text() : ''));
+  const parsed = new DOMParser().parseFromString(doc, 'text/html');
+  // A JS-shipping document wraps its content in #app; a zero-JS route's content is the body's own (no wrapper).
+  const app = parsed.getElementById('app');
+  if (app) {
+    el.innerHTML = app.innerHTML;
+  } else {
+    for (const node of Array.from(parsed.body.children)) {
+      if (!/^(?:SCRIPT|LINK|STYLE)$/.test(node.tagName)) el.appendChild(node);
+    }
+  }
+  // start() resumes from #__rosefd_state (zero hydration), so the state
+  // script rides along inside the container - and is dropped once adopted.
+  const state = parsed.getElementById('__rosefd_state');
+  if (state) el.appendChild(state);
+  // A static-file server's SPA fallback answers the shell for an unknown path.
+  const rendered = state ? JSON.parse(state.textContent || '{}').__route : null;
+  await start(el, route, rendered === route);
+  if (state) state.remove();
+  // Navigation stays inside the mount: the listener bails for anything outside the container, so the host page's own links keep working.
+  el.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a[href^="/"]');
+    if (!a || !el.contains(a)) return;
+    e.preventDefault();
+    el.setAttribute('data-rosefd', a.getAttribute('href'));
+    start(el, a.getAttribute('href'), false);
+  });
+  // Progressive-enhancement forms work inside a mount too: the native POST would replace the HOST page.
+  el.addEventListener('submit', (e) => {
+    const f = e.target;
+    if (!f || f.tagName !== 'FORM' || f.hasAttribute('data-on-submit')) return;
+    if ((f.getAttribute('method') || '').toLowerCase() !== 'post') return;
+    e.preventDefault();
+    postForm(new FormData(f), el, el.getAttribute('data-rosefd'));
+  });
+}
+`;
 
 export async function buildProject(root: string, outDir: string): Promise<{ routes: RouteInfo[]; bundle: string }> {
   await fs.promises.mkdir(outDir, { recursive: true });
@@ -2159,11 +2420,45 @@ export const hasResponseHooks = hooks.some((p) => p.onResponse);
 
   const pages = infos
     .map((info, i) => ({ info, i }))
-    .filter(({ info }) => !info.isLayout && !info.isNotFound && !info.isError && !info.isApi && !info.isMiddleware && !info.isComponent);
+    .filter(({ info }) => !info.isLayout && !info.isNotFound && !info.isError && !info.isApi && !info.isMiddleware && !info.isComponent)
+    // Specificity order, by route specificity: a literal segment
+    // beats a param, a param beats a catch-all, and an optional catch-all
+    // (which also matches the parent path) goes last. Without this a root
+    // `[[...slug]]` - the shape a CMS's public site is written as - would
+    // match EVERY pathname first and shadow every real route. The order is
+    // stable within a class, so an app without catch-alls is unchanged.
+    .sort((a, b) => {
+      const rank = (pattern: string): number[] => {
+        const segs = pattern.split('/');
+        return [
+          segs.filter((s) => s.startsWith('**')).length,
+          segs.filter((s) => s.startsWith('*')).length,
+          segs.filter((s) => s.startsWith(':')).length,
+        ];
+      };
+      const ra = rank(a.info.pattern);
+      const rb = rank(b.info.pattern);
+      for (let k = 0; k < 3; k++) if (ra[k] !== rb[k]) return ra[k] - rb[k];
+      return a.info.filePath < b.info.filePath ? -1 : 1;
+    });
 
   const apiRoutes = infos
     .map((info, i) => ({ info, i }))
-    .filter(({ info }) => info.isApi);
+    .filter(({ info }) => info.isApi)
+    .sort((a, b) => {
+      const rank = (pattern: string): number[] => {
+        const segs = pattern.split('/');
+        return [
+          segs.filter((s) => s.startsWith('**')).length,
+          segs.filter((s) => s.startsWith('*')).length,
+          segs.filter((s) => s.startsWith(':')).length,
+        ];
+      };
+      const ra = rank(a.info.pattern);
+      const rb = rank(b.info.pattern);
+      for (let k = 0; k < 3; k++) if (ra[k] !== rb[k]) return ra[k] - rb[k];
+      return a.info.filePath < b.info.filePath ? -1 : 1;
+    });
 
   const compose = (idx: number): string => {
     let expr = `render_${idx}`;
@@ -2238,8 +2533,9 @@ export const hasResponseHooks = hooks.some((p) => p.onResponse);
       }
       const csrFlag = routeNoJs(i) ? ', csr: false' : '';
       const bufferFlag = compiled[i].buffer ? ', buffer: true' : '';
+      const signalFlag = compiled[i].controlSignal ? ', signal: true' : '';
       const guardFlag = compiled[i].guardName ? `, guard: beforeAction_${i}` : '';
-      return `{ pattern: '${info.pattern}', path: '${info.routePath}', render: ${compose(i)}, actions: ${actionMap ? `{ ${actionMap} }` : 'null'}${guardFlag}${csrFlag}${bufferFlag} }`;
+      return `{ pattern: '${info.pattern}', path: '${info.routePath}', render: ${compose(i)}, actions: ${actionMap ? `{ ${actionMap} }` : 'null'}${guardFlag}${csrFlag}${bufferFlag}${signalFlag} }`;
     })
     .join(',\n  ');
 
@@ -2304,6 +2600,14 @@ if (typeof process !== 'undefined' && typeof process.send === 'function') {
   });
 }
 
+// (the cross-machine seam): the cluster relay above covers ONE machine.
+export function __installStoreTransport(send: (name: string, value: unknown) => void): void {
+  setStoreTransport(send);
+}
+export function __deliverStorePatch(name: string, value: unknown): void {
+  applyStorePatch(name, value);
+}
+
 export { localeList };
 export const defaultLocale = '${defaultLocale}';
 
@@ -2316,7 +2620,7 @@ export const routeParams = {
 
 // Routes whose component reads the request context (getContext()), mutates a shared store ($store()), reads the query ($query(), P0-1)
 export const dynamicRoutes = [
-  ${pages.filter(({ i }) => compiled[i].usesContext || compiled[i].cspNonce || compiled[i].buffer).map(({ info }) => `'${info.routePath}'`).join(',\n  ')}
+  ${pages.filter(({ i }) => compiled[i].usesContext || compiled[i].cspNonce || compiled[i].buffer || compiled[i].controlSignal).map(({ info }) => `'${info.routePath}'`).join(',\n  ')}
 ];
 
 // Which api routes opt into build-time baking (export const prerender = true): routePath -> boolean.
@@ -2345,7 +2649,7 @@ export function isNoJs(pathname) {
 
 // P0-2 (bug report): routes that exported "buffer = true".
 export function isBuffered(pathname) {
-  return routes.some((route) => route.buffer && matchRoute(route.pattern, pathname));
+  return routes.some((route) => (route.buffer || route.signal) && matchRoute(route.pattern, pathname));
 }
 
 // Per-route response headers: a route exporting a headers map carries them into every response the servers write.
@@ -2427,6 +2731,18 @@ async function renderFallback(pathname, render) {
 export function matchRoute(pattern, pathname) {
   const patternParts = pattern.split('/');
   const pathParts = pathname.split('/');
+  // A trailing catch-all absorbs every remaining segment: *name needs at least one, **name (the optional form) also matches the parent path.
+  const last = patternParts[patternParts.length - 1];
+  if (last && (last.startsWith('*') || last.startsWith('**'))) {
+    const fixed = patternParts.slice(0, -1);
+    if (pathParts.length < fixed.length) return false;
+    if (last.startsWith('*') && !last.startsWith('**') && pathParts.length === fixed.length) return false;
+    for (let i = 0; i < fixed.length; i++) {
+      if (fixed[i].startsWith(':')) continue;
+      if (fixed[i] !== pathParts[i]) return false;
+    }
+    return true;
+  }
   if (patternParts.length !== pathParts.length) return false;
   for (let i = 0; i < patternParts.length; i++) {
     if (patternParts[i].startsWith(':')) continue;
@@ -2453,9 +2769,11 @@ export async function renderPage(pathname, form) {
       const patternParts = route.pattern.split('/');
       const pathParts = pathname.split('/');
       for (let i = 0; i < patternParts.length; i++) {
-        if (patternParts[i].startsWith(':')) {
-          setState(patternParts[i].slice(1), pathParts[i]);
-        }
+        const seg = patternParts[i];
+        if (seg.startsWith(':')) setState(seg.slice(1), pathParts[i]);
+        // a catch-all lands as the ARRAY of the segments it absorbed, the
+        // shape the page receives - {#each slug() as s} just works
+        else if (seg.startsWith('*')) setState(seg.replace(/^\\*+/, ''), pathParts.slice(i));
       }
  // I18n: a [lang] segment naming no dictionary is a 404 - the URL is the contract.
       const langIdx = patternParts.indexOf(':lang');
@@ -2487,6 +2805,12 @@ export async function renderPage(pathname, form) {
             if (err instanceof ActionError) {
               setState('actionError', { action: actionName, message: err.message, code: err.code, field: err.field });
               actionStatus = err.code;
+            } else if (err && err.__rosefd === 'redirect') {
+              // The canonical case: a login action that sends the visitor on.
+              return { redirect: err.path, status: err.status ?? 303, ...docAttrs(pathname) };
+            } else if (err && err.__rosefd === 'notFound') {
+              if (notFound) return { ...(await renderFallback(pathname, notFound)), status: 404 };
+              return { html: '<h1>404</h1><p>Page not found</p>', state: '{}', head: [], status: 404, ...docAttrs(pathname) };
             } else {
               throw err;
             }
@@ -2497,6 +2821,15 @@ export async function renderPage(pathname, form) {
       try {
         rendered = extractHead(await route.render([], ''));
       } catch (err) {
+        // The control-flow pair: redirect() and notFound() are THROWN from inside the render (a $data body resolving a slug that no longer exists).
+        const signal = err && err.__rosefd;
+        if (signal === 'redirect') {
+          return { redirect: err.path, status: err.status ?? 307, ...docAttrs(pathname) };
+        }
+        if (signal === 'notFound') {
+          if (notFound) return { ...(await renderFallback(pathname, notFound)), status: 404 };
+          return { html: '<h1>404</h1><p>Page not found</p>', state: '{}', head: [], status: 404, ...docAttrs(pathname) };
+        }
         console.error('Rose Frame Driver: render failed for', pathname, err instanceof Error ? err.message : err);
         if (errorPage) return { ...(await renderFallback(pathname, errorPage)), status: 500 };
         return { html: '<h1>500</h1><p>Something went wrong rendering this page.</p>', state: '{}', head: [], status: 500, ...docAttrs(pathname) };
@@ -2548,7 +2881,25 @@ export async function handleApi(method, pathname, request) {
           headers: { 'content-type': 'application/json', allow: Object.keys(route.handlers).join(', ') },
         });
       }
-      return toResponse(await fn(request));
+      try {
+        return toResponse(await fn(request));
+      } catch (err) {
+        // The control-flow pair, api flavor: redirect() answers a 30x with a Location, notFound() a JSON 404 - the same signals a page throws.
+        const signal = err && err.__rosefd;
+        if (signal === 'redirect') {
+          return new Response(JSON.stringify({ error: 'redirect', location: err.path }), {
+            status: err.status ?? 307,
+            headers: { 'content-type': 'application/json', location: err.path },
+          });
+        }
+        if (signal === 'notFound') {
+          return new Response(JSON.stringify({ error: 'not found' }), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        throw err;
+      }
     }
   }
   return new Response(JSON.stringify({ error: 'not found' }), {
@@ -2565,9 +2916,11 @@ export async function renderPageStream(pathname, write, shellOpen, clientTag) {
       const patternParts = route.pattern.split('/');
       const pathParts = pathname.split('/');
       for (let i = 0; i < patternParts.length; i++) {
-        if (patternParts[i].startsWith(':')) {
-          setState(patternParts[i].slice(1), pathParts[i]);
-        }
+        const seg = patternParts[i];
+        if (seg.startsWith(':')) setState(seg.slice(1), pathParts[i]);
+        // a catch-all lands as the ARRAY of the segments it absorbed, the
+        // shape the page receives - {#each slug() as s} just works
+        else if (seg.startsWith('*')) setState(seg.replace(/^\\*+/, ''), pathParts.slice(i));
       }
       // i18n: an unknown locale must 404 BEFORE the shell flushes - a
       // streamed response cannot change its status afterwards
@@ -2632,19 +2985,24 @@ export async function renderPageStream(pathname, write, shellOpen, clientTag) {
       // logical properties both read it). A route with no [lang] segment
       // returns to the default locale, and a bogus segment falls back to it
       // too, exactly like the server's docAttrs.
+ // Only when this container IS the document's app root. A mount
+      // (dist/mount.js) renders into a foreign page, whose language and
+      // direction belong to the host, not to the mounted route.
       const seg = langIdx >= 0 ? pathname.split('/')[langIdx] : '';
       const known = !seg || isLocale(seg);
-      const docLang = known && seg ? seg : __defLocale;
-      document.documentElement.lang = docLang;
-      const docDir = localeDir(docLang);
-      if (docDir) document.documentElement.setAttribute('dir', docDir);
-      else document.documentElement.removeAttribute('dir');
+      if (container === document.getElementById('app')) {
+        const docLang = known && seg ? seg : __defLocale;
+        document.documentElement.lang = docLang;
+        const docDir = localeDir(docLang);
+        if (docDir) document.documentElement.setAttribute('dir', docDir);
+        else document.documentElement.removeAttribute('dir');
+      }
       if (!known) {`
     : `      if (langIdx >= 0 && !isLocale(pathname.split('/')[langIdx])) {`;
 
   const clientEntry = `
 ${clientImports}
-import { setState, resumeState, clearRequestState, resetEffects, wire, isolateStateAsync, restoreState, setRefreshHook, clearMounts, flushMounts, adoptCleanups, handlers, setLocales, setLocalePacks, ensureLocale, isLocale, localeDir, setPrefetchOverride, serializeState } from './runtime.js';
+import { setState, resumeState, clearRequestState, resetEffects, wire, isolateStateAsync, restoreState, setRefreshHook, clearMounts, flushMounts, adoptCleanups, handlers, setLocales, setLocalePacks, ensureLocale, isLocale, localeDir, setPrefetchOverride, serializeState, setFxOwner, resetContainerFx } from './runtime.js';
 
 // I18n: the dictionaries baked at build time - the client renders any PRELOADED locale from the bundle.
 setLocales(${clientLocalesJson}, '${defaultLocale}');
@@ -2685,18 +3043,19 @@ const errorPage = ${errorRender};
 
 // Paint a fallback page (404/500) into the container, wired like any render.
 async function paintFallback(container, page, builtin) {
-  resetEffects();
-  clearRequestState();
+  __navReset(container);
   clearMounts(); // a failed render leaves stale mounts behind
   // inline mode passes the render itself; split mode passes a loader
   const render = page ? await getRender(page) : null;
   if (render) {
     const closes = [];
-    const html = await render(closes, '');
-    container.innerHTML = html;
-    wire(container, closes);
-    bindEvents(container);
-    flushMounts();
+    await __withOwner(container, async () => {
+      const html = await render(closes, '');
+      container.innerHTML = html;
+      wire(container, closes);
+      bindEvents(container);
+      flushMounts();
+    });
     return;
   }
   container.innerHTML = builtin;
@@ -2705,6 +3064,18 @@ async function paintFallback(container, page, builtin) {
 export function matchRoute(pattern, pathname) {
   const patternParts = pattern.split('/');
   const pathParts = pathname.split('/');
+  // A trailing catch-all absorbs every remaining segment: *name needs at least one, **name (the optional form) also matches the parent path.
+  const last = patternParts[patternParts.length - 1];
+  if (last && (last.startsWith('*') || last.startsWith('**'))) {
+    const fixed = patternParts.slice(0, -1);
+    if (pathParts.length < fixed.length) return false;
+    if (last.startsWith('*') && !last.startsWith('**') && pathParts.length === fixed.length) return false;
+    for (let i = 0; i < fixed.length; i++) {
+      if (fixed[i].startsWith(':')) continue;
+      if (fixed[i] !== pathParts[i]) return false;
+    }
+    return true;
+  }
   if (patternParts.length !== pathParts.length) return false;
   for (let i = 0; i < patternParts.length; i++) {
     if (patternParts[i].startsWith(':')) continue;
@@ -2727,16 +3098,30 @@ async function applyParams(route, pathname) {
   const patternParts = route.pattern.split('/');
   const pathParts = pathname.split('/');
   for (let i = 0; i < patternParts.length; i++) {
-    if (patternParts[i].startsWith(':')) setState(patternParts[i].slice(1), pathParts[i]);
+    const seg = patternParts[i];
+    if (seg.startsWith(':')) setState(seg.slice(1), pathParts[i]);
+    // a catch-all lands as the ARRAY of the segments it absorbed, the shape
+    // the page receives - {#each slug() as s} just works
+    else if (seg.startsWith('*')) setState(seg.replace(/^\\*+/, ''), pathParts.slice(i));
   }
   const langIdx = patternParts.indexOf(':lang');
   if (langIdx >= 0) await ensureLocale(pathParts[langIdx]);
+}
+
+// The network decides too.
+function __netOk() {
+  const c = navigator.connection;
+  if (!c) return true;
+  if (c.saveData) return false;
+  const t = c.effectiveType;
+  return t !== 'slow-2g' && t !== '2g';
 }
 
 export function prefetch(pathname, source = 'hover') {
   if (prefetchMode === 'off') return;
   if (prefetchMode === 'hover' && source !== 'hover') return;
   if (prefetchMode === 'viewport' && source !== 'viewport') return;
+  if (!__netOk()) return; // save-data / 2g: no bytes before the click
   if (prefetchCache.has(pathname)) return;
   if (pathname === location.pathname) return; // already here: nothing to prefetch
   const route = routes.find((r) => matchRoute(r.pattern, pathname));
@@ -2777,7 +3162,7 @@ export function prefetch(pathname, source = 'hover') {
 }
 
 export function prefetchStats() {
-  return { cached: prefetchCache.size, pending: prefetchPending, mode: prefetchMode };
+  return { cached: prefetchCache.size, pending: prefetchPending, mode: prefetchMode, network: __netOk() };
 }
 
 // One delegated listener per event type on the app container: survives DOM swaps and cloned blocks, so handlers never need re-binding.
@@ -2798,15 +3183,17 @@ function bindEvents(container) {
 }
 
 // === Server actions from any event === POST the body to the current route and adopt the response in place: the server runs the selected action.
-async function postForm(body) {
-  const res = await fetch(location.pathname, { method: 'POST', body });
+async function postForm(body, container, pathname) {
+ // A mount passes its own container and route - without them the POST would target the host page's URL and adopt into a #app the host page.
+  const box = container || document.getElementById('app');
+  const route = pathname || location.pathname;
+  const res = await fetch(route, { method: 'POST', body });
   const html = await res.text();
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const next = doc.getElementById('app');
   const st = doc.getElementById('__rosefd_state');
   const paint = () => {
-    const container = document.getElementById('app');
-    adopt(container, next ? next.innerHTML : '', st ? st.textContent : '{}');
+    adopt(box, next ? next.innerHTML : '', st ? st.textContent : '{}', route);
   };
   if (document.startViewTransition) document.startViewTransition(paint);
   else paint();
@@ -2817,7 +3204,9 @@ export async function $action(name, e) {
   if (e && e.preventDefault) e.preventDefault();
   const body = new FormData();
   body.append('__action', name);
-  return postForm(body);
+ // An event inside a mount belongs to that mount - the attribute is kept in step with what is currently mounted.
+  const box = e && e.target && e.target.closest ? e.target.closest('[data-rosefd]') : null;
+  return postForm(body, box || undefined, box ? box.getAttribute('data-rosefd') : undefined);
 }
 
 export { postForm };
@@ -2826,6 +3215,31 @@ export { postForm };
 export { serializeState };
 
 // Initial=true: adopt the SSR DOM (zero hydration) - wire reactive markers to the existing nodes and bind events.
+
+// One gate for the two ownership models, so they can never drift.
+function __ownsDoc(container) {
+  return container === document.getElementById('app');
+}
+function __navReset(container) {
+  if (__ownsDoc(container)) {
+    resetEffects();
+    clearRequestState();
+  } else {
+    resetContainerFx(container);
+  }
+}
+// Attribute everything a render creates (state keys, effects, onCleanups) to
+// its container. The document path sets no owner and keeps the global sets.
+async function __withOwner(container, fn) {
+  if (__ownsDoc(container)) return fn();
+  setFxOwner(container);
+  try {
+    return await fn();
+  } finally {
+    setFxOwner(null);
+  }
+}
+
 export async function start(container, pathname, initial) {
   clearMounts(); // stale mounts from a failed render never fire
   if (initial) {
@@ -2845,48 +3259,71 @@ ${langDirBlock}
       if (hit && typeof hit.then === 'function') hit = await hit; // in-flight: land it first
       if (hit) {
         prefetchCache.delete(pathname); // single-use: the next hover refetches
-        resetEffects();
+        __navReset(container);
         restoreState(hit.state);
         container.innerHTML = hit.html;
-        wire(container, hit.closes);
+        await __withOwner(container, () => {
+          wire(container, hit.closes);
+          bindEvents(container);
+          hit.mounts.forEach((fn) => fn()); // the prefetched route's mounts
+          adoptCleanups(hit.cleanups); // and its cleanups, for the next reset
+        });
+        return;
+      }
+      if (!initial) __navReset(container);
+      let broken = false;
+      let signal = null;
+      await __withOwner(container, async () => {
+        await applyParams(route, pathname);
+        const closes = [];
+        let html;
+        try {
+          const render = await getRender(route); // split mode: loads the route's chunk here
+          html = await render(closes, '');
+        } catch (err) {
+          // The control-flow pair, client half: notFound() paints the 404 route (the server already answered 404 for this URL; a client-side navigation).
+          if (err && err.__rosefd === 'notFound') { signal = 'notFound'; return; }
+          if (err && err.__rosefd === 'redirect') { signal = err.path; return; }
+          // the route itself is broken: degrade to pages/500.rose (or the
+          // built-in plain 500) instead of leaving the container empty
+          broken = true;
+          return;
+        }
+        if (!initial) container.innerHTML = html;
+        wire(container, closes);
         bindEvents(container);
-        hit.mounts.forEach((fn) => fn()); // the prefetched route's mounts
-        adoptCleanups(hit.cleanups); // and its cleanups, for the next resetEffects
+        flushMounts();
+      });
+      if (signal === 'notFound') {
+        await paintFallback(container, notFound, '<h1>404</h1><p>Page not found</p>');
         return;
       }
-      if (!initial) {
-        resetEffects();
-        clearRequestState();
+      if (signal) {
+        location.href = signal; // a redirect: let the browser do the 30x
+        return;
       }
-      await applyParams(route, pathname);
-      const closes = [];
-      let html;
-      try {
-        const render = await getRender(route); // split mode: loads the route's chunk here
-        html = await render(closes, '');
-      } catch {
-        // the route itself is broken: degrade to pages/500.rose (or the
-        // built-in plain 500) instead of leaving the container empty
+      if (broken) {
         await paintFallback(container, errorPage, '<h1>500</h1><p>Something went wrong rendering this page.</p>');
-        return;
       }
-      if (!initial) container.innerHTML = html;
-      wire(container, closes);
-      bindEvents(container);
-      flushMounts();
       return;
     }
   }
   // Unmatched route: pages/404.rose renders (with its head + interactivity)
-${hasLang ? `  document.documentElement.lang = __defLocale;
-  document.documentElement.removeAttribute('dir');` : ''}
+${hasLang ? ` // the same app-root gate as above - a mount never touches the
+  // host document's language or direction.
+  if (container === document.getElementById('app')) {
+    document.documentElement.lang = __defLocale;
+    document.documentElement.removeAttribute('dir');
+  }` : ''}
   await paintFallback(container, notFound, '<h1>404</h1><p>Page not found</p>');
 }
 
 // Adopt a server-rendered response in place - the JS-enabled half of progressive-enhancement forms: the bootstrap POSTs a <form method="POST">.
-export async function adopt(container, html, stateJson) {
-  resetEffects();
-  clearRequestState();
+export async function adopt(container, html, stateJson, pathname) {
+ // The route the response belongs to. A mount passes its own; the
+  // document path passes nothing and keeps location.pathname.
+  const route0 = pathname || location.pathname;
+  __navReset(container);
   clearMounts(); // stale mounts from a failed render never fire
   resumeState(stateJson);
   container.innerHTML = html;
@@ -2894,20 +3331,22 @@ export async function adopt(container, html, stateJson) {
   const st = document.getElementById('__rosefd_state');
   if (st) st.textContent = stateJson;
   for (const route of routes) {
-    if (matchRoute(route.pattern, location.pathname)) {
-      await applyParams(route, location.pathname);
-      const closes = [];
-      try {
-        const render = await getRender(route); // split mode: loads the route's chunk here
-        await render(closes, '');
-      } catch {
-        // the adopted response's route is broken (e.g. the action's page
-        // throws): keep the swapped DOM but skip wiring it
-        return;
-      }
-      wire(container, closes);
-      bindEvents(container);
-      flushMounts();
+    if (matchRoute(route.pattern, route0)) {
+      await __withOwner(container, async () => {
+        await applyParams(route, route0);
+        const closes = [];
+        try {
+          const render = await getRender(route); // split mode: loads the route's chunk here
+          await render(closes, '');
+        } catch {
+          // the adopted response's route is broken (e.g. the action's page
+          // throws): keep the swapped DOM but skip wiring it
+          return;
+        }
+        wire(container, closes);
+        bindEvents(container);
+        flushMounts();
+      });
       return;
     }
   }
@@ -2947,27 +3386,46 @@ setRefreshHook(async () => {
     });
   }
 
+  await fs.promises.writeFile(path.join(outDir, 'mount.js'), MOUNT_ENTRY);
+
   await fs.promises.rm(buildDir, { recursive: true, force: true });
 
   const publicDir = path.join(root, 'public');
   if (fs.existsSync(publicDir)) {
-    const outPublic = path.join(outDir, 'public');
-    await fs.promises.mkdir(outPublic, { recursive: true });
-    const assets = await fs.promises.readdir(publicDir);
-    await Promise.all(
-      assets.map((a) => fs.promises.copyFile(path.join(publicDir, a), path.join(outPublic, a)))
-    );
+    await fs.promises.cp(publicDir, path.join(outDir, 'public'), { recursive: true });
   }
 
   console.log('Rose Frame Driver zero-JS report:');
   for (const line of buildReport(infos, compiled)) console.log('  ' + line);
+  const warnGroups = new Map<string, { why: string; files: Map<string, Set<string>> }>();
   for (const { info, i } of pages) {
     if (!routeShipsNoJs(infos, compiled, i)) continue;
     for (const ci of [i, ...layoutsOf(infos, i)]) {
       for (const w of compiled[ci].jsWarnings ?? []) {
-        console.warn(`Rose Frame Driver warning: ${info.routePath} ships zero JavaScript but ${path.basename(infos[ci].filePath)} contains ${w}`);
+        let g = warnGroups.get(w);
+        if (!g) {
+          g = { why: w, files: new Map() };
+          warnGroups.set(w, g);
+        }
+        const file = path.relative(root, infos[ci].filePath).replace(/\\/g, '/');
+        let routes = g.files.get(file);
+        if (!routes) {
+          routes = new Set();
+          g.files.set(file, routes);
+        }
+        routes.add(info.routePath);
       }
     }
+  }
+  for (const g of warnGroups.values()) {
+    const allRoutes = new Set<string>();
+    for (const routes of g.files.values()) for (const r of routes) allRoutes.add(r);
+    const parts = [...g.files.entries()]
+      .sort((a, b) => b[1].size - a[1].size)
+      .map(([file, routes]) => `${file} (${routes.size === 1 ? [...routes][0] : `${routes.size} routes`})`);
+    const shown = parts.slice(0, 4).join(', ');
+    const more = parts.length > 4 ? `, +${parts.length - 4} more files` : '';
+    console.warn(`Rose Frame Driver warning: ${allRoutes.size} routes ship zero JavaScript while their chain contains ${g.why} - ${shown}${more}`);
   }
 
   return { routes: pages.map(({ info }) => info), bundle: bundleMode };
@@ -3033,9 +3491,15 @@ function getRouteInfo(filePath: string, root: string): RouteInfo {
 
   let parts = withoutExt.split('/').filter((p) => p !== '_layout');
   if (parts.length > 1 && parts[parts.length - 1] === 'index') parts = parts.slice(0, -1);
-  const routeParts = parts.map((part) =>
-    part.startsWith('[') && part.endsWith(']') ? `:${part.slice(1, -1)}` : part
-  );
+  const CATCH_ALL = /^\[\.\.\.(\w+)\]$/;
+  const OPTIONAL_CATCH_ALL = /^\[\[\.\.\.(\w+)\]\]$/;
+  const routeParts = parts.map((part) => {
+    const optional = OPTIONAL_CATCH_ALL.exec(part);
+    if (optional) return `**${optional[1]}`;
+    const catchAll = CATCH_ALL.exec(part);
+    if (catchAll) return `*${catchAll[1]}`;
+    return part.startsWith('[') && part.endsWith(']') ? `:${part.slice(1, -1)}` : part;
+  });
 
   let routePath: string;
   if (routeParts.length === 0 || (routeParts.length === 1 && routeParts[0] === 'index')) {
@@ -3048,7 +3512,13 @@ function getRouteInfo(filePath: string, root: string): RouteInfo {
     filePath,
     routePath,
     pattern: routePath,
-    paramNames: parts.filter((p) => p.startsWith('[') && p.endsWith(']')).map((p) => p.slice(1, -1)),
+    paramNames: parts.flatMap((p) => {
+      const optional = OPTIONAL_CATCH_ALL.exec(p);
+      if (optional) return [optional[1]];
+      const catchAll = CATCH_ALL.exec(p);
+      if (catchAll) return [catchAll[1]];
+      return p.startsWith('[') && p.endsWith(']') ? [p.slice(1, -1)] : [];
+    }),
     isLayout,
     isNotFound,
     isError,

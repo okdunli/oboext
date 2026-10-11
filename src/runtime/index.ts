@@ -17,6 +17,7 @@ function entry(key: string, initial: unknown): { value: unknown; subs: Set<Subsc
 }
 
 export function state<T>(key: string, initial: T): [() => T, (v: T) => void] {
+  ownerKeys()?.add(key);
   const e = entry(key, initial);
 
   const getter = () => {
@@ -44,6 +45,43 @@ export function setState<T>(key: string, value: T): void {
 
 const cleanups = new Set<Cleanup>();
 
+let fxOwner: object | null = null;
+const fxByOwner = new WeakMap<object, Set<Cleanup>>();
+const keysByOwner = new WeakMap<object, Set<string>>();
+const fxSet = (): Set<Cleanup> => {
+  if (!fxOwner) return cleanups;
+  let s = fxByOwner.get(fxOwner);
+  if (!s) { s = new Set(); fxByOwner.set(fxOwner, s); }
+  return s;
+};
+const ownerKeys = (): Set<string> | null => {
+  if (!fxOwner) return null;
+  let s = keysByOwner.get(fxOwner);
+  if (!s) { s = new Set(); keysByOwner.set(fxOwner, s); }
+  return s;
+};
+
+// Attribute everything the current render creates to `container` (null = the document's global bookkeeping).
+export function setFxOwner(container: object | null): void {
+  fxOwner = container;
+}
+
+// Dispose everything ONE container created - its effects, its onCleanups, the state keys its render seeded.
+export function resetContainerFx(container: object): void {
+  const set = fxByOwner.get(container);
+  if (set) {
+    set.forEach((fn: Cleanup) => fn());
+    fxByOwner.delete(container);
+  }
+  const keys = keysByOwner.get(container);
+  if (keys) {
+    keys.forEach((k: string) => signalMap.delete(k));
+    keysByOwner.delete(container);
+  }
+  dataCache.clear();
+  pendingDeltas.clear();
+}
+
 export function effect(fn: () => void): Cleanup {
   const wrapped: Subscriber = () => {
     try {
@@ -58,9 +96,9 @@ export function effect(fn: () => void): Cleanup {
   currentEffect = prev;
   const cleanup: Cleanup = () => {
     signalMap.forEach((e: { subs: Set<Subscriber> }) => e.subs.delete(wrapped));
-    cleanups.delete(cleanup);
+    fxSet().delete(cleanup);
   };
-  cleanups.add(cleanup);
+  fxSet().add(cleanup);
   return cleanup;
 }
 
@@ -371,19 +409,21 @@ export function wire(root: Node, closes: Array<unknown>, scope?: unknown): Clean
     }
   }
 
-  if (headBlocks.length > 0) {
-    const blocks = headBlocks;
-    weff(() => {
-      let html = '';
-      for (const b of blocks) html += String((closes[b.idx] as (s?: unknown) => unknown)(scope));
-      applyHead(html);
-    });
-    for (const b of blocks) {
-      b.nodes.forEach((nd) => nd.remove());
-      b.start.remove();
-      b.end.remove();
-    }
-  } else if (root.nodeType !== 11) clearHead();
+  if (root === document.getElementById('app')) {
+    if (headBlocks.length > 0) {
+      const blocks = headBlocks;
+      weff(() => {
+        let html = '';
+        for (const b of blocks) html += String((closes[b.idx] as (s?: unknown) => unknown)(scope));
+        applyHead(html);
+      });
+      for (const b of blocks) {
+        b.nodes.forEach((nd) => nd.remove());
+        b.start.remove();
+        b.end.remove();
+      }
+    } else if (root.nodeType !== 11) clearHead();
+  }
 
   const els = (holder as Element).querySelectorAll('[data-b]');
   els.forEach((el) => {
@@ -560,7 +600,7 @@ export function flushMounts(): void {
 
 /** Register a disposer for the current render (the effects' cleanup channel). */
 export function onCleanup(fn: Cleanup): void {
-  cleanups.add(fn);
+  fxSet().add(fn);
 }
 
 /**
@@ -633,6 +673,42 @@ export function bestLocale(header: string | null | undefined): string | null {
     if (isLocale(base)) return base;
   }
   return null;
+}
+
+/** The signal `redirect()` throws. */
+export class RoseRedirect extends Error {
+  readonly __rosefd = 'redirect';
+  constructor(readonly path: string, readonly status = 307) {
+    super(`redirect to ${path}`);
+  }
+}
+
+/** The signal `notFound()` throws. */
+export class RoseNotFound extends Error {
+  readonly __rosefd = 'notFound';
+  constructor() {
+    super('notFound()');
+  }
+}
+
+/**
+ * Send the visitor somewhere else: the response becomes a 30x with this
+ * Location. Call it from a page's `$data` body (a wall, a renamed slug, a
+ * canonical URL) or from an api handler. A route that calls it is buffered by
+ * the compiler, so the status can still be set.
+ */
+export function redirect(path: string, status = 307): never {
+  throw new RoseRedirect(path, status);
+}
+
+/**
+ * Answer 404 with the app's own 404 route (pages/404.rose) instead of the
+ * built-in page. Call it from a page's `$data` body when the slug resolves to
+ * nothing - the status is a real 404 and the body is the app's design, which
+ * is the one thing a middleware wall cannot do from outside the render.
+ */
+export function notFound(): never {
+  throw new RoseNotFound();
 }
 
 /**

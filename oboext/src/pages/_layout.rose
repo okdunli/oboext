@@ -1,9 +1,8 @@
 <script>
-  // skyscraper chrome shell. Interactions (drawers, dark mode, share bar,
-  // scroll-reveal, cardFlip) live in /public/theme.js as vanilla JS. Routes
-  // ship zero framework JS on purpose (csr=false). Chrome HTML comes from
-  // the live database through the "chrome" loader ($data, per request) and
-  // is emitted with the {@html} primitive (rosezm 0.2.4).
+  // Theme-aware chrome shell. The active theme's nav/body/aside/footer HTML
+  // comes from the "chrome" loader (per request, live DB). Skyscraper's
+  // drawer/dark-mode/scroll-reveal interactions live in /public/theme.js;
+  // other themes ship zero framework JS on purpose (csr=false).
   let chrome = $data(() => __rvLoad("chrome", {}));
 
   function adminPath() {
@@ -15,6 +14,15 @@
   }
   function publicPath() {
     return !adminPath();
+  }
+  function isSkyscraper() {
+    return chrome().themeSlug === "skyscraper";
+  }
+  function isBluemix() {
+    return chrome().themeSlug === "bluemix";
+  }
+  function isNotSkyscraper() {
+    return chrome().themeSlug !== "skyscraper";
   }
 </script>
 
@@ -28,7 +36,9 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content={chrome().siteTitle}>
   <meta name="twitter:description" content={chrome().siteDescription}>
-  <link rel="stylesheet" href="/public/theme.css">
+  {#if chrome().cssHref}
+  <link rel="stylesheet" href={chrome().cssHref}>
+  {/if}
   {@html chrome().themeHead}
   {#if publicPath()}{@html chrome().pluginHead}{/if}
   <link rel="icon" href="data:,">
@@ -39,14 +49,33 @@
 {/if}
 {#if publicPath()}
 <script src="/public/noflash.js"></script>
+{#if isSkyscraper()}
 <script src="/public/theme.js"></script>
+{/if}
+{#if isNotSkyscraper()}
+<script src="/public/theme-pjax.js"></script>
+{/if}
+{#if isBluemix()}
+<script src="/public/theme-bluemix.js"></script>
+{/if}
 <script src="/public/comments.js"></script>
-<div class="th-skyscraper">
+{@html chrome().bodyFix}
+{#if isSkyscraper()}
 {@html chrome().nav}
-  <div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">
-  <slot />
-  </div></div><aside class="sidebar-column with-separate-line"><div class="sidebar-content">{@html chrome().aside}</div></aside></div></main></div>
+<div class="th-skyscraper">
+{@html chrome().bodyOpen}
+<slot />
+{@html chrome().bodyClose}
+{@html chrome().aside}
+</div></main></div>
 {@html chrome().footer}
 {@html chrome().pluginFooter}
 </div>
+{/if}
+{#if isNotSkyscraper()}
+{@html chrome().bodyOpen}
+<slot />
+{@html chrome().bodyClose}
+{@html chrome().pluginFooter}
+{/if}
 {/if}

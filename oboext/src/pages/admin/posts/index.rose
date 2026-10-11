@@ -73,7 +73,7 @@
   <form class="adm-search" action="/admin/posts">
     <input class="adm-input" name="q" placeholder="搜索标题/摘要" value={__rvQs().get("q") || ""}>
   </form>
-  <a class="adm-btn" href="/admin/posts/new"><span class="adm-ic" style="--i:url(/public/plus.svg)"></span>写文章</a>
+  <a class="adm-btn" href="/admin/posts/new"><span class="adm-ic" style="--i:url(/public/icons/plus.svg)"></span>写文章</a>
 </div>
 
 <div class="adm-toolbar" style="gap:8px;">

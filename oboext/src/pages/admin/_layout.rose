@@ -1,4 +1,4 @@
-﻿<script>
+<script>
   // Admin shell (dark zinc/indigo, ported from AdminShell.tsx). Unauthenticated
   // routes (/admin/login, /admin/setup — the middleware whitelist) render the
   // bare slot; everything else gets the sidebar + topbar chrome.
@@ -31,6 +31,8 @@
     if (p.indexOf("/admin/menus") === 0) return "菜单";
     if (p.indexOf("/admin/menu-settings") === 0) return "菜单与首页";
     if (p.indexOf("/admin/settings") === 0) return "站点设置";
+    if (p.indexOf("/admin/notfound") === 0) return "404 页面";
+    if (p.indexOf("/admin/plugins") === 0) return "插件";
     return "管理后台";
   }
   function guest() {
@@ -55,21 +57,26 @@
 {#if authed()}
 <div class="adm-shell">
   <aside class="adm-side">
-    <div class="adm-logo"><span class="adm-auth-mark"><span class="adm-ic adm-ic-lg" style="--i:url(/public/layout-dashboard.svg)"></span></span> oboext</div>
+    <div class="adm-logo"><span class="adm-auth-mark"><span class="adm-ic adm-ic-lg" style="--i:url(/public/icons/layout-dashboard.svg)"></span></span> oboext<button type="button" class="adm-logo-x" data-nav-close aria-label="关闭菜单"><span class="adm-ic" style="--i:url(/public/icons/x.svg)"></span></button></div>
     <nav class="adm-nav">
       {@html navRaw()}
     </nav>
     <div class="adm-side-foot">
       <div class="adm-avatar">{initial()}</div>
       <div class="who"><b>{authed() ? session().user.name : ""}</b><span>{authed() ? session().user.role : ""}</span></div>
-      <button class="adm-iconbtn" data-adm-act="logout" title="退出登录" aria-label="退出登录"><span class="adm-ic" style="--i:url(/public/log-out.svg)"></span></button>
+      <button class="adm-iconbtn" data-adm-act="logout" title="退出登录" aria-label="退出登录"><span class="adm-ic" style="--i:url(/public/icons/log-out.svg)"></span></button>
     </div>
   </aside>
   <div class="adm-main">
+    <div class="adm-mbar">
+      <button type="button" class="adm-mbar-btn" data-nav-open aria-label="打开菜单"><span class="adm-ic" style="--i:url(/public/icons/menu.svg)"></span></button>
+      <span class="adm-mbar-title">oboext 管理后台</span>
+    </div>
+    <div class="adm-scrim" data-nav-close aria-hidden="true"></div>
     <header class="adm-topbar">
       <h1>{pageTitle()}</h1>
       <span class="spacer"></span>
-      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/" target="_blank"><span class="adm-ic adm-ic-sm" style="--i:url(/public/external-link.svg)"></span> 访问站点</a>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/" target="_blank"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/external-link.svg)"></span> 访问站点</a>
     </header>
     <main class="adm-content">
       <slot />

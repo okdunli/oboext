@@ -1,0 +1,33 @@
+<script>
+  // /api/not-found-config — GET/PUT 404 page settings (admin only)
+  import { apiGate, readBody } from "@server/admin";
+  import { getNotFoundSettings, saveNotFoundSettings } from "@server/not-found-config";
+
+  export async function GET() {
+    return apiGate(async () => {
+      const user = getContext().user;
+      if (user.role !== "admin") {
+        return new Response(JSON.stringify({ error: "需要管理员权限" }), {
+          status: 403,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      }
+      return getNotFoundSettings();
+    });
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () => {
+      const user = getContext().user;
+      if (user.role !== "admin") {
+        return new Response(JSON.stringify({ error: "需要管理员权限" }), {
+          status: 403,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      }
+      const body = await readBody(request);
+      const saved = await saveNotFoundSettings(body);
+      return saved;
+    });
+  }
+</script>

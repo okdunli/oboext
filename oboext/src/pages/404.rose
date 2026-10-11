@@ -1,16 +1,193 @@
+<script>
+  let d = $data(() => __rvLoad("notFound", {}));
+  function settings() { return d().settings; }
+  function recent() { return d().recent || []; }
+  function messageLines() {
+    const s = settings();
+    if (!s?.message) return [];
+    return s.message.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  }
+</script>
+
 <head>
   <title>404 - 页面未找到</title>
-  <meta name="robots" content="noindex">
+  <meta name="robots" content="noindex, nofollow">
 </head>
 
-<section class="sk-section sk-list-page">
-  <h1 class="title_style_01">404</h1>
-  <div class="sk-list-sub sk-muted">抱歉，您访问的内容不存在或已被移除。</div>
-  <div class="sk-search-all">
-    <a href="/">← 返回首页</a> &nbsp; <a href="/blog">浏览所有文章</a>
+<div class="nf-wrap">
+  <div class="nf-box">
+    <span class="nf-icon">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M16.24 7.76l-2.12 6.12-6.12 2.12 2.12-6.12z"/>
+      </svg>
+    </span>
+
+    <h1 class="nf-title">{settings().title}</h1>
+
+    <div class="nf-message">
+      {#each messageLines() as line}
+      <p>{line}</p>
+      {/each}
+    </div>
+
+    {#if settings().showSearch}
+    <form class="nf-search" action="/search" method="get">
+      <input type="search" name="q" placeholder="搜索文章…" aria-label="搜索文章">
+      <button type="submit">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/>
+          <path d="M21 21l-4.35-4.35"/>
+        </svg>
+        搜索
+      </button>
+    </form>
+    {/if}
+
+    <div class="nf-home">
+      <a href="/">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+          <polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+        返回首页
+      </a>
+    </div>
+
+    {#if recent().length > 0}
+    <div class="nf-recent">
+      <h2>最近文章</h2>
+      <ul>
+        {#each recent() as post}
+        <li><a href={post.url}>{post.title}</a></li>
+        {/each}
+      </ul>
+    </div>
+    {/if}
   </div>
-  <form class="sk-404-search" action="/search" method="get" role="search">
-    <input type="search" name="q" placeholder="搜索文章…" aria-label="搜索">
-    <button type="submit">搜索</button>
-  </form>
-</section>
+</div>
+
+<style>
+  .nf-wrap {
+    display: flex;
+    justify-content: center;
+    padding: 4rem 1rem;
+  }
+  .nf-box {
+    width: 100%;
+    max-width: 36rem;
+    text-align: center;
+  }
+  .nf-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 4rem;
+    height: 4rem;
+    border-radius: 9999px;
+    border: 1px solid var(--primary-color, var(--accent, #1f8bff));
+    color: var(--primary-color, var(--accent, #1f8bff));
+    margin-bottom: 1.5rem;
+  }
+  .nf-title {
+    font-size: 1.875rem;
+    font-weight: 700;
+    color: var(--text-color, var(--text, #1f2937));
+    margin: 0;
+  }
+  .nf-message {
+    margin-top: 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: var(--muted-color, var(--muted, #6b7280));
+  }
+  .nf-message p {
+    margin: 0.25rem 0;
+  }
+  .nf-search {
+    display: flex;
+    max-width: 28rem;
+    margin: 1.75rem auto 0;
+    gap: 0.5rem;
+  }
+  .nf-search input {
+    flex: 1;
+    height: 2.5rem;
+    border-radius: 9999px;
+    border: 1px solid var(--border-color, var(--border, #e5e7eb));
+    background: var(--surface-color, var(--surface, #fff));
+    color: var(--text-color, var(--text, #1f2937));
+    padding: 0 1rem;
+    font-size: 0.875rem;
+    outline: none;
+  }
+  .nf-search input:focus {
+    border-color: var(--primary-color, var(--accent, #1f8bff));
+  }
+  .nf-search button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    height: 2.5rem;
+    padding: 0 1.25rem;
+    border-radius: 9999px;
+    background: var(--primary-color, var(--accent, #1f8bff));
+    color: #fff;
+    font-size: 0.875rem;
+    font-weight: 500;
+    border: none;
+    cursor: pointer;
+  }
+  .nf-search button:hover {
+    opacity: 0.9;
+  }
+  .nf-home {
+    margin-top: 1.5rem;
+  }
+  .nf-home a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--primary-color, var(--accent, #1f8bff));
+    text-decoration: none;
+  }
+  .nf-home a:hover {
+    text-decoration: underline;
+  }
+  .nf-recent {
+    margin-top: 2.5rem;
+    border-radius: 1rem;
+    border: 1px solid var(--border-color, var(--border, #e5e7eb));
+    background: var(--surface-color, var(--surface, #fff));
+    padding: 1.5rem;
+    text-align: left;
+  }
+  .nf-recent h2 {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-color, var(--text, #1f2937));
+    margin: 0 0 0.75rem;
+  }
+  .nf-recent ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .nf-recent li {
+    margin-bottom: 0.5rem;
+  }
+  .nf-recent a {
+    display: block;
+    font-size: 0.875rem;
+    color: var(--muted-color, var(--muted, #6b7280));
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .nf-recent a:hover {
+    text-decoration: underline;
+  }
+</style>

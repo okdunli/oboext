@@ -4,8 +4,8 @@
  * preserved), applies the choice to the running process, and migrates the
  * new target before /api/setup creates the first admin.
  */
-import fs from "node:fs";
-import path from "node:path";
+import fs from "fs";
+import path from "path";
 import { ensureMigrations, reconfigureDatabase } from "./db.js";
 import { ServiceError } from "./admin.js";
 

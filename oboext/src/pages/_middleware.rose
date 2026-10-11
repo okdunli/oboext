@@ -65,9 +65,36 @@
     // was already applied above; nothing else to do here.
     if (p === "/api/data") return;
 
+    // ----------------------------------------------- theme CSS assets
+    // /theme-style/<slug> serves the combined CSS for non-skyscraper themes.
+    // Skyscraper uses /public/theme.css directly; other themes ride this route.
+    if (p.indexOf("/theme-style/") === 0) {
+      const slug = p.slice("/theme-style/".length).replace(/\/+$/, "");
+      if (!slug || !reg.themeStyle) return new Response("Not found", { status: 404 });
+      const css = reg.themeStyle.css(slug);
+      if (!css) return new Response("Not found", { status: 404 });
+      return new Response(css, {
+        status: 200,
+        headers: {
+          "content-type": "text/css; charset=utf-8",
+          "cache-control": "public, max-age=31536000, immutable",
+        },
+      });
+    }
+
     if (!reg) return;
 
     const rp = real.pathname;
+
+    // ------------------------------------------------- trailing slash
+    // rosefd routes by exact pathname; "/admin/" matches no route while
+    // "/admin" maps to admin/index.rose. 301-normalize every non-root trailing
+    // slash so all "/x/" hit the same page as "/x" (URL/query preserved).
+    if (rp.length > 1 && rp.endsWith("/")) {
+      const clean = new URL(rp.slice(0, -1), real.origin);
+      clean.search = real.search;
+      return Response.redirect(clean, 301);
+    }
 
     // ------------------------------------------------- /admin login wall
     // Whitelist: /admin/login and /admin/setup. First run (no users) sends

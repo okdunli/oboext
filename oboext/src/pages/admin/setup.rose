@@ -91,6 +91,6 @@
       <span data-setup-label>完成初始化</span>
     </button>
 
-    <p class="su-back"><a href="/" style="display:inline-flex;align-items:center;gap:5px"><span class="adm-ic adm-ic-sm" style="--i:url(/public/arrow-left.svg)"></span>返回站点首页</a></p>
+    <p class="su-back"><a href="/" style="display:inline-flex;align-items:center;gap:5px"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-left.svg)"></span>返回站点首页</a></p>
   </form>
 </div>

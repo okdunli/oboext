@@ -1,6 +1,7 @@
 <script>
-  // /api/categories — GET list (all readers), POST create (taxonomy:manage)
-  import { apiGate, readBody, createCategory } from "@server/admin";
+  // /api/categories — GET list (all readers), POST create (taxonomy:manage),
+  // PUT reorder (taxonomy:manage)
+  import { apiGate, readBody, createCategory, reorderCategories } from "@server/admin";
   import { listCategories } from "@server/queries";
 
   export async function GET() {
@@ -13,6 +14,16 @@
       const row = await createCategory(getContext().user, body);
       return new Response(JSON.stringify(row), {
         status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      await reorderCategories(getContext().user, body.items || []);
+      return new Response(JSON.stringify({ ok: true }), {
         headers: { "content-type": "application/json; charset=utf-8" },
       });
     });

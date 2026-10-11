@@ -1,7 +1,6 @@
 <script>
   // Blog index (all posts). Reads the live DB on every request via the
-  // "blog" loader; ?page=N rides the query (the middleware's loopback
-  // workaround lets the 0.1.0 router see query strings).
+  // "blog" loader; ?page=N rides the query string.
   let list = $data(() => __rvLoad("blog", { page: Number(__rvQs().get("page") || 1) }));
 </script>
 
@@ -10,4 +9,4 @@
   <meta name="description" content="全部文章">
 </head>
 
-{list().main}
+{@html list().main}

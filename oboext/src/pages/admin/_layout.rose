@@ -37,8 +37,9 @@
     return !authed();
   }
   // Sidebar nav is data-driven: the session loader returns the preference-
-  // filtered, role-filtered nav as pre-rendered HTML (raw; the .rose compiler
-  // cannot nest directives enough to expand the groups inline).
+  // filtered, role-filtered nav as pre-rendered HTML (emitted via
+  // {@html}; the .rose compiler cannot nest directives enough to
+  // expand the groups inline).
   function navRaw() {
     return (session() && session().navRaw) || "";
   }
@@ -56,7 +57,7 @@
   <aside class="adm-side">
     <div class="adm-logo"><span class="adm-auth-mark">O</span> oboext</div>
     <nav class="adm-nav">
-      {navRaw()}
+      {@html navRaw()}
     </nav>
     <div class="adm-side-foot">
       <div class="adm-avatar">{initial()}</div>

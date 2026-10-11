@@ -5,10 +5,12 @@
   //   1. serve sitemap.xml / feed.xml / robots.txt straight from the loaders;
   //   2. 302 the unique-hit search to its post (original SearchPage parity);
   //   3. answer real 404s for missing posts/categories/tags - a matched
-  //      dynamic route cannot set 404 from inside its component;
-  //   4. work around the rosefd 0.1.0 query-string router bug (see below).
+  //      dynamic route cannot set 404 from inside its component.
   //
-  // The loader registry (dispatch/documents/ready/exists/forward) is
+  // rosefd 0.2.4 routes by pathname (P0-1): query strings reach the render
+  // via $query()/getContext().query, so the old loopback re-entry is gone.
+  //
+  // The loader registry (dispatch/documents/ready/exists) is
   // installed on globalThis by pages/api/data.rose at module-eval time (a
   // static import in the server bundle), so this file needs no ESM import of
   // its own - the component compiler keeps non-exported statements inside
@@ -30,17 +32,10 @@
     const u = new URL(request.url);
     const p = u.pathname;
 
-    // Framework bug (still present in 0.1.2, reported upstream): any query
-    // string 404s the SSR router. Re-enter the
-    // server at the bare pathname (same process, loopback); that second pass
-    // carries the real URL in x-rv-url and renders normally. /api/* already
-    // strips the query for routing, so it is excluded.
-    if (u.search && p !== "/api/data" && p.indexOf("/api/") !== 0 && reg && reg.forward) {
-      return reg.forward(request);
-    }
-
-    // The real URL: x-rv-url during a loopback pass (absolute), this request
-    // otherwise. The bare pass-2 pathname may differ only in the query.
+    // Browser-side loader fetches hit /api/data from whatever admin page the
+    // user is on; x-rv-url carries THAT page's URL so the loader context
+    // (active nav, pathname gates) is correct. Server-side calls dispatch in
+    // process and never send the header.
     const rv = request.headers.get("x-rv-url");
     let real = u;
     if (rv) {

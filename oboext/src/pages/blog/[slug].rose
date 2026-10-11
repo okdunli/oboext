@@ -8,7 +8,7 @@
 </script>
 
 <head>
-  {post().head}
+  {@html post().head}
 </head>
 
-{post().main}
+{@html post().main}

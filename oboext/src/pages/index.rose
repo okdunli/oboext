@@ -5,4 +5,4 @@
   let home = $data(() => __rvLoad("home", {}));
 </script>
 
-{home().main}
+{@html home().main}

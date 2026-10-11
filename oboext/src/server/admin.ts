@@ -37,6 +37,7 @@ import {
 } from "./queries.js";
 import type { SessionUser } from "./auth.js";
 import { hashPassword } from "./auth.js";
+import { HOOKS, applyAsyncFilters, doAction } from "./hooks.js";
 
 export class ServiceError extends Error {
   status: number;
@@ -646,6 +647,17 @@ export async function createPublicComment(input: PublicCommentInput) {
     .filter(Boolean);
   if (words.some((w) => haystack.includes(w))) status = "pending";
 
+  const reviewed = await applyAsyncFilters<{
+    comment: { content: string; userId?: number | null; authorUrl?: string | null };
+    status: "published" | "pending" | "spam";
+    reason?: string;
+  }>(HOOKS.commentApprove, {
+    comment: { content, userId, authorUrl },
+    status,
+    reason: undefined,
+  });
+  status = reviewed.status;
+
   const [comment] = await db
     .insert(comments)
     .values({
@@ -663,6 +675,13 @@ export async function createPublicComment(input: PublicCommentInput) {
     .returning();
 
   if (status === "published") await bumpCommentCount(postType, input.postId, 1);
+  doAction(HOOKS.commentCreated, {
+    comment,
+    postType,
+    postId: input.postId,
+    postTitle: parent.title,
+    isPublic: status === "published",
+  });
   return { comment, isPublic: status === "published" };
 }
 

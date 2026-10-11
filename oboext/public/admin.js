@@ -142,28 +142,6 @@
       return;
     }
 
-    if (act === "tax-edit" || act === "tax-new") {
-      e.preventDefault();
-      var tform = document.querySelector(t.getAttribute("data-form"));
-      if (!tform) return;
-      var submit = tform.querySelector("[type=submit]");
-      if (act === "tax-new") {
-        tform.reset();
-        tform.querySelector('[name=id]').value = "";
-        if (submit) submit.textContent = tform.getAttribute("data-add-label") || "新增";
-        return;
-      }
-      tform.querySelector('[name=id]').value = t.getAttribute("data-id") || "";
-      Object.keys({ name: 1, slug: 1, description: 1, icon: 1, parentid: 1 }).forEach(function (attr) {
-        var field = attr === "parentid" ? "parentId" : attr;
-        var el = tform.querySelector("[name=" + field + "]");
-        if (el) el.value = t.getAttribute("data-" + attr) || "";
-      });
-      if (submit) submit.textContent = "保存修改";
-      tform.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-
     if (act === "user-edit") {
       e.preventDefault();
       var data = JSON.parse(t.getAttribute("data-user"));
@@ -207,9 +185,11 @@
           if (errEl) { errEl.textContent = err.message; errEl.hidden = false; }
           if (btn) btn.disabled = false;
         }
-      } else if (kind === "create-category" || kind === "create-tag") {
-        var base = kind === "create-category" ? "/api/categories" : "/api/tags";
-        var id = form.querySelector('[name=id]').value;
+      } else if (kind === "create-category" || kind === "create-tag" ||
+                 kind === "edit-category" || kind === "edit-tag") {
+        var base = kind.indexOf("category") >= 0 ? "/api/categories" : "/api/tags";
+        var idEl = form.querySelector('[name=id]');
+        var id = idEl ? (idEl.value || "").trim() : "";
         var payload = formObject(form);
         delete payload.id;
         if (id) await api("PUT", base + "/" + id, payload);
@@ -2044,6 +2024,42 @@
     updatePreview();
   }
 
+  function initTaxonomy() {
+    if (window.__taxBound) return;
+    window.__taxBound = true;
+    document.addEventListener("click", function (e) {
+      var edit = e.target.closest && e.target.closest("[data-tax-edit]");
+      if (edit) {
+        var modal = document.querySelector("[data-tax-modal]");
+        if (!modal) return;
+        e.preventDefault();
+        var fields = { id: "data-id", name: "data-name", slug: "data-slug",
+          description: "data-description", icon: "data-icon", parentId: "data-parentid" };
+        Object.keys(fields).forEach(function (name) {
+          var el = modal.querySelector("[name=" + name + "]");
+          if (el) el.value = edit.getAttribute(fields[name]) || "";
+        });
+        modal.hidden = false;
+        var n = modal.querySelector('[name=name]');
+        if (n) n.focus();
+        return;
+      }
+      var overlay = e.target.hasAttribute && e.target.hasAttribute("data-tax-modal")
+        ? e.target
+        : null;
+      var cancel = e.target.closest && e.target.closest("[data-tax-cancel]");
+      var box = cancel && cancel.closest("[data-tax-modal]");
+      if (overlay) overlay.hidden = true;
+      else if (box) box.hidden = true;
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        var m = document.querySelector("[data-tax-modal]:not([hidden])");
+        if (m) m.hidden = true;
+      }
+    });
+  }
+
   function initWidgets() {
     markActiveNav();
     hydrateControls();
@@ -2055,6 +2071,7 @@
     initMenuSettings();
     initThemeManager();
     initThemePanel();
+    initTaxonomy();
   }
 
   function init() {

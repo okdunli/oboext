@@ -32,6 +32,29 @@ body.adm-body {
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; }
 
+/* ------------------------------------------------------------- lucide icons
+   Static per-icon SVG coloured via CSS mask + currentColor, so the glyph
+   inherits the surrounding text colour (hover/active included). Per-use only
+   the --i url and size are set; no JS and no per-icon stylesheet rules. */
+.adm-ic {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask-image: var(--i);
+  mask-image: var(--i);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.adm-ic-sm { width: 14px; height: 14px; }
+.adm-ic-lg { width: 18px; height: 18px; }
+.adm-ic-xl { width: 22px; height: 22px; }
+
 /* --------------------------------------------------------------- auth pages */
 .adm-auth {
   min-height: 100vh;
@@ -51,7 +74,7 @@ button { font-family: inherit; }
 .adm-auth-mark {
   width: 38px; height: 38px; border-radius: 10px;
   background: linear-gradient(135deg, #6366f1, #4338ca);
-  display: grid; place-items: center; font-size: 18px;
+  display: grid; place-items: center; font-size: 18px; color: #fff;
 }
 .adm-auth-side h1 { font-size: 34px; line-height: 1.25; margin: 0 0 16px; }
 .adm-auth-side p { color: var(--adm-muted); line-height: 1.8; max-width: 420px; }
@@ -203,7 +226,8 @@ button { font-family: inherit; }
 }
 .adm-nav a:hover { background: var(--adm-hover); color: var(--adm-text); }
 .adm-nav a.is-active { background: var(--adm-accent-soft); color: #c7d2fe; }
-.adm-nav .ic { width: 17px; text-align: center; opacity: .9; }
+.adm-nav a.is-active .adm-ic { color: #818cf8; }
+.adm-nav .adm-ic { width: 17px; height: 17px; opacity: .9; }
 .adm-nav .badge {
   margin-left: auto; font-size: 11px; background: var(--adm-red);
   border-radius: 999px; padding: 1px 7px; color: #fff; font-weight: 600;
@@ -272,6 +296,24 @@ button { font-family: inherit; }
 .adm-iconbtn:hover { color: var(--adm-text); background: var(--adm-hover); }
 .adm-iconbtn.danger:hover { color: #fca5a5; border-color: var(--adm-red); }
 .adm-table-wrap { overflow-x: auto; }
+
+/* taxonomy managers (tags/categories): horizontal add bar + full table below,
+   matching the original TaxonomyManager layout */
+.adm-tax-add {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px;
+  padding: 16px 18px; margin-bottom: 16px;
+}
+.adm-tax-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; flex: 1; }
+.adm-tax-add .adm-field { margin: 0; }
+.adm-tax-add .adm-btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.adm-tax-table { margin-bottom: 0; }
+.adm-tax-name { display: inline-flex; align-items: center; gap: 8px; }
+.adm-tax-name .adm-ic { color: var(--adm-faint); }
+.adm-tax-table .adm-iconbtn { display: inline-flex; align-items: center; gap: 5px; }
+.adm-tax-grow { min-width: 180px; flex: 1; }
+.adm-tax-child { color: var(--adm-faint); margin-right: 2px; }
+.adm-tax-emoji { font-size: 13px; }
+.adm-muted { color: var(--adm-muted); }
 
 /* -------------------------------------------------------------------- badges */
 .adm-tag {

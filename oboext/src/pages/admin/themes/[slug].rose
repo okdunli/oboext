@@ -34,7 +34,7 @@
 <div class="adm-thp" data-th-panel data-th-panel-data={payload()}>
   <div class="adm-thp-head">
     <div>
-      <a class="adm-thp-back" style="display:inline-flex;align-items:center;gap:5px" href="/admin/themes"><span class="adm-ic adm-ic-sm" style="--i:url(/public/arrow-left.svg)"></span>返回主题列表</a>
+      <a class="adm-thp-back" style="display:inline-flex;align-items:center;gap:5px" href="/admin/themes"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-left.svg)"></span>返回主题列表</a>
       <h1 class="adm-h1">{name()}
         {#if (() => p().isActive)()}
         <span class="adm-thp-live">已启用</span>
@@ -51,7 +51,7 @@
       </p>
     </div>
     <div class="adm-thp-headbtns">
-      <button type="button" class="adm-btn adm-btn-ghost" data-thp-reset><span class="adm-ic" style="--i:url(/public/rotate-ccw.svg)"></span>恢复默认</button>
+      <button type="button" class="adm-btn adm-btn-ghost" data-thp-reset><span class="adm-ic" style="--i:url(/public/icons/rotate-ccw.svg)"></span>恢复默认</button>
       <button type="button" class="adm-btn" data-thp-save>
         <span data-thp-save-label>保存</span>
       </button>
@@ -72,14 +72,14 @@
       </div>
 
       <div class="adm-thp-areas">
-        <p class="adm-thp-areas-title"><span class="adm-ic adm-ic-sm" style="--i:url(/public/layout-grid.svg);vertical-align:-2px"></span> 小工具区域</p>
+        <p class="adm-thp-areas-title"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/layout-grid.svg);vertical-align:-2px"></span> 小工具区域</p>
         <ul class="adm-thp-area-list" data-thp-areas></ul>
-        <a class="adm-thp-areas-link" style="display:inline-flex;align-items:center;gap:4px" href="/admin/widgets">去配置小工具<span class="adm-ic adm-ic-sm" style="--i:url(/public/arrow-right.svg)"></span></a>
+        <a class="adm-thp-areas-link" style="display:inline-flex;align-items:center;gap:4px" href="/admin/widgets">去配置小工具<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-right.svg)"></span></a>
       </div>
 
       <div class="adm-thp-preview" data-thp-preview>
         <div class="adm-thp-preview-inner">
-          <p class="adm-thp-preview-kicker"><span class="adm-ic adm-ic-sm" style="--i:url(/public/sparkles.svg);vertical-align:-2px"></span> 预览</p>
+          <p class="adm-thp-preview-kicker"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/sparkles.svg);vertical-align:-2px"></span> 预览</p>
           <div class="adm-thp-preview-card">
             <p class="adm-thp-preview-title">标题文字</p>
             <p class="adm-thp-preview-sub">次要说明文字</p>

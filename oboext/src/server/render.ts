@@ -71,6 +71,32 @@ function renderBlock(b: Block): string {
 const serializeBlocks = (blocks: Block[] | null | undefined) =>
   !blocks || !blocks.length ? "" : blocks.map(renderBlock).join("\n");
 
+/** Plain-text version (excerpts, reading-time plugin, search). */
+export function blocksToPlainText(blocks: Block[] | null | undefined): string {
+  return (blocks ?? [])
+    .map((b) => {
+      switch (b.type) {
+        case "heading":
+        case "paragraph":
+        case "quote":
+          return b.text || "";
+        case "code":
+          return b.code || "";
+        case "list":
+          return (b.items || []).join(" ");
+        case "image":
+          return b.caption || b.alt || "";
+        default:
+          return "";
+      }
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** One label/value row on the post meta line (plugins append via post.meta). */
+export type MetaItem = { label: string; value: string };
+
 function addHeadingIds(html: string, slug: string): string {
   let i = 0;
   return html.replace(/<h([23])([^>]*)>/g, (_all, lv, attrs) => `<h${lv} id="${slug}-h${i++}"${attrs}>`);
@@ -568,6 +594,8 @@ export function postPage(
   p: PostView,
   related: PostView[],
   commentsHtml = "",
+  pluginMeta: MetaItem[] = [],
+  bodyHtml?: string,
 ): string {
   const cat = p.categories[0] ?? null;
   const meta =
@@ -575,9 +603,11 @@ export function postPage(
     (cat ? `<span>${esc(cat.name)}</span>` : "") +
     `<span> · ${fmtDate(p.publishedAt)}</span>` +
     `<span> · ${p.views ?? 0} 阅读</span>` +
-    `<span> · ${p.commentsCount ?? 0} 评论</span></div>`;
-  const bodyHtml = buildPostBody(p);
-  const headings = extractHeadings(bodyHtml);
+    `<span> · ${p.commentsCount ?? 0} 评论</span>` +
+    pluginMeta.map((m) => `<span> · ${esc(m.label)}：${esc(m.value)}</span>`).join("") +
+    "</div>";
+  const renderedBody = bodyHtml ?? buildPostBody(p);
+  const headings = extractHeadings(renderedBody);
   const toc = headings.length
     ? '<div class="sk-toc"><div class="toc-title">目录</div><ul>' +
       headings
@@ -599,7 +629,7 @@ export function postPage(
     `<h1>${esc(p.title)}</h1>` +
     (p.excerpt ? `<p class="sk-muted">${esc(p.excerpt)}</p>` : "") +
     toc +
-    `<div class="post-content prose-cms">${bodyHtml}</div>` +
+    `<div class="post-content prose-cms">${renderedBody}</div>` +
     tags +
     shareBar(p) +
     '<div class="post-nav"><a href="/blog">← 返回列表</a></div>' +
@@ -649,8 +679,13 @@ export function pageHead(p: PageView, siteTitle: string, siteDescription: string
     .join("");
 }
 
-export function pagePage(p: PageView, recent: PostView[], commentsHtml = ""): string {
-  const bodyHtml = buildPostBody(p);
+export function pagePage(
+  p: PageView,
+  recent: PostView[],
+  commentsHtml = "",
+  bodyHtml?: string,
+): string {
+  const renderedBody = bodyHtml ?? buildPostBody(p);
   const lis = recent
     .map(
       (x) =>
@@ -673,7 +708,7 @@ export function pagePage(p: PageView, recent: PostView[], commentsHtml = ""): st
     '<i class="sk-i-share"></i>分享</span></span>' +
     `<div class="meta"><span>${fmtDateSlash(p.publishedAt)}</span></div>` +
     `<h1>${esc(p.title)}</h1>` +
-    `<div class="post-content prose-cms">${bodyHtml}</div>` +
+    `<div class="post-content prose-cms">${renderedBody}</div>` +
     "</article>" +
     recentSection +
     (commentsHtml ||

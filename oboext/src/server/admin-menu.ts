@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";
 import { ServiceError } from "./admin.js";
+import { admIcon } from "./icons.js";
 import type { Role } from "./auth.js";
 
 export const ADMIN_HOME_DEFAULT = "/admin";
@@ -13,7 +14,7 @@ const OPTION_HOME = "adminHomePath";
 export type MenuLeaf = {
   href: string;
   label: string;
-  /** sidebar glyph used by our AdminShell port (the original used lucide icons) */
+  /** lucide kebab icon name, rendered as a CSS-mask SVG in the sidebar */
   glyph?: string;
   exact?: boolean;
   external?: boolean;
@@ -38,7 +39,7 @@ export type MenuGroup = {
 export const DASHBOARD_LEAF: MenuLeaf = {
   href: ADMIN_HOME_DEFAULT,
   label: "仪表盘",
-  glyph: "▦",
+  glyph: "layout-dashboard",
   exact: true,
 };
 
@@ -46,35 +47,44 @@ const CORE_GROUPS: MenuGroup[] = [
   {
     id: "content",
     label: "内容管理",
-    glyph: "✎",
+    glyph: "file-text",
     children: [
-      { href: "/admin/posts", label: "文章", glyph: "✎" },
-      { href: "/admin/pages", label: "页面", glyph: "📄" },
-      { href: "/admin/categories", label: "分类", glyph: "▤" },
-      { href: "/admin/tags", label: "标签", glyph: "#" },
-      { href: "/admin/comments", label: "评论", glyph: "💬", adminOnly: true },
-      { href: "/admin/media", label: "媒体库", glyph: "🖼" },
+      { href: "/admin/posts", label: "文章", glyph: "file-text" },
+      { href: "/admin/pages", label: "页面", glyph: "files" },
+      { href: "/admin/categories", label: "分类", glyph: "folder" },
+      { href: "/admin/tags", label: "标签", glyph: "tags" },
+      { href: "/admin/comments", label: "评论", glyph: "message-square", adminOnly: true },
+      { href: "/admin/media", label: "媒体库", glyph: "image" },
     ],
   },
   {
     id: "appearance",
     label: "外观设置",
-    glyph: "🎨",
+    glyph: "palette",
     children: [
-      { href: "/admin/themes", label: "主题", glyph: "🎨", superOnly: true },
-      { href: "/admin/widgets", label: "小工具", glyph: "🧩", superOnly: true },
-      { href: "/admin/menus", label: "菜单", glyph: "🧭", superOnly: true },
+      { href: "/admin/themes", label: "主题", glyph: "palette", superOnly: true },
+      { href: "/admin/widgets", label: "小工具", glyph: "layout-grid", superOnly: true },
+      { href: "/admin/menus", label: "菜单", glyph: "menu", superOnly: true },
+    ],
+  },
+  {
+    id: "plugins",
+    label: "插件扩展",
+    glyph: "plug",
+    superOnly: true,
+    children: [
+      { href: "/admin/plugins", label: "全部插件", glyph: "plug", exact: true },
     ],
   },
   {
     id: "system",
     label: "系统设置",
-    glyph: "⚙",
+    glyph: "settings",
     superOnly: true,
     children: [
-      { href: "/admin/settings", label: "站点设置", glyph: "⚙" },
-      { href: "/admin/menu-settings", label: "菜单与首页", glyph: "▣", locked: true },
-      { href: "/admin/users", label: "用户", glyph: "👤" },
+      { href: "/admin/settings", label: "站点设置", glyph: "settings" },
+      { href: "/admin/menu-settings", label: "菜单与首页", glyph: "panel-left", locked: true },
+      { href: "/admin/users", label: "用户", glyph: "users" },
     ],
   },
 ];
@@ -87,7 +97,7 @@ function roleAllows(role: Role, x: { adminOnly?: boolean; superOnly?: boolean })
 
 export function buildAdminMenuAll(): MenuGroup[] {
   return [
-    { id: "top", label: "顶部入口", glyph: "▦", children: [DASHBOARD_LEAF] },
+    { id: "top", label: "顶部入口", glyph: "layout-dashboard", children: [DASHBOARD_LEAF] },
     ...CORE_GROUPS,
   ];
 }
@@ -218,7 +228,7 @@ export function shellNav(
       kind: "link",
       href,
       label: DASHBOARD_LEAF.label,
-      glyph: DASHBOARD_LEAF.glyph || "▦",
+      glyph: DASHBOARD_LEAF.glyph || "layout-dashboard",
       active: pathname === href,
     });
     out.push({ kind: "gend" });
@@ -283,11 +293,11 @@ export function shellNavHtml(
         (n.active ? ' class="is-active"' : "") +
         ' href="' +
         escAttr(n.href) +
-        '"><span class="ic">' +
-        escText(n.glyph) +
-        "</span> " +
+        '">' +
+        (n.glyph ? admIcon(n.glyph, 17) : "") +
+        "<span>" +
         escText(n.label) +
-        "</a>";
+        "</span></a>";
     } else {
       html += "</div>";
     }

@@ -9,6 +9,8 @@ type ServerModule = {
   renderPageStream(pathname: string, write: (chunk: string) => void, shellOpen: string, clientTag: string): Promise<number>;
   canStream(pathname: string): boolean;
   isNoJs(pathname: string): boolean;
+  /** P0-2: routes that exported `buffer = true` - buffered, never streamed */
+  isBuffered(pathname: string): boolean;
   isApi(pathname: string): boolean;
   handleApi(method: string, pathname: string, request: Request): Promise<Response>;
  /** The document's <html lang>/<dir> for a pathname (streaming needs them before the render) */
@@ -34,6 +36,8 @@ type ServerModule = {
   headersFor(pathname: string): Record<string, string> | null;
  /** Routes that exported `csp = { nonce: true }` - nonce policy, never baked */
   cspNonce(pathname: string): boolean;
+  /** P0-1: the query of the request being rendered, for $query() */
+  setQuery(query: Record<string, string>): void;
 };
 
 /**
@@ -70,7 +74,8 @@ export async function createEdgeHandler(outDir: string): Promise<(request: Reque
   };
 
   return async function handle(request: Request): Promise<Response> {
-    const { pathname } = new URL(request.url);
+    const { pathname, searchParams } = new URL(request.url);
+    mod.setQuery?.(Object.fromEntries(searchParams));
     const hookCtx = mod.hasRequestHooks || mod.hasResponseHooks
       ? { request, url: new URL(request.url), method: request.method, pathname, state: {} as Record<string, unknown> }
       : null;
@@ -87,7 +92,7 @@ export async function createEdgeHandler(outDir: string): Promise<(request: Reque
       return hookCtx ? mod.runResponseHooks(hookCtx, apiRes) : apiRes;
     }
     const form = request.method === 'POST' ? await request.formData() : undefined;
-    if (!form && !broken.has(pathname) && mod.canStream(pathname) && !mod.isNoJs(pathname)) {
+    if (!form && !broken.has(pathname) && !mod.isBuffered?.(pathname) && mod.canStream(pathname) && !mod.isNoJs(pathname)) {
       const nonce = mod.cspNonce?.(pathname) ? mintNonce() : '';
       const streamed = new Response(null, {
         status: 200,

@@ -127,6 +127,28 @@ export function headMark(closes: Close[], fn: Close): string {
   return `<!--\u27e6h:${i}\u27e7-->` + fn() + `<!--\u27e6/h:${i}\u27e7-->`;
 }
 
+/**
+ * P1-2 (bug report): TRUSTED HTML - the explicit reverse of esc(). `{@html x}`
+ * emits the value verbatim, so a CMS's rich text renders as markup instead of
+ * as escaped source.
+ *
+ * The markers are an {#if} block's on purpose: wire() already knows how to
+ * adopt the server's nodes in place (identity preserved - an embedded iframe
+ * does not reload) and to swap the range for a fresh parse when the value
+ * changes. Reusing that machinery costs this function and nothing else: no
+ * new marker kind, no new wire branch, no bytes in a document that never
+ * uses it. The close returns the same {html, closes} shape an {#if} block
+ * does, with an EMPTY closes array - trusted HTML is opaque markup, the
+ * compiler never scans inside it, so there are no inner markers to wire.
+ * `arg` is the enclosing block's scope value, exactly as textMark takes it:
+ * a `{@html row.body}` inside an {#each} resolves against the row.
+ */
+export function rawMark(closes: Close[], fn: Close, arg?: unknown): string {
+  const i = closes.push((s?: unknown) => ({ html: String((fn as (a?: unknown) => unknown)(s) ?? ''), closes: [] })) - 1;
+  const r = closes[i](arg) as { html: string };
+  return `<!--\u27e6i:${i}\u27e7-->` + r.html + `<!--\u27e6/i:${i}\u27e7-->`;
+}
+
 const MARK_RE = /^\u27e6([milh]):(\d+)\u27e7$/;
 const END_RE = /^\u27e6\/([milh]):(\d+)\u27e7$/;
 
@@ -158,6 +180,7 @@ export const handlers: Record<string, (e: Event) => void> =
  */
 export function applyHead(html: string): void {
   const seen = new Set<string>();
+  const positional = new Map<string, number>();
   const frag = tpl(html);
   const title = frag.querySelector('title');
   if (title) {
@@ -171,12 +194,19 @@ export function applyHead(html: string): void {
   for (const el of Array.from(document.head.querySelectorAll(`[${HEAD_ATTR}]`))) el.remove();
   for (const el of Array.from(frag.children)) {
     if (el.tagName === 'TITLE') continue;
-    const key = el.getAttribute('name')
+    const tag = el.tagName.toLowerCase();
+    const identity = el.getAttribute('name')
       ?? el.getAttribute('property')
       ?? el.getAttribute('rel')
       ?? el.getAttribute('charset');
-    if (!key) continue;
-    const managed = `${el.tagName.toLowerCase()}:${key}`;
+    let managed: string;
+    if (identity) managed = `${tag}:${identity}`;
+    else if (el.id) managed = `${tag}:${el.id}`;
+    else {
+      const n = positional.get(tag) ?? 0;
+      positional.set(tag, n + 1);
+      managed = `${tag}:#${n}`;
+    }
     if (seen.has(managed)) continue;
     seen.add(managed);
     el.setAttribute(HEAD_ATTR, managed);
@@ -395,6 +425,27 @@ export function clearRequestState(): void {
   signalMap.clear();
   dataCache.clear();
   pendingDeltas.clear();
+}
+
+let requestQuery: Record<string, string> = {};
+let prefetchOverride: Record<string, string> | null = null;
+
+export function $query(): Record<string, string> {
+  if (prefetchOverride) return prefetchOverride;
+  if (typeof location === 'undefined') return requestQuery;
+  const q: Record<string, string> = {};
+  new URLSearchParams(location.search).forEach((v, k) => { q[k] = v; });
+  return q;
+}
+
+/** The per-request query object - the servers call this before every render. */
+export function setRequestQuery(q: Record<string, string>): void {
+  requestQuery = q;
+}
+
+/** The query of the route a prefetch is rendering, or null outside one. */
+export function setPrefetchOverride(q: Record<string, string> | null): void {
+  prefetchOverride = q;
 }
 
 let requestContext: Record<string, unknown> = {};

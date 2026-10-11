@@ -82,17 +82,26 @@ async function sendPage(req: any, res: any, ssrModule: any, hookCtx: any, page: 
   let html = getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, nonce);
   let headers: Record<string, any> = pageHeaders(ssrModule, routePath, nonce);
   if (hookCtx) {
-    const out = await ssrModule.runResponseHooks(hookCtx, new Response(html, { status, headers }));
+    const out = await ssrModule.runResponseHooks(hookCtx, new Response(html, {
+      status,
+      headers: { 'content-type': 'text/html; charset=utf-8', ...headers },
+    }));
     status = out.status;
     headers = webHeadersToNode(out);
-    html = await out.text();
+    html = out.bodyUsed ? html : await out.text();
   }
   sendHtml(req, res, status, html, headers);
 }
 
 const fileCache = new Map<string, { mtimeMs: number; raw: Buffer; br: Buffer; gzip: Buffer; etag: string }>();
 
-const SRC_DIR = process.argv[3] ? path.resolve(process.argv[3]) : process.cwd();
+const __portArg = process.argv.find((a) => a === '--port' || a.startsWith('--port='));
+if (__portArg) {
+  const __v = __portArg.includes('=') ? __portArg.slice('--port='.length) : process.argv[process.argv.indexOf(__portArg) + 1];
+  if (__v && Number(__v) > 0) process.env.PORT = __v;
+}
+
+const SRC_DIR = process.argv[3] && !process.argv[3].startsWith('-') ? path.resolve(process.argv[3]) : process.cwd();
 const OUT_DIR = path.join(process.cwd(), 'dist');
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -173,6 +182,7 @@ async function prerender(routes: RouteInfo[]): Promise<string[]> {
       skipped.push(routePath);
       return;
     }
+    ssrModule.setQuery?.({});
     const page = await ssrModule.renderPage(routePath);
     if (page.status === 500) {
       console.error(`prerender skipped for ${routePath}: render failed, the error page rendered`);
@@ -274,6 +284,7 @@ function revalidateInBackground(routePath: string, filePath: string): void {
   void (async () => {
     try {
       const ssrModule = await loadServer();
+      ssrModule.setQuery?.({});
       const page = await ssrModule.renderPage(routePath);
       if (page.status === 200) {
         await fs.promises.writeFile(filePath, getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir));
@@ -453,6 +464,7 @@ function serveStatic(dir: string, isr = false): (req: any, res: any) => void {
               headers,
               body: body.length > 0 ? body : undefined,
             });
+            ssrModule.setQuery?.(queryOf(req.url));
             let apiRes = await ssrModule.handleApi(req.method || 'GET', apiPath, request);
             if (hookCtx) apiRes = await ssrModule.runResponseHooks(hookCtx, apiRes);
             writeWebHeaders(apiRes, res);
@@ -480,17 +492,21 @@ function serveStatic(dir: string, isr = false): (req: any, res: any) => void {
                 return;
               }
             }
-            const page = await ssrModule.renderPage(req.url || '/', form);
+            ssrModule.setQuery?.(queryOf(req.url));
+            const page = await ssrModule.renderPage(pathnameOf(req.url || '/'), form);
             await sendPage(req, res, ssrModule, hookCtx, page, pathnameOf(req.url || '/'));
-          } catch {
-            res.statusCode = 400;
-            res.end('Bad request');
+          } catch (err) {
+            console.error(`rosezm: POST ${pathnameOf(req.url || '/')} failed:`, err instanceof Error ? err.stack : err);
+            if (!res.headersSent) {
+              res.statusCode = 400;
+              res.end('Bad request');
+            }
           }
         });
         return;
       }
 
-      let safe = path.normalize(req.url || '/').replace(/^(\.\.(\/)?)+/, '');
+      let safe = path.normalize(pathnameOf(req.url || '/')).replace(/^(\.\.(\/)?)+/, '');
       if (safe === '\\' || safe === '/') safe = '/';
       let filePath = path.join(dir, safe);
 
@@ -568,12 +584,13 @@ function serveStatic(dir: string, isr = false): (req: any, res: any) => void {
       try {
         broken = new Set(JSON.parse(fs.readFileSync(path.join(dir, 'broken.json'), 'utf-8')));
       } catch { /* no manifest: nothing known-broken */ }
-      const safe2 = req.url || '/';
-      if (!broken.has(safe2) && ssrModule.canStream(safe2) && !ssrModule.isNoJs(safe2)) {
+      const safe2 = pathnameOf(req.url || '/');
+      ssrModule.setQuery?.(queryOf(req.url));
+      if (!broken.has(safe2) && !ssrModule.isBuffered?.(safe2) && ssrModule.canStream(safe2) && !ssrModule.isNoJs(safe2)) {
         const enc = pickEncoding(req);
         let status = 200;
-        const nonce = nonceFor(ssrModule, pathnameOf(safe2));
-        let headers: Record<string, any> = pageHeaders(ssrModule, pathnameOf(safe2), nonce);
+        const nonce = nonceFor(ssrModule, safe2);
+        let headers: Record<string, any> = pageHeaders(ssrModule, safe2, nonce);
         if (hookCtx) {
           const out = await ssrModule.runResponseHooks(hookCtx, new Response(null, { status, headers }));
           status = out.status;
@@ -609,10 +626,16 @@ function serveStatic(dir: string, isr = false): (req: any, res: any) => void {
         return;
       }
       const page = await ssrModule.renderPage(safe2);
-      await sendPage(req, res, ssrModule, hookCtx, page, pathnameOf(safe2));
-    }).catch(() => {
-      res.statusCode = 404;
-      res.end('Not found');
+      await sendPage(req, res, ssrModule, hookCtx, page, safe2);
+    }).catch((err: unknown) => {
+      console.error(`rosezm: ${req.method} ${req.url} failed:`, err instanceof Error ? err.stack ?? err.message : err);
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.end('<h1>500</h1><p>Something went wrong rendering this page.</p>');
     });
   };
 }
@@ -624,6 +647,71 @@ function pathnameOf(url: string | undefined): string {
   } catch {
     return (url || '/').split('?')[0];
   }
+}
+
+/**
+ * The parsed query string of a URL (?page=2&q=x -> {page:'2',q:'x'}), for
+ * $query() (P0-1). First value wins per key, the way every server-side
+ * framework reads a repeated parameter.
+ */
+function queryOf(url: string | undefined): Record<string, string> {
+  const q: Record<string, string> = {};
+  try {
+    new URL(url || '/', 'http://localhost').searchParams.forEach((v, k) => { if (!(k in q)) q[k] = v; });
+  } catch { /* an unparsable url carries no query */ }
+  return q;
+}
+
+/**
+ * P0-0 (bug report): listen on `port`, hopping to the next free one when it
+ * is taken instead of crashing with EADDRINUSE. Two projects on one machine
+ * (or a dev server that did not exit cleanly) is the everyday case, and a
+ * stack trace plus a dead process is the worst possible answer to it: the
+ * banner names the port actually used, so the URL is never a guess.
+ *
+ * The hop is bounded (20 tries) and every other error is fatal - silently
+ * retrying a real fault would hide it.
+ */
+function listenFree(server: any, port: number, onReady: (port: number) => void): void {
+  const attempt = (p: number): void => {
+    const onError = (err: any) => {
+      server.removeListener('error', onError);
+      if (err && err.code === 'EADDRINUSE' && p - port < 20) {
+        console.log(`🌹 port ${p} is in use - trying ${p + 1}`);
+        attempt(p + 1);
+        return;
+      }
+      console.error(`rosezm: cannot listen on port ${p}:`, err instanceof Error ? err.message : err);
+      process.exit(1);
+    };
+    server.once('error', onError);
+    server.listen(p, () => {
+      server.removeListener('error', onError);
+      onReady(p);
+    });
+  };
+  attempt(port);
+}
+
+/**
+ * P0-0 (bug report): the first free port at or after `from`, probed with a
+ * throwaway socket. The cluster's primary needs this because the workers must
+ * all land on the SAME port - letting each of them hop on its own would put
+ * them on different ports and split the traffic between them. Racy by nature
+ * (a port can be taken between the probe and the workers' listen); the
+ * workers' own listenFree fallback covers that last step.
+ */
+async function freePort(from: number): Promise<number> {
+  const net = await import('node:net');
+  for (let p = from; p < from + 20; p++) {
+    const free = await new Promise<boolean>((resolve) => {
+      const probe = net.createServer();
+      probe.once('error', () => resolve(false));
+      probe.listen(p, () => probe.close(() => resolve(true)));
+    });
+    if (free) return p;
+  }
+  return from;
 }
 
 /**
@@ -667,8 +755,8 @@ async function dev(): Promise<void> {
   const http = await import('http');
   const server = http.createServer(serveStatic(OUT_DIR));
 
-  server.listen(PORT, () => {
-    console.log('🌹 http://localhost:' + PORT);
+  listenFree(server, PORT, (port) => {
+    console.log('🌹 http://localhost:' + port);
   });
 }
 
@@ -677,8 +765,8 @@ async function preview(): Promise<void> {
   const http = await import('http');
   const server = http.createServer(serveStatic(OUT_DIR, true));
 
-  server.listen(PORT, () => {
-    console.log(`🌹 rosezm v${version()} preview at http://localhost:` + PORT);
+  listenFree(server, PORT, (port) => {
+    console.log(`🌹 rosezm v${version()} preview at http://localhost:` + port);
   });
 }
 
@@ -692,9 +780,9 @@ async function serve(): Promise<void> {
   cluster.schedulingPolicy = cluster.SCHED_RR;
   const os = await import('node:os');
   const workers = Math.max(1, Number(process.env.rosezm_WORKERS) || os.cpus().length);
-  const PORT = Number(process.env.PORT) || 3000;
   if (cluster.isPrimary) {
-    for (let i = 0; i < workers; i++) cluster.fork();
+    const port = await freePort(Number(process.env.PORT) || 3000);
+    for (let i = 0; i < workers; i++) cluster.fork({ PORT: String(port) });
     cluster.on('message', (worker: any, msg: any) => {
       if (!msg || msg.type !== 'rosezm:store') return;
       for (const w of Object.values<any>(cluster.workers ?? {})) {
@@ -709,7 +797,7 @@ async function serve(): Promise<void> {
     process.on('SIGTERM', stop);
     process.on('SIGINT', stop);
     cluster.on('exit', () => { if (--live <= 0) process.exit(0); });
-    console.log(`🌹 rosezm v${version()} serve: ${workers} worker${workers > 1 ? 's' : ''} on http://localhost:${PORT} (cluster, bounded bodies, graceful shutdown, access log on stdout)`);
+    console.log(`🌹 rosezm v${version()} serve: ${workers} worker${workers > 1 ? 's' : ''} on http://localhost:${port} (cluster, bounded bodies, graceful shutdown, access log on stdout)`);
     return;
   }
   process.on('disconnect', () => process.exit(0));
@@ -724,11 +812,11 @@ async function serve(): Promise<void> {
   server.requestTimeout = 30_000;
   server.headersTimeout = 65_000;
   server.keepAliveTimeout = 5_000;
-  server.listen(PORT, async () => {
-    console.log(`🌹 rosezm worker ${process.pid} listening on http://localhost:${PORT}`);
+  listenFree(server, PORT, async (port) => {
+    console.log(`🌹 rosezm worker ${process.pid} listening on http://localhost:${port}`);
     for (const p of servicePlugins) {
       try {
-        await p.onServe({ port: PORT, workers });
+        await p.onServe({ port, workers });
       } catch (err) {
         console.error('rosezm: plugin', p.name, 'onServe failed:', err instanceof Error ? err.message : err);
       }

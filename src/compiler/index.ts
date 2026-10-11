@@ -54,6 +54,17 @@ export interface CompileResult {
   revalidate?: number;
   /** the component exports `csr = false` (document ships without the client bundle) */
   csr?: boolean;
+  /**
+   * P0-2 (bug report): the component exports `buffer = true` - render it per
+   * request on the BUFFERED path instead of streaming. A streamed response
+   * commits its status and headers before the body exists, so an onResponse
+   * hook cannot see (let alone replace) the document and a route that fails
+   * mid-render still answers 200. This is the explicit opt-out: the route
+   * keeps the exact same features, it just refuses to trade them for TTFB.
+   * Implies dynamic: a baked file on disk is the one path a hook can never
+   * run on, so `buffer = true` routes are never prerendered.
+   */
+  buffer?: boolean;
   /** the component exports `prefetch = 'off' | 'hover' | 'viewport' | 'all'` (app-global link-prefetch strategy) */
   prefetch?: string;
  /** the component exports `bundle = 'inline' | 'split'` (app-global client bundle mode) */
@@ -220,26 +231,149 @@ function callifyStateReads(script: string, names: string[]): string {
  */
 function callifyTemplateExprs(template: string, names: string[]): string {
   if (names.length === 0) return template;
-  return template.replace(/\{([^{}]*)\}/g, (whole, expr) =>
-    `{${callifyStateReads(expr, names)}}`);
+  let out = '';
+  let last = 0;
+  for (const s of templateExprSpans(template)) {
+    out += template.slice(last, s.start) + '{' + callifyStateReads(s.expr, names) + '}';
+    last = s.end + 1;
+  }
+  return out + template.slice(last);
 }
 
 /**
- * The <script> block of a .rose source, verbatim. `rosezm check` must
- * type-check exactly what the compiler will embed, so the extraction lives
- * here and both consumers share it - one regex, one truth.
+ * The spans of a template's top-level `{ ... }` expressions, literal-aware.
+ *
+ * A flat `[^{}]+` regex cannot see that `{q() ? `a ${q()}` : 'b'}` is ONE
+ * expression: it matched the `{q()}` inside the template literal instead, so
+ * the compiler rewrote THAT and left the rest as prose - the served document
+ * carried `Search: $rose` where the title should have said `Search: rose`.
+ * A wrong page with no error anywhere is the worst failure mode a template
+ * compiler has, so the scan below walks the source once, skipping quoted
+ * strings and template literals (whose own `${ ... }` holes are balanced
+ * separately), and reports the expression a reader sees.
+ *
+ * Shared by every pass that must agree on where an expression ends: the
+ * compiler itself, the state-read rewrite, the {#each} item rename and the
+ * named-slot prop rewrite.
  */
+export function templateExprSpans(src: string): Array<{ start: number; end: number; expr: string }> {
+  const spans: Array<{ start: number; end: number; expr: string }> = [];
+  let i = 0;
+  while (i < src.length) {
+    if (src[i] === '{') {
+      const end = scanExprEnd(src, i);
+      if (end > i + 1) {
+        spans.push({ start: i, end, expr: src.slice(i + 1, end) });
+        i = end + 1;
+        continue;
+      }
+    }
+    i++;
+  }
+  return spans;
+}
+
+/** The index of the `}` that closes the `{` at `open`, or -1 when it never does. */
+function scanExprEnd(src: string, open: number): number {
+  let depth = 0;
+  let i = open;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"') {
+      i = skipQuoted(src, i);
+      continue;
+    }
+    if (ch === '`') {
+      i = skipTemplate(src, i);
+      continue;
+    }
+    if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return i;
+    i++;
+  }
+  return -1;
+}
+
+/** Just past the closing quote of the string literal that starts at `i`. */
+function skipQuoted(src: string, i: number): number {
+  const q = src[i];
+  let j = i + 1;
+  while (j < src.length) {
+    if (src[j] === '\\') {
+      j += 2;
+      continue;
+    }
+    if (src[j] === q) return j + 1;
+    j++;
+  }
+  return j;
+}
+
+/** Just past the closing backtick of the template literal at `i`, `${ }` holes balanced. */
+function skipTemplate(src: string, i: number): number {
+  let j = i + 1;
+  while (j < src.length) {
+    const ch = src[j];
+    if (ch === '\\') {
+      j += 2;
+      continue;
+    }
+    if (ch === '`') return j + 1;
+    if (ch === '$' && src[j + 1] === '{') {
+      const end = scanExprEnd(src, j + 1);
+      j = end < 0 ? src.length : end + 1;
+      continue;
+    }
+    j++;
+  }
+  return j;
+}
+
+// 's scanners are syntactic, and prose is not code: the demo's own "the same zero-JS document." (a sentence ending).
+function stripComments(src: string): string {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const q = src[i];
+    if (q === '"' || q === "'") {
+      const end = skipQuoted(src, i);
+      out += src.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (q === '`') {
+      const end = skipTemplate(src, i);
+      out += src.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (src.startsWith('//', i)) {
+      while (i < src.length && src[i] !== '\n') i++;
+      continue;
+    }
+    if (src.startsWith('/*', i)) {
+      i += 2;
+      while (i < src.length && !src.startsWith('*/', i)) i++;
+      i = Math.min(i + 2, src.length);
+      continue;
+    }
+    if (src.startsWith('<!--', i)) {
+      i += 4;
+      while (i < src.length && !src.startsWith('-->', i)) i++;
+      i = Math.min(i + 3, src.length);
+      continue;
+    }
+    out += src[i++];
+  }
+  return out;
+}
+
+// The <script> block of a .rose source, verbatim.
 export function scriptOf(source: string): string | null {
   return source.match(COMPONENT_RE)?.[1] ?? null;
 }
 
-/**
- * The per-request bag the runtime hooks receive. Web-standard on purpose:
- * the same object reaches a hook on the Node server, the preview server and
- * the edge adapter, so hook code is written once and runs everywhere.
- * `state` is scratch space - one hook writes, a later hook (or the page,
- * through getContext()) reads.
- */
+// The per-request bag the runtime hooks receive.
 export interface RequestHookContext {
   request: Request;
   url: URL;
@@ -248,18 +382,7 @@ export interface RequestHookContext {
   state: Record<string, unknown>;
 }
 
-/**
- * A plugin, in two halves. `transform` runs at BUILD time over each
- * component's raw source. The rest run at RUNTIME: `onRequest`/`onResponse`
- * once per request (Node server, dev/preview and edge adapter alike),
- * `onServe`/`onShutdown` once per worker process under `rosezm serve`
- * (Node only - an edge runtime owns the lifecycle, there is no worker start
- * to hook).
- *
- * A runtime hook is bundled into dist/server.js together with the config
- * module that declares it, so its imports must load in the target runtime
- * (Node and edge both): keep node-only code out of rosezm.config.js.
- */
+// A plugin, in two halves.
 export interface Plugin {
   name: string;
   transform?(code: string, filePath: string): string | Promise<string>;
@@ -273,20 +396,7 @@ export interface Plugin {
   onShutdown?(): void | Promise<void>;
 }
 
-/**
- * The i18n half of rosezm.config.js - a named export beside the
- * plugins:
- *
- *   export const i18n = { preload: ['en', 'zh'] };
- *
- * `preload` lists the locales baked into the CLIENT bundle. The default is
- * every locale: a language switch then costs zero requests, which is the
- * one-request bet taken to its conclusion. An app with many languages lists
- * the ones it wants inline; the rest are written to dist/locales/<lang>.json
- * and fetched on first use (ensureLocale in the runtime). The SERVER bundle
- * always carries every locale - it renders any language on demand, and its
- * size is nobody's hot path.
- */
+// The i18n half of rosezm.config.js - a named export beside the plugins: export const i18n = { preload: ['en'.
 export interface I18nConfig {
   preload?: string[];
 }
@@ -296,20 +406,7 @@ export interface rosezmConfig {
   i18n: I18nConfig;
 }
 
-/**
- * Plugins live in `<root>/rosezm.config.js` as the default export: an array
- * of `{ name, transform, onRequest, onResponse, onServe, onShutdown }`.
- * `transform` runs over each component's raw source (template + script +
- * style, before any parsing) at build time; the runtime hooks are bundled
- * into dist/server.js by build() below. trade-off: transform alone covers
- * macros, custom syntax, includes and auto-imports - a transform can rewrite
- * anything, including the script block; the request/serve hooks cover auth,
- * logging and lifecycle, which no source rewrite can express. The import is
- * cache-busted per build so a config edit takes effect on the dev server's
- * next rebuild, and a missing file is simply "no config" (existence is
- * checked first, so a config with a syntax error still fails loudly).
- * One import, one evaluation: the i18n options ride in the same module.
- */
+// Plugins live in `<root>/rosezm.config.js` as the default export: an array of `{ name, transform, onRequest, onResponse, onServe, onShutdown }`.
 export async function loadConfig(root: string): Promise<rosezmConfig> {
   const file = path.join(root, 'rosezm.config.js');
   if (!fs.existsSync(file)) return { plugins: [], i18n: {} };
@@ -480,16 +577,17 @@ export async function compileComponent(filePath: string, publicDir: string, scop
       guardName: null,
       style: '',
       hasParams: false,
-      api: `import { getContext } from './runtime.js';\n${rewriteRoseImports(`${hoisted.imports}\n${hoisted.rest}`, 'ssr').trim()}`,
+      api: `import { getContext, $query } from './runtime.js';\n${rewriteRoseImports(`${hoisted.imports}\n${hoisted.rest}`, 'ssr').trim()}`,
       apiMethods,
       hasPrerender,
       usesContext,
     };
   }
 
-  const styleMatch = source.match(STYLE_RE);
+  const sourceNoHead = source.replace(HEAD_RE, '');
+  const styleMatch = sourceNoHead.match(STYLE_RE);
   const scopedStyle = styleMatch?.[1] ? scopeCss(styleMatch[1], scopeKey) : '';
-  const sourceNoBlocks = source.replace(STYLE_RE, '');
+  const sourceNoBlocks = sourceNoHead.replace(STYLE_RE, '');
 
   const scriptMatch = sourceNoBlocks.match(COMPONENT_RE);
   const roseResolved = resolveRoseImports(scriptMatch?.[1] ?? '', filePath, registry);
@@ -503,7 +601,7 @@ export async function compileComponent(filePath: string, publicDir: string, scop
       `Fetch in the page's $data (or pages/_middleware.rose) and pass the value down as a prop: <Card user={user()}>.`
     );
   }
-  const usesContext = /getContext\s*\(/.test(rawScript) || /\$store\s*\(/.test(rawScript);
+  const usesContext = /getContext\s*\(/.test(rawScript) || /\$store\s*\(/.test(rawScript) || /\$query\s*\(/.test(rawScript);
   const hasParams = /(?:^|\n)\s*export\s+(?:(?:const|let|var)\s+|(?:async\s+)?function\s+)params\b/.test(rawScript);
   const revalidateMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+revalidate\s*=\s*(\d+)\s*;?/);
   const revalidate = revalidateMatch ? Number(revalidateMatch[1]) : undefined;
@@ -519,6 +617,8 @@ export async function compileComponent(filePath: string, publicDir: string, scop
   }
   const csrMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+csr\s*=\s*(true|false)\s*;?/);
   const csr: boolean | undefined = csrMatch ? csrMatch[1] !== 'false' : undefined;
+  const bufferMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+buffer\s*=\s*(true|false)\s*;?/);
+  const buffer: boolean | undefined = bufferMatch ? bufferMatch[1] !== 'false' : undefined;
   if (csr === false) {
     const dead = /\son:[a-z]+\s*=/.exec(source) ?? /\b(?:onMount|onCleanup|refresh)\s*\(/.exec(rawScript);
     if (dead) {
@@ -566,37 +666,36 @@ export async function compileComponent(filePath: string, publicDir: string, scop
 
   const clientReasons: string[] = [];
   if (/\son:[a-z]+\s*=/.test(source)) clientReasons.push('event wiring (on:)');
-  if (/<form[\s>]/.test(source)) clientReasons.push('a <form> (its in-place adopt is the enhancement)');
+  if (/<form[^>]*\son:[a-z]+\s*=/i.test(source) || /\$action:|data-on-/.test(source)) {
+    clientReasons.push('a form bound to a client dispatch ($action)');
+  }
   const lifecycle = rawScript.match(/\b(?:onMount|onCleanup|refresh|adopt|\$action|\$setState)\s*\(/);
   if (lifecycle) clientReasons.push(`${lifecycle[0].replace(/\s*\($/, '')}()`);
-  if (actionNames.size > 0) {                                                                          // a server action (form target or $action)
-    clientReasons.push(`server action${actionNames.size > 1 ? 's' : ''} (${[...actionNames].join(', ')})`);
-  }
   const needsClient = clientReasons.length > 0;
 
   const jsWarnings: string[] = [];
   if (!needsClient) {
-    if (/\son[a-z]+\s*=\s*["'][^"']*["']/i.test(source)) {
+    const codeOnly = stripComments(source);
+    const scriptCodeOnly = stripComments(rawScript);
+    if (/\son[a-z]+\s*=\s*["'][^"']*["']/i.test(codeOnly)) {
       jsWarnings.push('an inline on* attribute (e.g. onclick="...") - it cannot fire without the bundle; use on:click or set csr = true');
     }
-    if (/javascript:/i.test(source)) {
+    if (/javascript:/i.test(codeOnly)) {
       jsWarnings.push('a javascript: URL - it needs the bundle to run; link to a real route');
     }
-    if (/\b(?:eval|new Function)\s*\(/.test(rawScript)) {
+    if (/\b(?:eval|new Function)\s*\(/.test(scriptCodeOnly)) {
       jsWarnings.push('eval()/new Function() - client code the predicate cannot see');
     }
-    if (/\b(?:document|window|localStorage|sessionStorage)\s*\.|\b(?:add|remove)EventListener\s*\(|\brequestAnimationFrame\s*\(|\bMutationObserver\b|\bnavigator\s*\.|\blocation\s*\.\s*(?:href|assign|replace|reload|pathname|search|hash|origin)\b|\b(?:setTimeout|setInterval)\s*\(/.test(rawScript)) {
+    if (/\b(?:document|window|localStorage|sessionStorage)\s*\.|\b(?:add|remove)EventListener\s*\(|\brequestAnimationFrame\s*\(|\bMutationObserver\b|\bnavigator\s*\.|\blocation\s*\.\s*(?:href|assign|replace|reload|pathname|search|hash|origin)\b|\b(?:setTimeout|setInterval)\s*\(/.test(scriptCodeOnly)) {
       jsWarnings.push('browser-only code (document./window./addEventListener/a timer/...) - a JS-free document never ships this script to the browser, so it throws on the server or runs there and never reaches the client; if the route needs the browser, set csr = true');
     }
   }
 
   const templateMatch = sourceNoBlocks.match(TEMPLATE_RE);
-  const headMatch = sourceNoBlocks.match(HEAD_RE);
-  const headContent = headMatch?.[1] ?? '';
-  const sourceNoHead = sourceNoBlocks.replace(HEAD_RE, '');
+  const headContent = source.match(HEAD_RE)?.[1] ?? '';
   const rawTemplate = templateMatch
     ? templateMatch[1]
-    : sourceNoHead.replace(COMPONENT_RE, '').trim();
+    : sourceNoBlocks.replace(COMPONENT_RE, '').trim();
   const template = scopedStyle
     ? injectScopeAttr(inlineImages(rawTemplate, publicDir), scopeKey)
     : inlineImages(rawTemplate, publicDir);
@@ -631,19 +730,19 @@ export async function compileComponent(filePath: string, publicDir: string, scop
     .replace(/on:(\w+)=\{([^}]+)\}/g, (_, ev, fn) =>
       actionNames.has(fn.trim()) ? `data-on-${ev}="$action:${fn.trim()}"` : `data-on-${ev}="${fn}"`);
 
-  const stateDeclsCode = decls
-    .map((d) => {
-      const key = isComponent ? `${scopeKey}:${d.name}` : d.name;
-      if (d.kind === 'state') {
-        return `const [${d.name}, ${setterNames.get(d.name)!}] = state(${JSON.stringify(key)}, ${d.expr});`;
-      }
-      const isFn = d.expr.includes('=>') || d.expr.startsWith('function');
-      const fn = isFn ? d.expr : `() => (${d.expr})`;
-      return `const __had_${d.name} = hasState(${JSON.stringify(key)});
+  const declCode = (d: (typeof decls)[number]): string => {
+    const key = isComponent ? `${scopeKey}:${d.name}` : d.name;
+    if (d.kind === 'state') {
+      return `const [${d.name}, ${setterNames.get(d.name)!}] = state(${JSON.stringify(key)}, ${d.expr});`;
+    }
+    const isFn = d.expr.includes('=>') || d.expr.startsWith('function');
+    const fn = isFn ? d.expr : `() => (${d.expr})`;
+    return `const __had_${d.name} = hasState(${JSON.stringify(key)});
 const [${d.name}, set${capitalize(d.name)}] = state(${JSON.stringify(key)}, null);
 if (!__had_${d.name}) set${capitalize(d.name)}(await $data(${fn}));`;
-    })
-    .join('\n');
+  };
+  const stateDeclsCode = decls.filter((d) => d.kind === 'state').map(declCode).join('\n');
+  const dataDeclsCode = decls.filter((d) => d.kind === 'data').map(declCode).join('\n');
 
   const stateKeys = decls.map((d) => d.name);
 
@@ -653,7 +752,7 @@ if (!__had_${d.name}) set${capitalize(d.name)}(await $data(${fn}));`;
     return [r.name, { index: hit.index, slots: hit.slots }] as const;
   }));
   const compiledTemplate = compileTemplate(ssrTemplate, 'h', '__c', null, 0, true, comps);
-  const compiledHead = headContent.trim() ? compileTemplate(headContent, '__hd', '__hc', null, 0, false) : '';
+  const compiledHead = headContent.trim() ? compileHead(headContent) : '';
   const hasNamedSlots = /<slot\s+[^>]*\bname\s*=/.test(template);
 
   const ssrExports = actions.length > 0 ? `${exportStmts}\n${actions.map((a) => a.stmt).join('\n')}` : exportStmts;
@@ -661,8 +760,8 @@ if (!__had_${d.name}) set${capitalize(d.name)}(await $data(${fn}));`;
   const isMiddleware = path.basename(filePath) === '_middleware.rose';
   const ssr = isMiddleware
     ? `${RUNTIME_IMPORTS}\n\n${importStmts}\n\n${ssrExports}\n${ssrGuard}\n\n${cleanScript}\n`
-    : generateSSR(cleanScript, compiledTemplate, stateDeclsCode, ssrExports, compiledHead, props, hasNamedSlots, importStmts, isComponent, ssrGuard);
-  const client = generateClient(cleanScript, compiledTemplate, stateDeclsCode, eventBindings, exportStmts, compiledHead, props, hasNamedSlots, importStmts, isComponent);
+    : generateSSR(cleanScript, compiledTemplate, stateDeclsCode, ssrExports, compiledHead, props, hasNamedSlots, importStmts, isComponent, ssrGuard, actions.length > 0, dataDeclsCode);
+  const client = generateClient(cleanScript, compiledTemplate, stateDeclsCode, eventBindings, exportStmts, compiledHead, props, hasNamedSlots, importStmts, isComponent, dataDeclsCode);
 
   return {
     ssr: rewriteRoseImports(ssr, 'ssr'),
@@ -675,6 +774,7 @@ if (!__had_${d.name}) set${capitalize(d.name)}(await $data(${fn}));`;
     usesContext,
     revalidate,
     csr,
+    buffer,
     prefetch,
     bundle,
     needsClient,
@@ -1052,6 +1152,56 @@ function findBlock(src: string, kind: 'if' | 'each' | 'boundary'): RegExpExecArr
   return null;
 }
 
+/**
+ * Compile a <head> block. Same template rules as the body - `{expr}` escapes,
+ * `{#if}`/`{#each}`/`{@html}` all work - with two exceptions:
+ *
+ * - the interior of a `<style>`, `<script>` or `<noscript>` element is RAW
+ *   TEXT, not template source. CSS braces are not rosezm expressions
+ *   (`<style>.a { color: red }</style>` read as one giant `{...}` expression
+ *   and broke the build the first time a route shipped a head-level style),
+ *   and a `<script>`'s own syntax has the same problem.
+ * - an HTML comment is a NOTE, not content: it is dropped. A note that
+ *   mentions `<style>` ("ship a <style> here") must not be able to move where
+ *   the stylesheet starts, and the server's head merge reads this output.
+ *
+ * Each markup segment compiles with its own depth so the block helper names
+ * (`__b0_0`) can never collide inside the one head function they share.
+ */
+function compileHead(head: string): string {
+  const RAW_OPEN = /<(style|script|noscript)\b[^>]*>/iy;
+  let out = '';
+  let buf = '';
+  let seg = 0;
+  let i = 0;
+  const flush = () => {
+    if (buf.trim()) out += compileTemplate(buf, '__hd', '__hc', null, seg++, false);
+    buf = '';
+  };
+  while (i < head.length) {
+    if (head.startsWith('<!--', i)) {
+      const end = head.indexOf('-->', i + 4);
+      i = end < 0 ? head.length : end + 3;
+      continue;
+    }
+    RAW_OPEN.lastIndex = i;
+    const open = RAW_OPEN.exec(head);
+    if (open) {
+      const tag = open[1].toLowerCase();
+      const closeAt = head.toLowerCase().indexOf(`</${tag}`, i + open[0].length);
+      const gt = closeAt < 0 ? -1 : head.indexOf('>', closeAt);
+      const end = gt < 0 ? head.length : gt + 1;
+      flush();
+      out += emitChunk(head.slice(i, end), '__hd', '__hc', null);
+      i = end;
+      continue;
+    }
+    buf += head[i++];
+  }
+  flush();
+  return out;
+}
+
 function compileTemplate(
   template: string,
   acc: string,
@@ -1071,7 +1221,10 @@ function compileTemplate(
     const ifMatch = findBlock(remaining, 'if');
     const eachMatch = findBlock(remaining, 'each');
     const boundaryMatch = findBlock(remaining, 'boundary');
-    const exprMatch = remaining.match(/\{([^{}]+)\}/) as RegExpExecArray | null;
+    const firstExpr = templateExprSpans(remaining)[0];
+    const exprMatch = firstExpr
+      ? Object.assign([remaining.slice(firstExpr.start, firstExpr.end + 1), firstExpr.expr], { index: firstExpr.start }) as unknown as RegExpExecArray
+      : null;
     const compTag = comps.size > 0 ? findCompTag(remaining, comps) : null;
 
     const candidates: Array<{ type: string; match: RegExpExecArray; index: number; tag?: CompTag }> = [];
@@ -1111,8 +1264,13 @@ function compileTemplate(
       const call = autoCall(items);
       const id = nextId();
       const itemRe = new RegExp(`\\b${item}\\b`, 'g');
-      const scoped = content.trim().replace(/\{([^{}]*)\}/g, (whole, expr) =>
-        `{${expr.replace(itemRe, '__s')}}`);
+      let scoped = '';
+      let lastSpan = 0;
+      for (const s of templateExprSpans(content.trim())) {
+        scoped += content.trim().slice(lastSpan, s.start) + '{' + s.expr.replace(itemRe, '__s') + '}';
+        lastSpan = s.end + 1;
+      }
+      scoped += content.trim().slice(lastSpan);
       const inner = compileTemplate(scoped, 'h', '__c', '__s', depth + 1, markers, comps);
       result += `const __b${id} = (__s, __c) => { let h = ''; ${inner} return h; };\n`;
       if (markers) {
@@ -1159,8 +1317,14 @@ function compileTemplate(
         const decl = entry.slots.find((s) => s.name === nm);
         let content = src;
         for (const p of decl?.props ?? []) {
-          content = content.replace(/\{([^{}]*)\}/g, (whole, expr) =>
-            `{${expr.replace(new RegExp(`\\b${p}\\b`, 'g'), `__s.${p}`)}}`);
+          const pRe = new RegExp(`\\b${p}\\b`, 'g');
+          let out = '';
+          let lastSpan = 0;
+          for (const s of templateExprSpans(content)) {
+            out += content.slice(lastSpan, s.start) + '{' + s.expr.replace(pRe, `__s.${p}`) + '}';
+            lastSpan = s.end + 1;
+          }
+          content = out + content.slice(lastSpan);
         }
         return `${JSON.stringify(nm)}: (__s, __c) => { let h = ''; ${compileTemplate(content, 'h', '__c', '__s', depth + 1, markers, comps)} return h; }`;
       });
@@ -1189,6 +1353,19 @@ function compileTemplate(
       if (slotCall) {
         if (before) result += emitChunk(before, acc, closes, scope);
         result += `${acc} += __slotBlock(${closes}, __sl, ${JSON.stringify(slotCall[2])}, [${slotCall[3]}]);\n`;
+        remaining = remaining.substring(earliest.index + earliest.match[0].length);
+        continue;
+      }
+      const rawMatch = /^@html\s+([\s\S]+)$/.exec(trimmed);
+      if (rawMatch) {
+        if (before) result += emitChunk(before, acc, closes, scope);
+        const expr = rawMatch[1].trim();
+        if (!markers) {
+          result += `${acc} += String(${expr} ?? '');\n`;
+        } else {
+          const fn = scope ? `(${scope}) => (${expr})` : `() => (${expr})`;
+          result += `${acc} += rawMark(${closes}, ${fn}${scope ? `, ${scope}` : ''});\n`;
+        }
         remaining = remaining.substring(earliest.index + earliest.match[0].length);
         continue;
       }
@@ -1222,11 +1399,7 @@ interface CompTag {
   selfClosing: boolean;
 }
 
-/**
- * Scan one tag from its `<` to its `>`, quote- and brace-aware so a `>` inside
- * an attribute expression (`title={a > b}`) does not end the tag. Returns the
- * index just past `>`, or -1 when the tag is never closed.
- */
+// Scan one tag from its `<` to its `>`, quote- and brace-aware so a `>` inside an attribute expression (`title={a > b}`) does not end the tag.
 function scanTagEnd(src: string, start: number): number {
   let j = start + 1;
   let quote = '';
@@ -1496,7 +1669,7 @@ function compileSlot(acc: string): string {
   return `${acc} += String(children);\n`;
 }
 
-const RUNTIME_IMPORTS = `import { state, $data, hasState, esc, refresh, onMount, onCleanup, getContext, $t, bestLocale, localeDir, ensureLocale, loadLocale, handlers, $cookies, $sessionCookie, $store, ActionError, $actionError, $actionErrorOrThrow, $boundaryFallback, $append, $prepend, $merge, applyStateDeltas, textMark, attrMark, ifMark, eachMark, headMark } from './runtime.js';`;
+const RUNTIME_IMPORTS = `import { state, setState, $data, hasState, esc, refresh, onMount, onCleanup, getContext, $query, $t, bestLocale, localeDir, ensureLocale, loadLocale, handlers, $cookies, $sessionCookie, $store, ActionError, $actionError, $actionErrorOrThrow, $boundaryFallback, $append, $prepend, $merge, applyStateDeltas, textMark, attrMark, ifMark, eachMark, headMark, rawMark } from './runtime.js';`;
 
 /**
  * `export let title = 'x'` -> a per-invocation const read from the
@@ -1529,12 +1702,14 @@ const __slotBlock = (closes, sl, name, pairs) => {
   return "<!--\\u27e6i:" + idx + "\\u27e7-->" + (hit ? String(hit.fn(hit.o, [])) : "") + "<!--\\u27e6/i:" + idx + "\\u27e7-->";
 };`;
 
-function generateSSR(script: string, templateFn: string, stateDeclsCode: string, exports = '', headFn = '', props: Array<{ name: string; def: string | null }> = [], namedSlots = false, imports = '', isComponent = false, guard = ''): string {
+function generateSSR(script: string, templateFn: string, stateDeclsCode: string, exports = '', headFn = '', props: Array<{ name: string; def: string | null }> = [], namedSlots = false, imports = '', isComponent = false, guard = '', hasActions = false, dataDeclsCode = ''): string {
   const headCode = headFn
     ? `
 const __head = () => { let __hd = ''; ${headFn} return __hd; };
 __html += headMark(closes, __head);`
     : '';
+  const actionState = hasActions ? `
+const $setState = (key, value) => setState(key, value);` : '';
   return `
 ${RUNTIME_IMPORTS}
 
@@ -1542,6 +1717,7 @@ ${imports}
 
 ${exports}
 ${guard}
+${actionState}
 
 ${namedSlots ? SLOT_HELPER : ''}
 
@@ -1549,10 +1725,11 @@ export ${isComponent ? 'function' : 'async function'} render(closes, children, _
   ${props.length > 0 ? 'const __p = __props || {};' : ''}
   ${namedSlots ? 'const __sl = __slots || {};' : ''}
   ${propsCode(props)}
+  ${script}
   ${stateDeclsCode}
+  ${dataDeclsCode}
  // The incremental patches of the action that produced THIS response.
   ${isComponent ? '' : 'applyStateDeltas();'}
-  ${script}
   const __root = (__c, children) => { let h = ''; ${templateFn} return h; };
   let __html = ${isComponent ? '' : 'await '}__root(closes, children);${headCode}
   return __html;
@@ -1570,7 +1747,8 @@ function generateClient(
   props: Array<{ name: string; def: string | null }> = [],
   namedSlots = false,
   imports = '',
-  isComponent = false
+  isComponent = false,
+  dataDeclsCode = ''
 ): string {
   const handlerRegistry = eventBindings.length > 0
     ? `Object.assign(handlers, { ${eventBindings.map((b) => b.fn).join(', ')} });`
@@ -1594,8 +1772,9 @@ export ${isComponent ? 'function' : 'async function'} render(closes, children, _
   ${props.length > 0 ? 'const __p = __props || {};' : ''}
   ${namedSlots ? 'const __sl = __slots || {};' : ''}
   ${propsCode(props)}
-  ${stateDeclsCode}
   ${script}
+  ${stateDeclsCode}
+  ${dataDeclsCode}
   ${handlerRegistry}
   const __root = (__c, children) => { let h = ''; ${templateFn} return h; };
   let __html = ${isComponent ? '' : 'await '}__root(closes, children);${headCode}
@@ -1867,14 +2046,15 @@ export const hasResponseHooks = hooks.some((p) => p.onResponse);
         }
       }
       const csrFlag = routeNoJs(i) ? ', csr: false' : '';
+      const bufferFlag = compiled[i].buffer ? ', buffer: true' : '';
       const guardFlag = compiled[i].guardName ? `, guard: beforeAction_${i}` : '';
-      return `{ pattern: '${info.pattern}', path: '${info.routePath}', render: ${compose(i)}, actions: ${actionMap ? `{ ${actionMap} }` : 'null'}${guardFlag}${csrFlag} }`;
+      return `{ pattern: '${info.pattern}', path: '${info.routePath}', render: ${compose(i)}, actions: ${actionMap ? `{ ${actionMap} }` : 'null'}${guardFlag}${csrFlag}${bufferFlag} }`;
     })
     .join(',\n  ');
 
   const serverEntry = `
 ${serverImports}
-import { setState, clearRequestState, serializeState, resetRequestContext, isLocale, setLocales, localeList, localeDir, setStoreTransport, applyStorePatch, ActionError, StateDelta, setStateDelta } from './runtime.js';
+import { setState, clearRequestState, serializeState, resetRequestContext, setRequestQuery, isLocale, setLocales, localeList, localeDir, setStoreTransport, applyStorePatch, ActionError, StateDelta, setStateDelta } from './runtime.js';
 ${runtimePlugins.length > 0
     ? `import { hooks as __pluginHooks, hasRequestHooks as __hasRequestHooks, hasResponseHooks as __hasResponseHooks } from './plugins.js';`
 : `// no plugin declares a runtime hook, so there is no plugins
@@ -1917,6 +2097,11 @@ export async function runResponseHooks(ctx, res) {
 export const hasRequestHooks = __hasRequestHooks;
 export const hasResponseHooks = __hasResponseHooks;
 
+// P0-1: the query of the request being rendered, for $query().
+export function setQuery(query) {
+  setRequestQuery(query || {});
+}
+
 // I18n: the dictionaries baked at build time from src/locales/*.json.
 setLocales(${localesJson}, '${defaultLocale}');
 
@@ -1938,9 +2123,9 @@ export const routeParams = {
   ${pages.filter(({ info, i }) => compiled[i].hasParams).map(({ info, i }) => `'${info.routePath}': comp_${i}.params`).join(',\n  ')}
 };
 
-// Routes whose component reads the request context (getContext()), mutates a shared store ($store)
+// Routes whose component reads the request context (getContext()), mutates a shared store ($store()), reads the query ($query(), P0-1)
 export const dynamicRoutes = [
-  ${pages.filter(({ i }) => compiled[i].usesContext || compiled[i].cspNonce).map(({ info }) => `'${info.routePath}'`).join(',\n  ')}
+  ${pages.filter(({ i }) => compiled[i].usesContext || compiled[i].cspNonce || compiled[i].buffer).map(({ info }) => `'${info.routePath}'`).join(',\n  ')}
 ];
 
 // Which api routes opt into build-time baking (export const prerender = true): routePath -> boolean.
@@ -1965,6 +2150,11 @@ export const noJsRoutes = [
 
 export function isNoJs(pathname) {
   return noJsRoutes.some((pattern) => matchRoute(pattern, pathname));
+}
+
+// P0-2 (bug report): routes that exported "buffer = true".
+export function isBuffered(pathname) {
+  return routes.some((route) => route.buffer && matchRoute(route.pattern, pathname));
 }
 
 // Per-route response headers: a route exporting a headers map carries them into every response the servers write.
@@ -2255,7 +2445,7 @@ export async function renderPageStream(pathname, write, shellOpen, clientTag) {
 
   const clientEntry = `
 ${clientImports}
-import { setState, resumeState, clearRequestState, resetEffects, wire, isolateStateAsync, restoreState, setRefreshHook, clearMounts, flushMounts, adoptCleanups, handlers, setLocales, setLocalePacks, ensureLocale, isLocale, localeDir } from './runtime.js';
+import { setState, resumeState, clearRequestState, resetEffects, wire, isolateStateAsync, restoreState, setRefreshHook, clearMounts, flushMounts, adoptCleanups, handlers, setLocales, setLocalePacks, ensureLocale, isLocale, localeDir, setPrefetchOverride } from './runtime.js';
 
 // I18n: the dictionaries baked at build time - the client renders any PRELOADED locale from the bundle.
 setLocales(${clientLocalesJson}, '${defaultLocale}');
@@ -2350,9 +2540,12 @@ export function prefetch(pathname, source = 'hover') {
   if (pathname === location.pathname) return; // already here: nothing to prefetch
   const route = routes.find((r) => matchRoute(r.pattern, pathname));
   if (!route) return;
-  if (prefetchPending >= PREFETCH_BUDGET) return; // budget spent: drop it, a later hover retries
+  if (prefetchPending >= PREFETCH_BUDGET) return; // Budget spent: drop it, a later hover retries. P0-1: the link may carry a query (/search?q=cats)
+  const qi = pathname.indexOf('?');
+  const qOverride = qi >= 0 ? Object.fromEntries(new URLSearchParams(pathname.slice(qi))) : null;
   const p = prefetchQueue.then(async () => {
     try {
+      setPrefetchOverride(qOverride);
       // The isolated render also captures the onMount callbacks the route queued and the onCleanup disposers it registered: the paint that consumes.
       const { result, state, mounts, cleanups } = await isolateStateAsync(async () => {
         await applyParams(route, pathname); // a packed locale's dictionary lands before the render
@@ -2373,6 +2566,7 @@ export function prefetch(pathname, source = 'hover') {
       prefetchCache.delete(pathname); // failed: the next hover retries
       return null;
     } finally {
+      setPrefetchOverride(null);
       prefetchPending--;
     }
   });

@@ -197,10 +197,25 @@ const STYLES_MIN = STYLES.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^"']+/g,
  * Merge the route chain's <head> blocks (document order: page first, then its
  * layouts) into one clean <head> fragment. First occurrence wins per key, so a
  * page overrides its layouts - matching the client's reverse-order applyHead.
+ *
+ * Bug report 2026.9.22 11:46: the keyed whitelist used to be title plus
+ * meta/link/base and NOTHING else, so a `<style>` block, a
+ * `<script type="application/ld+json">` data block and a `<noscript>`
+ * fallback were dropped here in silence - the compiler collected them, the
+ * merge threw them away, and a CMS theme system had no way to ship its
+ * per-request CSS. Every head element now passes through: the keyed
+ * singletons keep their name/property/rel/charset identity, and everything
+ * else is keyed by id when it has one and by tag+position when it does not,
+ * so two layouts' <style> blocks coexist and a page still overrides its
+ * layout's. Passthrough elements carry HEAD_ATTR too (the attribute the
+ * runtime manages) so a client-side navigation replaces or drops them like
+ * any other managed element instead of leaking the previous route's CSS
+ * into every route visited after it.
  */
 function mergeHeadBlocks(blocks: string[]): string {
   const byKey = new Map<string, string>();
   const order: string[] = [];
+  const positional = new Map<string, number>();
   const put = (key: string, html: string) => {
     if (!byKey.has(key)) {
       byKey.set(key, html);
@@ -209,11 +224,20 @@ function mergeHeadBlocks(blocks: string[]): string {
   };
   for (const block of blocks) {
     for (const m of block.matchAll(/<title[^>]*>[\s\S]*?<\/title>/gi)) put('title', m[0]);
-    for (const m of block.matchAll(/<(meta|link|base)((?:\s+[\w-]+(?:="[^"]*")?)*)\s*\/?>/gi)) {
+    for (const m of block.matchAll(/<(\w+)((?:\s+[\w:-]+(?:=(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*(?:\/>|>([\s\S]*?)<\/\1\s*>|>)/gi)) {
       const tag = m[1].toLowerCase();
-      const keyMatch = m[2].match(/\s(?:name|property|rel|charset)="([^"]*)"/i);
-      const key = keyMatch ? `${tag}:${keyMatch[1]}` : tag;
-      const marked = keyMatch ? m[0].replace(/^<\w+/, (t) => `${t} data-rosezm-head="${key}"`) : m[0];
+      if (tag === 'title') continue;
+      const attrs = m[2];
+      const keyMatch = attrs.match(/\s(?:name|property|rel|charset)=(?:"([^"]*)"|'([^']*)')/i);
+      const idMatch = attrs.match(/\sid=(?:"([^"]*)"|'([^']*)')/i);
+      let key: string;
+      if (keyMatch) key = `${tag}:${keyMatch[1] ?? keyMatch[2]}`;
+      else if (idMatch) key = `${tag}:${idMatch[1] ?? idMatch[2]}`;
+      else {
+        key = `${tag}:#${positional.get(tag) ?? 0}`;
+        positional.set(tag, (positional.get(tag) ?? 0) + 1);
+      }
+      const marked = m[0].replace(/^<\w+/, (t) => `${t} data-rosezm-head="${key}"`);
       put(key, marked);
     }
   }
@@ -272,17 +296,19 @@ export function buildShell(ssrHtml: string, stateJson: string, client: string | 
   const jsTail = js
     ? `\n  <script type="application/json" id="__rosezm_state">${stateJson}</script>\n  ${clientTag}`
     : '';
+  const open = js ? '<div id="app">' : '';
+  const close = js ? '</div>' : '';
+  const shellStyles = js ? `\n  <style>${STYLES_MIN}</style>` : '';
 
   return `<!DOCTYPE html>
 <html lang="${lang}"${dir ? ` dir="${dir}"` : ''}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">${headTags}${iconTag}
-  ${titleTag}
-  <style>${STYLES_MIN}</style>${styleTag}
+  ${titleTag}${shellStyles}${styleTag}
 </head>
 <body>
-  <div id="app">${ssrHtml}</div>${jsTail}
+  ${open}${ssrHtml}${close}${jsTail}
 </body>
 </html>`;
 }

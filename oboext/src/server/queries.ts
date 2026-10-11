@@ -1,9 +1,8 @@
 /**
  * Read queries for the public site — ported from lib/services/posts.ts and
  * taxonomies.ts. Every function reads the LIVE database on demand; nothing is
- * baked. Plugin-contributed sticky posts are intentionally absent (all
- * plugins are disabled in this database), so only the native posts.pinned
- * flag floats, exactly as posts.ts falls back to.
+ * baked. Sticky ordering merges plugin ids (posts.pinned hook) with the
+ * native posts.pinned flag, exactly as posts.ts does.
  */
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
@@ -26,6 +25,7 @@ import {
   categoryUrlFor,
   tagUrlFor,
 } from "./links.js";
+import { HOOKS, applyFilters } from "./hooks.js";
 
 export type TaxRef = { id: number; name: string; slug: string; url: string };
 
@@ -147,11 +147,26 @@ export async function listPosts(
     !opts.search &&
     !opts.excludeId
   ) {
+    const contributed = applyFilters<{ query: PostQuery; ids: number[] }>(HOOKS.postsPinned, {
+      query: opts,
+      ids: [],
+    });
+    const wanted = contributed.ids.filter((n) => Number.isInteger(n) && n > 0);
+    if (wanted.length) {
+      const valid = await db
+        .select({ id: posts.id })
+        .from(posts)
+        .where(where ? and(where, inArray(posts.id, wanted)) : inArray(posts.id, wanted));
+      const validSet = new Set(valid.map((r) => r.id));
+      floatingIds = wanted.filter((id) => validSet.has(id));
+    }
     const pinRows = await db
       .select({ id: posts.id })
       .from(posts)
       .where(where ? and(where, eq(posts.pinned, true)) : eq(posts.pinned, true));
-    floatingIds = pinRows.map((r) => r.id);
+    for (const r of pinRows) {
+      if (!floatingIds.includes(r.id)) floatingIds.push(r.id);
+    }
   }
   const normalWhere = floatingIds.length
     ? where

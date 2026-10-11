@@ -4,6 +4,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL, fileURLToPath } from 'url';
 import * as esbuild from 'esbuild';
+import { RoseError, lineOf, lineAt } from './errors.js';
+export { RoseError, lineOf, lineAt, errorInfo } from './errors.js';
+export type { RoseErrorInfo } from './errors.js';
 
 const COMPONENT_RE = /<script>([\s\S]*?)<\/script>/;
 const TEMPLATE_RE = /<template>([\s\S]*?)<\/template>/;
@@ -21,7 +24,7 @@ const SLOT_NAMED_RE = /<slot\s+((?=[^>]*\bname\s*=)[^>]*?)\/?>/g;
 // Encode a named slot tag as the template expression `__slot('row', [['item', (post)]])` - array pairs.
 function encodeSlotCall(attrs: string): string {
   const name = /\bname\s*=\s*["'](\w+)["']/.exec(attrs)?.[1];
-  if (!name) throw new Error('<slot> with attributes must declare a name: <slot name="row" ... />');
+  if (!name) throw new RoseError('E-TEMPLATE', '<slot> with attributes must declare a name: <slot name="row" ... />', { hint: 'a slot carrying attributes is a NAMED slot - it must declare which one: <slot name="row" item={post} />' });
   const pairs = [...attrs.matchAll(/\b(\w+)\s*=\s*\{([^}]*)\}/g)]
     .filter((m) => m[1] !== 'name')
     .map((m) => `['${m[1]}', (${m[2].trim()})]`);
@@ -67,6 +70,8 @@ export interface CompileResult {
   buffer?: boolean;
   /** the component exports `prefetch = 'off' | 'hover' | 'viewport' | 'all'` (app-global link-prefetch strategy) */
   prefetch?: string;
+ /** The component exports `vitals = true` (app-global web-vitals reporting) */
+  vitals?: boolean;
  /** the component exports `bundle = 'inline' | 'split'` (app-global client bundle mode) */
   bundle?: string;
  /** The static analysis says this component needs the client bundle */
@@ -447,21 +452,29 @@ export type RoseRegistry = Map<string, { index: number; scopeKey: string; slots:
  */
 function resolveRoseImports(script: string, fromFile: string, registry: RoseRegistry): { script: string; imports: Array<{ name: string; specifier: string; index: number }> } {
   const imports: Array<{ name: string; specifier: string; index: number }> = [];
-  const resolve = (spec: string): { index: number; scopeKey: string } => {
+  const resolve = (spec: string, at: number): { index: number; scopeKey: string } => {
     const abs = path.resolve(path.dirname(fromFile), spec);
     const hit = registry.get(abs);
     if (!hit) {
-      throw new Error(`${path.basename(fromFile)}: cannot import '${spec}' - no .rose file at ${abs}. A component lives under src/components/ (or src/pages/) and is imported by relative path.`);
+      throw new RoseError(
+        'E-IMPORT',
+        `${path.basename(fromFile)}: cannot import '${spec}' - no .rose file at ${abs}. A component lives under src/components/ (or src/pages/) and is imported by relative path.`,
+        {
+          file: fromFile,
+          line: lineOf(script, at),
+          hint: `create ${abs} (a .rose component) or fix the import path - a .rose import resolves to a file, never to a package`,
+        },
+      );
     }
     return hit;
   };
-  let rewritten = script.replace(/import\s+(\w+)\s+from\s*(['"])([^'"]+\.rose)\2/g, (whole, name, q, spec) => {
-    const hit = resolve(spec);
+  let rewritten = script.replace(/import\s+(\w+)\s+from\s*(['"])([^'"]+\.rose)\2/g, (whole, name, q, spec, at: number) => {
+    const hit = resolve(spec, at);
     imports.push({ name, specifier: spec, index: hit.index });
     return `import { render as ${name} } from ${q}__rose_${hit.index}__${q}`;
   });
-  rewritten = rewritten.replace(/import\s*(\{[^}]*\})\s*from\s*(['"])([^'"]+\.rose)\2/g, (whole, clause, q, spec) => {
-    const hit = resolve(spec);
+  rewritten = rewritten.replace(/import\s*(\{[^}]*\})\s+from\s*(['"])([^'"]+\.rose)\2/g, (whole, clause, q, spec, at: number) => {
+    const hit = resolve(spec, at);
     const alias = /\bas\s+(\w+)/.exec(clause)?.[1] ?? 'render';
     imports.push({ name: alias, specifier: spec, index: hit.index });
     return `import ${clause} from ${q}__rose_${hit.index}__${q}`;
@@ -477,6 +490,97 @@ function resolveRoseImports(script: string, fromFile: string, registry: RoseRegi
  */
 function rewriteRoseImports(script: string, kind: 'ssr' | 'client'): string {
   return script.replace(/from\s*(['"])__rose_(\d+)__\1/g, (_, q, n) => `from ${q}./comp-${n}.${kind}.js${q}`);
+}
+
+/**
+ * The specifiers that can never reach a browser
+ * bundle. Node builtins by prefix, plus the database drivers the docs tell
+ * you to use - the packages a rosezm app reaches for on the server and
+ * nowhere else.
+ *
+ * Trade-off: a specifier list, not a resolver. A package that merely LOOKS
+ * server-side but bundles fine for the browser still builds (nothing is
+ * lost); the list only has to catch what esbuild's browser platform would
+ * refuse anyway, which is what turns a cryptic failure into a clear one.
+ */
+const NODE_ONLY_SPEC = /^(?:node:|(?:fs|path|os|crypto|http|https|net|tls|stream|child_process|worker_threads|dns|cluster|better-sqlite3|sqlite3|pg|mysql2|mongodb|redis|ioredis)$)/;
+
+/** The node-only specifiers among a module's hoisted imports (type imports excluded: esbuild erases them). */
+function nodeOnlyImports(importStmts: string): string[] {
+  const out: string[] = [];
+  for (const m of importStmts.matchAll(/import\s+(type\s+)?[\s\S]*?from\s*['"]([^'"]+)['"]/g)) {
+    if (m[1]) continue;
+    if (NODE_ONLY_SPEC.test(m[2])) out.push(m[2]);
+  }
+  return out;
+}
+
+/**
+ * `on:event={fn}` -> `data-on-event="fn"`, plus the handler registry entries
+ * the client module needs. One pass, two outputs, so the attribute and the
+ * registry can never disagree.
+ *
+ * Brace-aware on purpose: a flat `on:(\w+)=\{([^}]+)\}` stopped at the FIRST
+ * `}`, so an inline arrow (`on:click={() => $setState('n', n() + 1)}`) was
+ * truncated at its own closing brace - which emitted
+ * `Object.assign(handlers, { () => ... })` (a syntax error in the generated
+ * module) and left a stray `}` in the markup. The scan below balances braces
+ * and skips string and template literals, exactly like templateExprSpans.
+ *
+ * A handler that names a server action becomes `data-on-event="$action:name"`
+ * and never reaches the client registry (the body is server-only). An inline
+ * handler gets a synthetic name (`__hN`) and rides the registry as
+ * `__hN: <expr>`: the registry statement is emitted inside render(), after
+ * the state declarations, so the arrow closes over the same `count()`/`setN`
+ * the rest of the page uses.
+ */
+function wireEventBindings(template: string, actionNames: Set<string>): {
+  template: string;
+  bindings: Array<{ event: string; fn: string }>;
+} {
+  const bindings: Array<{ event: string; fn: string }> = [];
+  let out = '';
+  let rest = template;
+  for (;;) {
+    const m = /\bon:(\w+)\s*=\s*\{/.exec(rest);
+    if (!m) {
+      out += rest;
+      break;
+    }
+    out += rest.slice(0, m.index);
+    let i = m.index + m[0].length;
+    let depth = 1;
+    while (i < rest.length) {
+      const ch = rest[i];
+      if (ch === '"' || ch === "'") {
+        i = skipQuoted(rest, i);
+        continue;
+      }
+      if (ch === '`') {
+        i = skipTemplate(rest, i);
+        continue;
+      }
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) break;
+      }
+      i++;
+    }
+    const expr = rest.slice(m.index + m[0].length, i).trim();
+    if (actionNames.has(expr)) {
+      out += `data-on-${m[1]}="$action:${expr}"`;
+    } else if (/^\w+$/.test(expr)) {
+      out += `data-on-${m[1]}="${expr}"`;
+      bindings.push({ event: m[1], fn: expr });
+    } else {
+      const name = `__h${bindings.length}`;
+      out += `data-on-${m[1]}="${name}"`;
+      bindings.push({ event: m[1], fn: `${name}: ${expr}` });
+    }
+    rest = rest.slice(i + 1);
+  }
+  return { template: out, bindings };
 }
 
 /**
@@ -556,7 +660,11 @@ export async function compileComponent(filePath: string, publicDir: string, scop
     try {
       source = await p.transform(source, filePath);
     } catch (err) {
-      throw new Error(`plugin ${p.name} failed on ${path.basename(filePath)}: ${err instanceof Error ? err.message : String(err)}`);
+      throw new RoseError(
+        'E-PLUGIN',
+        `plugin ${p.name} failed on ${path.basename(filePath)}: ${err instanceof Error ? err.message : String(err)}`,
+        { file: filePath, hint: 'the error above came from inside the plugin - fix its transform() (or remove the plugin from rosezm.config.js)' },
+      );
     }
   }
 
@@ -594,11 +702,30 @@ export async function compileComponent(filePath: string, publicDir: string, scop
   const rawScript = roseResolved.script;
   const roseImports = roseResolved.imports;
   const { imports: importStmts, rest: scriptNoImports } = hoistImports(rawScript);
+  if (path.basename(filePath) !== '_middleware.rose') {
+    for (const spec of nodeOnlyImports(importStmts)) {
+      const at = importStmts.indexOf(spec);
+      throw new RoseError(
+        'E-NODE-ONLY',
+        `${filePath}: cannot import '${spec}' in a page or component - it never reaches the browser. ` +
+        `This module's script ships to the client (its $data bodies included), so move the import to ` +
+        `src/pages/_middleware.rose or a pages/api/*.rose handler: those are server-only, and the rows ` +
+        `travel to the page through getContext() / $data.`,
+        {
+          file: filePath,
+          line: at >= 0 ? lineOf(importStmts, at) : undefined,
+          hint: `'${spec}' is a server-only module: import it inside src/pages/_middleware.rose (or a pages/api/*.rose handler) instead - a page/component script ships to the browser`,
+        },
+      );
+    }
+  }
   const isComponent = registry.get(filePath)?.scopeKey.startsWith('components/') ?? false;
   if (isComponent && /\$data\s*\(/.test(rawScript)) {
-    throw new Error(
+    throw new RoseError(
+      'E-EXPORT',
       `${filePath}: $data() is not allowed in a component - an imported component renders synchronously inside its parent. ` +
-      `Fetch in the page's $data (or pages/_middleware.rose) and pass the value down as a prop: <Card user={user()}>.`
+      `Fetch in the page's $data (or pages/_middleware.rose) and pass the value down as a prop: <Card user={user()}>.`,
+      { file: filePath, hint: 'move the fetch to the page (or the middleware) and pass the value down as a prop' },
     );
   }
   const usesContext = /getContext\s*\(/.test(rawScript) || /\$store\s*\(/.test(rawScript) || /\$query\s*\(/.test(rawScript);
@@ -608,12 +735,29 @@ export async function compileComponent(filePath: string, publicDir: string, scop
   const prefetchMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+prefetch\s*=\s*['"`](\w+)['"`]\s*;?/);
   const prefetch = prefetchMatch ? prefetchMatch[1] : undefined;
   if (prefetch && !['off', 'hover', 'viewport', 'all'].includes(prefetch)) {
-    throw new Error(`${filePath}: export const prefetch must be 'off', 'hover', 'viewport' or 'all'`);
+    throw new RoseError(
+      'E-EXPORT',
+      `${filePath}: export const prefetch must be 'off', 'hover', 'viewport' or 'all'`,
+      { file: filePath, line: lineAt(rawScript, prefetchMatch), hint: "prefetch is the app-global link strategy, declared once in the root _layout.rose: 'off' | 'hover' (default) | 'viewport' | 'all'" },
+    );
+  }
+  const vitalsMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+vitals\s*=\s*([^;\n]+)\s*;?/);
+  const vitals = vitalsMatch ? vitalsMatch[1].trim() === 'true' : undefined;
+  if (vitalsMatch && !vitals) {
+    throw new RoseError(
+      'E-EXPORT',
+      `${filePath}: export const vitals must be true (or be absent - the hook ships only when an app asks for it)`,
+      { file: filePath, line: lineAt(rawScript, vitalsMatch), hint: 'omit the export entirely, or set it to exactly true - the web-vitals hook is opt-in per app' },
+    );
   }
   const bundleMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+bundle\s*=\s*['"`](\w+)['"`]\s*;?/);
   const bundle = bundleMatch ? bundleMatch[1] : undefined;
   if (bundle && !['inline', 'split'].includes(bundle)) {
-    throw new Error(`${filePath}: export const bundle must be 'inline' or 'split'`);
+    throw new RoseError(
+      'E-EXPORT',
+      `${filePath}: export const bundle must be 'inline' or 'split'`,
+      { file: filePath, line: lineAt(rawScript, bundleMatch), hint: "'inline' (default) is the single-document mode; 'split' is mode B for large apps - route-level chunks, loaded on demand" },
+    );
   }
   const csrMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+csr\s*=\s*(true|false)\s*;?/);
   const csr: boolean | undefined = csrMatch ? csrMatch[1] !== 'false' : undefined;
@@ -622,9 +766,16 @@ export async function compileComponent(filePath: string, publicDir: string, scop
   if (csr === false) {
     const dead = /\son:[a-z]+\s*=/.exec(source) ?? /\b(?:onMount|onCleanup|refresh)\s*\(/.exec(rawScript);
     if (dead) {
-      throw new Error(
+      const deadSrc = dead === (/\son:[a-z]+\s*=/.exec(source) ?? undefined) ? source : rawScript;
+      throw new RoseError(
+        'E-EXPORT',
         `${filePath}: csr = false cannot ship ${dead[0].trim()} - event wiring, onMount/onCleanup and refresh() all need the client bundle. ` +
-        `(Forms still work without JS: a native POST runs the server action.)`
+        `(Forms still work without JS: a native POST runs the server action.)`,
+        {
+          file: filePath,
+          line: lineAt(deadSrc, dead),
+          hint: 'drop csr = false (let the compiler decide), or remove the client-only code - a native <form method="POST"> server action works without the bundle',
+        },
       );
     }
   }
@@ -636,10 +787,18 @@ export async function compileComponent(filePath: string, publicDir: string, scop
     try {
       value = new Function(`return ${headersLiteral}`)();
     } catch {
-      throw new Error(`${filePath}: export const headers must be an object literal`);
+      throw new RoseError(
+        'E-EXPORT',
+        `${filePath}: export const headers must be an object literal`,
+        { file: filePath, hint: "write it as one literal: export const headers = { 'x-robots-tag': 'noindex' }" },
+      );
     }
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.values(value as object).some((v) => typeof v !== 'string')) {
-      throw new Error(`${filePath}: export const headers must be a flat map of string -> string`);
+      throw new RoseError(
+        'E-EXPORT',
+        `${filePath}: export const headers must be a flat map of string -> string`,
+        { file: filePath, hint: 'every value must be a string literal (a number or an array fails here instead of shipping verbatim)' },
+      );
     }
     headers = value as Record<string, string>;
   }
@@ -651,11 +810,19 @@ export async function compileComponent(filePath: string, publicDir: string, scop
     try {
       value = new Function(`return ${cspLiteral}`)();
     } catch {
-      throw new Error(`${filePath}: export const csp must be an object literal`);
+      throw new RoseError(
+        'E-EXPORT',
+        `${filePath}: export const csp must be an object literal`,
+        { file: filePath, hint: 'write it as one literal: export const csp = { nonce: true }' },
+      );
     }
     const nonce = (value as { nonce?: unknown } | null)?.nonce;
     if (nonce !== undefined && typeof nonce !== 'boolean') {
-      throw new Error(`${filePath}: csp.nonce must be a boolean`);
+      throw new RoseError(
+        'E-EXPORT',
+        `${filePath}: csp.nonce must be a boolean`,
+        { file: filePath, hint: 'csp.nonce is a switch: true (per-request nonce, the route becomes dynamic) or absent (the default hashed policy)' },
+      );
     }
     cspNonce = nonce === true;
   }
@@ -706,30 +873,6 @@ export async function compileComponent(filePath: string, publicDir: string, scop
   const setterNames = new Map<string, string>();
   stateDecls.forEach((s) => setterNames.set(s.name, `set${capitalize(s.name)}`));
 
-  const eventBindings: Array<{ event: string; fn: string }> = [];
-  let em: RegExpExecArray | null;
-  EVENT_RE.lastIndex = 0;
-  while ((em = EVENT_RE.exec(template))) {
-    if (!actionNames.has(em[2].trim())) eventBindings.push({ event: em[1], fn: em[2] });
-  }
-
-  let cleanScript = removeRanges(script, decls.map((d) => [d.start, d.end] as [number, number]));
-  cleanScript = cleanScript.replace(SETSTATE_RE, (_, key, val) => {
-    const trimmedKey = key.trim().replace(/^['"`]|['"`]$/g, '');
-    const setter = setterNames.get(trimmedKey) || `set${capitalize(trimmedKey)}`;
-    return `${setter}(${val})`;
-  });
-
-  cleanScript = callifyStateReads(cleanScript, stateDecls.map((s) => s.name));
-
-  const templateCalled = callifyTemplateExprs(template, stateDecls.map((s) => s.name));
-
-  const ssrTemplate = templateCalled
-    .replace(SLOT_NAMED_RE, (_w, attrs) => `{__slot(${encodeSlotCall(attrs)})}`)
-    .replace(SLOT_RE, '{__slot__}')
-    .replace(/on:(\w+)=\{([^}]+)\}/g, (_, ev, fn) =>
-      actionNames.has(fn.trim()) ? `data-on-${ev}="$action:${fn.trim()}"` : `data-on-${ev}="${fn}"`);
-
   const declCode = (d: (typeof decls)[number]): string => {
     const key = isComponent ? `${scopeKey}:${d.name}` : d.name;
     if (d.kind === 'state') {
@@ -741,8 +884,36 @@ export async function compileComponent(filePath: string, publicDir: string, scop
 const [${d.name}, set${capitalize(d.name)}] = state(${JSON.stringify(key)}, null);
 if (!__had_${d.name}) set${capitalize(d.name)}(await $data(${fn}));`;
   };
-  const stateDeclsCode = decls.filter((d) => d.kind === 'state').map(declCode).join('\n');
-  const dataDeclsCode = decls.filter((d) => d.kind === 'data').map(declCode).join('\n');
+
+  const nestedDecls: (typeof decls)[number][] = [];
+  let spliced = '';
+  let pos = 0;
+  decls.forEach((d, i) => {
+    const top = braceDepthAt(script, d.start) === 0;
+    if (!top) nestedDecls.push(d);
+    spliced += script.slice(pos, d.start) + (top ? `'__rvdecl${i}__';` : '');
+    pos = d.end;
+  });
+  spliced += script.slice(pos);
+
+  let cleanScript = spliced.replace(SETSTATE_RE, (_, key, val) => {
+    const trimmedKey = key.trim().replace(/^['"`]|['"`]$/g, '');
+    const setter = setterNames.get(trimmedKey) || `set${capitalize(trimmedKey)}`;
+    return `${setter}(${val})`;
+  });
+  cleanScript = callifyStateReads(cleanScript, stateDecls.map((s) => s.name));
+  cleanScript = cleanScript.replace(/'__rvdecl(\d+)__';/g, (_m, i) => declCode(decls[Number(i)]));
+
+  const stateDeclsCode = nestedDecls.filter((d) => d.kind === 'state').map(declCode).join('\n');
+  const dataDeclsCode = nestedDecls.filter((d) => d.kind === 'data').map(declCode).join('\n');
+
+  const templateCalled = callifyTemplateExprs(template, stateDecls.map((s) => s.name));
+  const wired = wireEventBindings(templateCalled, actionNames);
+  const eventBindings = wired.bindings;
+
+  const ssrTemplate = wired.template
+    .replace(SLOT_NAMED_RE, (_w, attrs) => `{__slot(${encodeSlotCall(attrs)})}`)
+    .replace(SLOT_RE, '{__slot__}');
 
   const stateKeys = decls.map((d) => d.name);
 
@@ -776,6 +947,7 @@ if (!__had_${d.name}) set${capitalize(d.name)}(await $data(${fn}));`;
     csr,
     buffer,
     prefetch,
+    vitals,
     bundle,
     needsClient,
     clientReasons,
@@ -1051,47 +1223,58 @@ function extractDecls(script: string): Decl[] {
   return decls;
 }
 
-function removeRanges(text: string, ranges: Array<[number, number]>): string {
-  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
-  let out = '';
-  let pos = 0;
-  for (const [start, end] of sorted) {
-    out += text.slice(pos, start);
-    pos = end;
+/**
+ * Brace depth at `index`, with strings, template literals and comments
+ * skipped so their braces never count. A declaration at depth 0 is a
+ * top-level statement of the script: it may be replaced where it stands
+ * (BUG.md 2026.9.22 - the TDZ fix). Anything deeper lives inside a function
+ * body (an onMount callback) and must keep its scope.
+ */
+function braceDepthAt(src: string, index: number): number {
+  let depth = 0;
+  let i = 0;
+  while (i < index) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      i++;
+      while (i < index) {
+        if (src[i] === '\\') { i += 2; continue; }
+        if (src[i] === quote) { i++; break; }
+        if (quote === '`' && src[i] === '$' && src[i + 1] === '{') {
+          let d = 1;
+          i += 2;
+          while (i < index && d > 0) {
+            if (src[i] === '{') d++;
+            else if (src[i] === '}') d--;
+            i++;
+          }
+          continue;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch === '/' && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i);
+      i = nl === -1 ? src.length : nl;
+      continue;
+    }
+    if (ch === '/' && src[i + 1] === '*') {
+      const close = src.indexOf('*/', i + 2);
+      i = close === -1 ? src.length : close + 2;
+      continue;
+    }
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    i++;
   }
-  out += text.slice(pos);
-  return out;
+  return depth;
 }
 
-/**
- * Compile a .rose template to statements that build an HTML string with
- * reactive markers, and push update closures into the shared `closes` array.
- *
- * Marker protocol (identical on server and client, so the client can adopt
- * the SSR DOM instead of re-rendering it):
- *   text:      <!--⟦m:K⟧-->value          wire() updates the following text node
- *   if block:  <!--⟦i:K⟧-->html<!--⟦/i:K⟧-->   wire() inserts/removes the block
- *   each list: <!--⟦l:K⟧-->items<!--⟦/l:K⟧-->  wire() rebuilds the list
- *   attr:      name="value" data-b="K:name"   wire() re-sets the attribute
- *
- * Text/attr values are HTML-escaped on the server; wire() writes raw values
- * because DOM text nodes and attributes are not HTML-parsed.
- *
- * `comps` maps an imported component's local name to its module index
- * and slot declarations. A `<Card title={x}>` tag compiles to a call of that
- * module's render() - the child pushes its markers into the SAME closes array
- * the parent is using, so one wire() pass covers the whole tree (the same
- * trick the layout chain already uses with children html).
- */
+// Compile a .rose template to statements that build an HTML string with reactive markers, and push update closures into the shared `closes` array.
 
-/**
- * Auto-call a BARE state read and nothing else. The callify pass has already
- * rewritten a bare name to `name()`, so what reaches here is that - or an
- * expression the developer wrote (a comparison, a member read, a call with
- * arguments). Appending () to THOSE is a crash the developer reads as a
- * framework bug: `{#if flash().name}` must not become `flash().name()`, and
- * `{#each rows.filter(ok) as row}` must not become `rows.filter(ok)()`.
- */
+// Auto-call a BARE state read and nothing else.
 function autoCall(expr: string): string {
   const e = expr.trim();
   return /^[A-Za-z_$][\w$]*$/.test(e) ? `${e}()` : e;
@@ -1304,7 +1487,7 @@ function compileTemplate(
         rest = remaining.substring(tag.end);
       } else {
         const closeIdx = findClose(remaining, tag.end, tag.name);
-        if (closeIdx < 0) throw new Error(`unclosed <${tag.name}> - every component tag needs its matching close tag`);
+        if (closeIdx < 0) throw new RoseError('E-TEMPLATE', `unclosed <${tag.name}> - every component tag needs its matching close tag`, { hint: `add the matching </${tag.name}> (or close the tag with /> when it takes no children)` });
         childrenSrc = remaining.substring(tag.end, closeIdx);
         rest = remaining.substring(closeIdx + tag.name.length + 3);
       }
@@ -1508,7 +1691,7 @@ function rejectNestedSlot(src: string, outer: string): void {
     if (end < 0) return;
     const hit = /\bslot\s*=\s*["'](\w+)["']/.exec(src.slice(lt, end));
     if (hit && nm[1] !== '/') {
-      throw new Error(`slot="${hit[1]}" on <${nm[2]}> is nested inside slot="${outer}" - a slot must be a direct child of the component`);
+      throw new RoseError('E-TEMPLATE', `slot="${hit[1]}" on <${nm[2]}> is nested inside slot="${outer}" - a slot must be a direct child of the component`, { hint: 'move the inner <slot> out of the outer one - a slot is a direct child of the component tag, never nested in another slot' });
     }
     i = end;
   }
@@ -1570,7 +1753,7 @@ function splitSlots(src: string): { def: string; named: Array<[string, string]> 
     if (!selfClosing && !isVoid) elemDepth++;
     const slotName = /\bslot\s*=\s*["'](\w+)["']/.exec(tagText)?.[1];
     if (slotName && (elemDepth !== 1 || blockDepth !== 0)) {
-      throw new Error(`slot="${slotName}" on <${nm[2]}> must be a direct child of the component - it is nested inside another element or an {#if}/{#each} block`);
+      throw new RoseError('E-TEMPLATE', `slot="${slotName}" on <${nm[2]}> must be a direct child of the component - it is nested inside another element or an {#if}/{#each} block`, { hint: 'place <slot name="..."> directly inside the component tag - wrap the ELEMENTS around the slot, not the slot inside them' });
     }
     if (slotName) {
       const stripped = tagText.replace(/\s*slot\s*=\s*["']\w+["']/, '');
@@ -1578,7 +1761,7 @@ function splitSlots(src: string): { def: string; named: Array<[string, string]> 
         named.set(slotName, (named.get(slotName) ?? '') + stripped);
       } else {
         const closeIdx = findClose(src, end, nm[2]);
-        if (closeIdx < 0) throw new Error(`unclosed <${nm[2]}> inside slot="${slotName}"`);
+        if (closeIdx < 0) throw new RoseError('E-TEMPLATE', `unclosed <${nm[2]}> inside slot="${slotName}"`, { hint: `add the matching </${nm[2]}> inside the slot content` });
         const tail = `</${nm[2]}>`;
         const inner = src.slice(end, closeIdx);
         rejectNestedSlot(inner, slotName);
@@ -1838,7 +2021,11 @@ export async function buildProject(root: string, outDir: string): Promise<{ rout
   const compFiles = await scanComponentFiles(root);
   const files = [...pageFiles, ...compFiles];
   if (pageFiles.length === 0) {
-    throw new Error(`no .rose pages found under ${path.join(root, 'src', 'pages')} - run rosezm from a project root, or pass one: rosezm build <dir>`);
+    throw new RoseError(
+      'E-ROUTE',
+      `no .rose pages found under ${path.join(root, 'src', 'pages')} - run rosezm from a project root, or pass one: rosezm build <dir>`,
+      { file: path.join(root, 'src', 'pages'), hint: 'create src/pages/index.rose in that directory (or run the command from the project root)' },
+    );
   }
   const infos = files.map((f) => ({ ...getRouteInfo(f, root) }));
   const config = await loadConfig(root);
@@ -1952,7 +2139,7 @@ export const hasResponseHooks = hooks.some((p) => p.onResponse);
   const runtimeEntry = ['../runtime/index.ts', '../src/runtime/index.ts']
     .map((rel) => fileURLToPath(new URL(rel, import.meta.url)))
     .find((p) => fs.existsSync(p));
-  if (!runtimeEntry) throw new Error('rosezm: the runtime source (src/runtime/index.ts) was not found next to the compiler');
+  if (!runtimeEntry) throw new RoseError('E-INTERNAL', 'rosezm: the runtime source (src/runtime/index.ts) was not found next to the compiler', { hint: 'the published package ships src/ beside dist-cli/ - reinstall it, or run from a checkout' });
   await esbuild.build({
     entryPoints: [runtimeEntry],
     bundle: true,
@@ -2031,17 +2218,21 @@ export const hasResponseHooks = hooks.some((p) => p.onResponse);
     .map(({ info, i }) => {
       const actionMap = compiled[i].actionNames.map((n) => `${n}: ${n}_${i}`).join(', ');
       if (compiled[i].csr === false && compiled[i].needsClient) {
-        throw new Error(
+        throw new RoseError(
+          'E-EXPORT',
           `${info.filePath}: csr = false but this route needs the client bundle ` +
-          `(${(compiled[i].clientReasons ?? ['needs the client']).join(' + ')}).`
+          `(${(compiled[i].clientReasons ?? ['needs the client']).join(' + ')}).`,
+          { file: info.filePath, hint: 'remove csr = false (the compiler decides zero-JS by itself), or remove the client-only code listed above' },
         );
       }
       if (compiled[i].csr === false) {
         const needy = layoutsOf(infos, i).find((li) => compiled[li].needsClient);
         if (needy !== undefined) {
-          throw new Error(
+          throw new RoseError(
+            'E-EXPORT',
             `${info.filePath}: csr = false cannot ship under ${infos[needy].filePath} - the layout needs the client bundle ` +
-            `(event wiring, onMount/onCleanup, refresh() or a server action).`
+            `(event wiring, onMount/onCleanup, refresh() or a server action).`,
+            { file: info.filePath, hint: 'a layout needing the runtime bundles every route under it - drop csr = false here, or make the layout content-only' },
           );
         }
       }
@@ -2429,10 +2620,18 @@ export async function renderPageStream(pathname, write, shellOpen, clientTag) {
     .join(',\n  ');
 
   const prefetchMode = compiled.find((c) => c.prefetch)?.prefetch ?? 'all';
+  const vitalsOn = compiled.some((c) => c.vitals === true);
+  const vitalsBlock = vitalsOn
+ ? `\n// the app asked for web-vitals - measure once, at boot, and let the\n// app decide where the numbers go (one 'rosezm:vitals' CustomEvent per metric).\nreportVitals;\n`
+    : '';
 
   const hasLang = infos.some((i) => i.pattern.includes(':lang'));
   const langDirBlock = hasLang
-    ? ` // <html lang dir> follows the route - the one part of the document. client-side navigation cannot leave stale (screen readers and CSS. logical).
+    ? `      // <html lang dir> follows the route - the one part of the document
+      // client-side navigation cannot leave stale (screen readers and CSS
+      // logical properties both read it). A route with no [lang] segment
+      // returns to the default locale, and a bogus segment falls back to it
+      // too, exactly like the server's docAttrs.
       const seg = langIdx >= 0 ? pathname.split('/')[langIdx] : '';
       const known = !seg || isLocale(seg);
       const docLang = known && seg ? seg : __defLocale;
@@ -2445,7 +2644,7 @@ export async function renderPageStream(pathname, write, shellOpen, clientTag) {
 
   const clientEntry = `
 ${clientImports}
-import { setState, resumeState, clearRequestState, resetEffects, wire, isolateStateAsync, restoreState, setRefreshHook, clearMounts, flushMounts, adoptCleanups, handlers, setLocales, setLocalePacks, ensureLocale, isLocale, localeDir, setPrefetchOverride } from './runtime.js';
+import { setState, resumeState, clearRequestState, resetEffects, wire, isolateStateAsync, restoreState, setRefreshHook, clearMounts, flushMounts, adoptCleanups, handlers, setLocales, setLocalePacks, ensureLocale, isLocale, localeDir, setPrefetchOverride, serializeState } from './runtime.js';
 
 // I18n: the dictionaries baked at build time - the client renders any PRELOADED locale from the bundle.
 setLocales(${clientLocalesJson}, '${defaultLocale}');
@@ -2453,8 +2652,10 @@ setLocalePacks(${JSON.stringify(packed)});
 ${hasLang ? `// the default locale, kept beside setLocales' own copy so <html lang> can
 // follow a route that carries no [lang] segment (a non-i18n page)
 const __defLocale = '${defaultLocale}';` : ''}
+${vitalsOn ? `// the app asked for web-vitals. The import is what keeps\n// reportVitals alive through minification and tree-shaking; the call is one\n// statement at boot, before the first render.\nimport { reportVitals } from './runtime.js';`: ''}
 // The two pack doors, re-exported for an app that wants to warm a language before its visitor asks for it (ensureLocale) or to feed a dictionary.
 export { ensureLocale, loadLocale } from './runtime.js';
+${vitalsBlock}
 
 const routes = [
   ${clientRoutes}
@@ -2620,6 +2821,9 @@ export async function $action(name, e) {
 }
 
 export { postForm };
+
+// The live signal graph as JSON - the same serializeState the zero-hydration resume uses.
+export { serializeState };
 
 // Initial=true: adopt the SSR DOM (zero hydration) - wire reactive markers to the existing nodes and bind events.
 export async function start(container, pathname, initial) {

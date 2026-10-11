@@ -34,6 +34,11 @@
     t = String(t || "");
     return t.length > n ? t.slice(0, n) + "…" : t;
   }
+  function ic(n, size) {
+    size = size || 16;
+    return '<span class="adm-ic" aria-hidden="true" style="width:' + size +
+      "px;height:" + size + "px;--i:url(/public/" + n + ".svg)\"></span>";
+  }
 </script>
 
 <head>
@@ -41,14 +46,14 @@
 </head>
 
 <div class="adm-grid adm-stats">
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">✎</span> 文章</div><div class="v">{counts().posts}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">💬</span> 评论</div><div class="v">{counts().comments}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">⏳</span> 待审评论</div><div class="v">{counts().commentsPending}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">👤</span> 用户</div><div class="v">{counts().users}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">▤</span> 分类</div><div class="v">{counts().categories}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">#</span> 标签</div><div class="v">{counts().tags}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">🖼</span> 媒体</div><div class="v">{counts().media}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">📄</span> 页面</div><div class="v">{counts().pages}</div></div>
+  <div class="adm-card adm-stat"><div class="k">{@html ic("file-text")} 文章</div><div class="v">{counts().posts}</div></div>
+  <div class="adm-card adm-stat"><div class="k">{@html ic("message-square")} 评论</div><div class="v">{counts().comments}</div></div>
+  <div class="adm-card adm-stat"><div class="k">{@html ic("hourglass")} 待审评论</div><div class="v">{counts().commentsPending}</div></div>
+  <div class="adm-card adm-stat"><div class="k">{@html ic("users")} 用户</div><div class="v">{counts().users}</div></div>
+  <div class="adm-card adm-stat"><div class="k">{@html ic("folder")} 分类</div><div class="v">{counts().categories}</div></div>
+  <div class="adm-card adm-stat"><div class="k">{@html ic("tags")} 标签</div><div class="v">{counts().tags}</div></div>
+  <div class="adm-card adm-stat"><div class="k">{@html ic("image")} 媒体</div><div class="v">{counts().media}</div></div>
+  <div class="adm-card adm-stat"><div class="k">{@html ic("file")} 页面</div><div class="v">{counts().pages}</div></div>
 </div>
 
 <div class="adm-grid adm-cols-2" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
@@ -79,7 +84,7 @@
 <div class="adm-grid adm-cols-2" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
   <div class="adm-card">
     <div class="adm-card-hd">最近文章<span class="spacer" style="flex:1"></span>
-      <a href="/admin/posts" style="font-size:13px;color:var(--adm-muted)">全部 →</a>
+      <a href="/admin/posts" style="display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--adm-muted)">全部{@html ic("arrow-right", 14)}</a>
     </div>
     <div class="table-responsive">
       <table class="adm-table">
@@ -98,7 +103,7 @@
   </div>
   <div class="adm-card">
     <div class="adm-card-hd">最近评论<span class="spacer" style="flex:1"></span>
-      <a href="/admin/comments" style="font-size:13px;color:var(--adm-muted)">全部 →</a>
+      <a href="/admin/comments" style="display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--adm-muted)">全部{@html ic("arrow-right", 14)}</a>
     </div>
     <div class="table-responsive">
       <table class="adm-table">

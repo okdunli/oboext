@@ -1,4 +1,4 @@
-<script>
+﻿<script>
   // Admin shell (dark zinc/indigo, ported from AdminShell.tsx). Unauthenticated
   // routes (/admin/login, /admin/setup — the middleware whitelist) render the
   // bare slot; everything else gets the sidebar + topbar chrome.
@@ -55,21 +55,21 @@
 {#if authed()}
 <div class="adm-shell">
   <aside class="adm-side">
-    <div class="adm-logo"><span class="adm-auth-mark">O</span> oboext</div>
+    <div class="adm-logo"><span class="adm-auth-mark"><span class="adm-ic adm-ic-lg" style="--i:url(/public/layout-dashboard.svg)"></span></span> oboext</div>
     <nav class="adm-nav">
       {@html navRaw()}
     </nav>
     <div class="adm-side-foot">
       <div class="adm-avatar">{initial()}</div>
       <div class="who"><b>{authed() ? session().user.name : ""}</b><span>{authed() ? session().user.role : ""}</span></div>
-      <button class="adm-iconbtn" data-adm-act="logout" title="退出登录">⏻</button>
+      <button class="adm-iconbtn" data-adm-act="logout" title="退出登录" aria-label="退出登录"><span class="adm-ic" style="--i:url(/public/log-out.svg)"></span></button>
     </div>
   </aside>
   <div class="adm-main">
     <header class="adm-topbar">
       <h1>{pageTitle()}</h1>
       <span class="spacer"></span>
-      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/" target="_blank">访问站点 ↗</a>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/" target="_blank"><span class="adm-ic adm-ic-sm" style="--i:url(/public/external-link.svg)"></span> 访问站点</a>
     </header>
     <main class="adm-content">
       <slot />

@@ -11,7 +11,7 @@
     return tags().length ? [] : [1];
   }
   function ic(n) {
-    return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/' + n + '.svg)"></span>';
+    return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/' + n + '.svg)"></span>';
   }
 </script>
 

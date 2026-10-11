@@ -1,0 +1,74 @@
+<script>
+  let data = $data(() => __rvLoad("admin.plugins", {}));
+  function list() { return data().plugins || []; }
+  function iconUrl(p) {
+    var name = (p.manifest && p.manifest.icon) || "plug";
+    return "/public/icons/" + name.toLowerCase() + ".svg";
+  }
+  function statusStyle(p) {
+    return p.enabled
+      ? "background:rgba(22,163,74,.14);color:#4ade80;"
+      : "background:rgba(120,120,130,.18);color:#d4d4d8;";
+  }
+  function statusText(p) { return p.enabled ? "已启用" : "已禁用"; }
+  function toggleIcon(p) { return p.enabled ? "/public/icons/toggle-left.svg" : "/public/icons/toggle-right.svg"; }
+  function toggleText(p) { return p.enabled ? "禁用" : "启用"; }
+  function iconBg(p) { return p.enabled ? "rgba(79,70,229,.15)" : "var(--adm-panel-2)"; }
+  function iconColor(p) { return p.enabled ? "#818cf8" : "var(--adm-faint)"; }
+  function emptyHint() { return list().length ? [] : [1]; }
+</script>
+
+<head>
+  <title>插件 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="adm-ic" style="--i:url(/public/icons/plug.svg);width:20px;height:20px;color:#818cf8;"></span>
+    <strong style="font-size:16px">全部插件</strong>
+    <span class="adm-hint" style="margin:0">{list().length} 个已安装</span>
+  </div>
+  <span style="flex:1"></span>
+  <label class="adm-btn adm-btn-ghost adm-btn-sm" style="cursor:pointer">
+    <span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/upload.svg)"></span>上传插件
+    <input type="file" accept=".zip" class="adm-hidden-file" data-adm-act="plugin-upload">
+  </label>
+</div>
+
+{#each list() as p}
+<div class="adm-card" style="margin-bottom:12px;padding:16px 18px;">
+  <div style="display:flex;align-items:flex-start;gap:14px;">
+    <div style="width:40px;height:40px;flex-shrink:0;border-radius:10px;display:flex;align-items:center;justify-content:center;background:{iconBg(p)};">
+      <span class="adm-ic" style="--i:url({iconUrl(p)});width:20px;height:20px;color:{iconColor(p)};"></span>
+    </div>
+    <div style="flex:1;min-width:0;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <strong style="font-size:14px;">{p.name}</strong>
+        {#if p.version}<span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;color:var(--adm-faint);background:var(--adm-hover);border-radius:4px;padding:2px 6px;">v{p.version}</span>{/if}
+        <span class="adm-tag" style="{statusStyle(p)}">{statusText(p)}</span>
+        {#if !p.installed}
+          <span class="adm-tag" style="background:rgba(217,119,6,.15);color:#fbbf24;">文件缺失</span>
+        {/if}
+      </div>
+      {#if p.description}<p style="margin:4px 0 0;font-size:13px;color:var(--adm-muted);line-height:1.5;">{p.description}</p>{/if}
+      <div style="margin-top:6px;display:flex;align-items:center;gap:12px;font-size:11px;color:var(--adm-faint);">
+        {#if p.author}<span>作者：{p.author}</span>{/if}
+        <span>slug: <code style="font-family:ui-monospace,Menlo,Consolas,monospace;">{p.slug}</code></span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+      <button class="adm-iconbtn" data-adm-act="plugin-toggle" data-slug={p.slug} data-enabled={p.enabled ? "1" : "0"}>
+        <span class="adm-ic adm-ic-sm" style="--i:url({toggleIcon(p)})"></span>
+        {toggleText(p)}
+      </button>
+    </div>
+  </div>
+</div>
+{/each}
+
+{#each emptyHint() as _}
+<div class="adm-empty" style="border:1px dashed var(--adm-border);border-radius:var(--adm-radius);">
+  还没有安装任何插件。<br>
+  <span class="adm-hint">将插件 zip 包上传到 plugins/ 目录即可。</span>
+</div>
+{/each}

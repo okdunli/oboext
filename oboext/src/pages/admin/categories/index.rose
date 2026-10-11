@@ -31,7 +31,7 @@
     return "确认删除分类「" + c.name + "」？子分类会提升为顶级分类。";
   }
   function ic(n) {
-    return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/' + n + '.svg)"></span>';
+    return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/' + n + '.svg)"></span>';
   }
   function catGlyph(c) {
     const v = c.icon || "";
@@ -80,6 +80,7 @@
   <table class="adm-table">
     <thead>
       <tr>
+        <th style="width:32px"></th>
         <th>名称</th>
         <th style="width:24%">别名</th>
         <th style="width:120px">父分类</th>
@@ -89,7 +90,10 @@
     </thead>
     <tbody>
       {#each cats() as c}
-      <tr>
+      <tr data-cat-id={c.id} data-parent-id={c.parentId || ""}>
+        <td>
+          <span class="adm-drag-handle" draggable="true" title="拖动排序">{@html ic("grip-vertical")}</span>
+        </td>
         <td>
           <span class="adm-tax-name" style={c.parentId ? "padding-left:18px" : ""}>{@html (c.parentId ? '<span class="adm-tax-child">└</span>' : "") + catGlyph(c)}<span class="title">{c.name}</span></span>
         </td>

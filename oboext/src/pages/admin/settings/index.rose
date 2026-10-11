@@ -47,7 +47,7 @@
             <div style="flex:1;min-width:0">
               <div style="display:flex;gap:8px">
                 <input class="adm-input" name="logoUrl" placeholder="/uploads/media/... 或 https://…" value={v('logoUrl')}>
-                <label class="adm-imgfield-btn" data-img-btn><span class="adm-ic adm-ic-sm" style="--i:url(/public/upload.svg)"></span>上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
+                <label class="adm-imgfield-btn" data-img-btn><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/upload.svg)"></span>上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
               </div>
               <p class="adm-imgfield-err" data-img-err></p>
             </div>
@@ -60,7 +60,7 @@
             <div style="flex:1;min-width:0">
               <div style="display:flex;gap:8px">
                 <input class="adm-input" name="faviconUrl" placeholder="/uploads/media/... 或 https://…" value={v('faviconUrl')}>
-                <label class="adm-imgfield-btn" data-img-btn><span class="adm-ic adm-ic-sm" style="--i:url(/public/upload.svg)"></span>上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
+                <label class="adm-imgfield-btn" data-img-btn><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/upload.svg)"></span>上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
               </div>
               <p class="adm-imgfield-err" data-img-err></p>
             </div>
@@ -319,7 +319,7 @@
             <div style="flex:1;min-width:0">
               <div style="display:flex;gap:8px">
                 <input class="adm-input" name="ogImageUrl" placeholder="/uploads/media/... 或 https://…" value={v('ogImageUrl')}>
-                <label class="adm-imgfield-btn" data-img-btn><span class="adm-ic adm-ic-sm" style="--i:url(/public/upload.svg)"></span>上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
+                <label class="adm-imgfield-btn" data-img-btn><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/upload.svg)"></span>上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
               </div>
               <p class="adm-imgfield-err" data-img-err></p>
             </div>

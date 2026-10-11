@@ -200,7 +200,7 @@ button { font-family: inherit; }
 /* --------------------------------------------------------------------- shell */
 .adm-shell { display: flex; min-height: 100vh; }
 .adm-side {
-  width: 248px; flex: 0 0 248px;
+  width: 240px; flex: 0 0 240px;
   background: #0c0c0f;
   border-right: 1px solid var(--adm-border-soft);
   display: flex; flex-direction: column;
@@ -213,11 +213,6 @@ button { font-family: inherit; }
 }
 .adm-logo .adm-auth-mark { width: 30px; height: 30px; font-size: 14px; border-radius: 8px; }
 .adm-nav { flex: 1; overflow-y: auto; padding: 12px 10px; }
-.adm-nav-group { margin-bottom: 14px; }
-.adm-nav-title {
-  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--adm-faint); padding: 8px 10px 6px; font-weight: 600;
-}
 .adm-nav a {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 10px; border-radius: 7px;
@@ -228,6 +223,28 @@ button { font-family: inherit; }
 .adm-nav a.is-active { background: var(--adm-accent-soft); color: #c7d2fe; }
 .adm-nav a.is-active .adm-ic { color: #818cf8; }
 .adm-nav .adm-ic { width: 17px; height: 17px; opacity: .9; }
+/* accordion groups — port of AdminShell.tsx sidebar */
+.adm-nav-dash { margin-bottom: 8px; }
+.adm-nav-group { margin-bottom: 2px; }
+.adm-nav-ghdr {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 12px; border: 0; border-radius: 7px; background: transparent;
+  font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--adm-faint); text-align: left; cursor: pointer;
+}
+.adm-nav-ghdr:hover { background: var(--adm-hover); color: var(--adm-text); }
+.adm-nav-ghdr .adm-ic { width: 15px; height: 15px; }
+.adm-nav-ghdr.is-group-active { color: var(--adm-muted); }
+.adm-nav-ghdr.is-group-active .adm-ic { color: #818cf8; }
+.adm-nav-caret {
+  margin-left: auto; width: 14px !important; height: 14px !important;
+  transition: transform .2s ease;
+}
+.adm-nav-ghdr[aria-expanded="true"] .adm-nav-caret { transform: rotate(180deg); }
+.adm-nav-leaves { display: flex; flex-direction: column; gap: 1px; padding: 2px 0 6px; }
+.adm-nav-leaves[hidden] { display: none; }
+.adm-nav-leaves a { padding: 6px 12px 6px 36px; font-size: 13px; }
+.adm-nav-leaves a .adm-ic { width: 15px; height: 15px; }
 .adm-nav .badge {
   margin-left: auto; font-size: 11px; background: var(--adm-red);
   border-radius: 999px; padding: 1px 7px; color: #fff; font-weight: 600;
@@ -315,6 +332,18 @@ button { font-family: inherit; }
 .adm-tax-child { color: var(--adm-faint); margin-right: 2px; }
 .adm-tax-emoji { font-size: 13px; }
 .adm-muted { color: var(--adm-muted); }
+
+/* drag handle for category reorder */
+.adm-drag-handle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; cursor: grab; color: var(--adm-faint);
+  border-radius: 4px; transition: background .15s, color .15s;
+}
+.adm-drag-handle:hover { background: var(--adm-hover); color: var(--adm-muted); }
+.adm-drag-handle:active { cursor: grabbing; }
+.adm-drag-handle .adm-ic { width: 16px; height: 16px; }
+.adm-table tr.is-drag-over { background: rgba(99, 102, 241, .08); }
+.adm-table tr.is-dragging { opacity: .4; }
 
 /* -------------------------------------------------------------------- badges */
 .adm-tag {
@@ -413,14 +442,57 @@ button { font-family: inherit; }
 .adm-toast.ok { border-left-color: var(--adm-green); }
 .adm-toast.err { border-left-color: var(--adm-red); }
 @keyframes adm-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+/* pjax content swap: admin.js restarts this class after replacing .adm-content */
+.adm-content.adm-nav-in { animation: adm-in .22s ease both; }
+@media (prefers-reduced-motion: reduce) {
+  .adm-content.adm-nav-in { animation: none; }
+}
 
-@media (max-width: 980px) {
+/* mobile drawer chrome — desktop always hides these (port of AdminShell.tsx) */
+.adm-mbar, .adm-scrim, .adm-logo-x { display: none; }
+
+@media (max-width: 1023px) {
   .adm-stats { grid-template-columns: repeat(2, 1fr); }
   .adm-cols-editor, .adm-cols-2, .adm-form-grid { grid-template-columns: 1fr; }
   .adm-auth { grid-template-columns: 1fr; }
   .adm-auth-side { display: none; }
-  .adm-side { display: none; }
   .adm-media-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .adm-content { padding: 16px; }
+  /* desktop topbar replaced by the mobile brand bar */
+  .adm-topbar { display: none; }
+  .adm-mbar {
+    display: flex; align-items: center; gap: 12px;
+    position: sticky; top: 0; z-index: 40;
+    height: 56px; padding: 0 12px;
+    background: #101014; border-bottom: 1px solid var(--adm-border-soft);
+  }
+  .adm-mbar-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; border: 0; border-radius: 7px;
+    background: transparent; color: var(--adm-muted); cursor: pointer;
+  }
+  .adm-mbar-btn:hover { background: var(--adm-hover); color: var(--adm-text); }
+  .adm-mbar-btn .adm-ic { width: 20px; height: 20px; }
+  .adm-mbar-title { font-size: 15px; font-weight: 700; color: #818cf8; }
+  /* sidebar becomes an off-canvas drawer */
+  .adm-side {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 50;
+    height: 100dvh; transform: translateX(-100%);
+    transition: transform .2s ease;
+  }
+  .adm-logo-x {
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-left: auto; width: 32px; height: 32px;
+    border: 0; border-radius: 7px; background: transparent;
+    color: var(--adm-faint); cursor: pointer;
+  }
+  .adm-logo-x:hover { background: var(--adm-hover); color: var(--adm-text); }
+  .adm-logo-x .adm-ic { width: 18px; height: 18px; }
+  .adm-shell.is-nav-open .adm-side { transform: none; }
+  .adm-shell.is-nav-open .adm-scrim {
+    display: block; position: fixed; inset: 0; z-index: 40;
+    background: rgba(0, 0, 0, .6);
+  }
 }
 
 /* --------------------------------------------------------------- media library */
@@ -849,6 +921,11 @@ button { font-family: inherit; }
 .adm-th-live {
   margin-top: 7px; display: inline-block; border-radius: 999px;
   background: rgba(16, 185, 129, .15); color: #34d399;
+  font-size: 10px; font-weight: 500; padding: 2px 9px;
+}
+.adm-th-soon {
+  margin-top: 7px; display: inline-block; border-radius: 999px;
+  background: rgba(245, 158, 11, .15); color: #fbbf24;
   font-size: 10px; font-weight: 500; padding: 2px 9px;
 }
 .adm-th-strip { margin-top: 13px; display: flex; gap: 4px; }

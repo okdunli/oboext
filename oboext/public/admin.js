@@ -42,7 +42,7 @@
   window.admApi = api;
 
   function admIc(name, size) {
-    var st = "--i:url(/public/" + name + ".svg)";
+    var st = "--i:url(/public/icons/" + name + ".svg)";
     if (size) st = "width:" + size + "px;height:" + size + "px;" + st;
     return '<span class="adm-ic" aria-hidden="true" style="' + st + '"></span>';
   }
@@ -88,7 +88,7 @@
       try {
         await api("DELETE", t.getAttribute("data-url"));
         toast("已删除", "ok");
-        setTimeout(function () { window.location.reload(); }, 500);
+        setTimeout(admRefresh, 500);
       } catch (err) { toast(err.message, "err"); }
       return;
     }
@@ -101,7 +101,7 @@
         if (what === "delete") await api("DELETE", "/api/comments/" + id);
         else await api("PATCH", "/api/comments/" + id, { status: what });
         toast("已更新", "ok");
-        setTimeout(function () { window.location.reload(); }, 450);
+        setTimeout(admRefresh, 450);
       } catch (err) { toast(err.message, "err"); }
       return;
     }
@@ -118,7 +118,7 @@
       try {
         await api("PATCH", "/api/posts", { ids: ids, action: op });
         toast("批量操作完成", "ok");
-        setTimeout(function () { window.location.reload(); }, 500);
+        setTimeout(admRefresh, 500);
       } catch (err) { toast(err.message, "err"); }
       return;
     }
@@ -164,6 +164,18 @@
       form.scrollIntoView({ behavior: "smooth" });
       return;
     }
+
+    if (act === "plugin-toggle") {
+      e.preventDefault();
+      var slug = t.getAttribute("data-slug");
+      var wasOn = t.getAttribute("data-enabled") === "1";
+      try {
+        await api("PATCH", "/api/plugins/" + slug, { enabled: !wasOn });
+        toast(wasOn ? "已禁用" : "已启用", "ok");
+        setTimeout(admRefresh, 500);
+      } catch (err) { toast(err.message, "err"); }
+      return;
+    }
   });
 
   document.addEventListener("submit", async function (e) {
@@ -201,11 +213,18 @@
         if (id) await api("PUT", base + "/" + id, payload);
         else await api("POST", base, payload);
         toast("已保存", "ok");
-        setTimeout(function () { window.location.reload(); }, 500);
+        setTimeout(admRefresh, 500);
       } else if (kind === "settings") {
         await api("PATCH", "/api/settings", formObject(form));
         toast("设置已保存", "ok");
-        setTimeout(function () { window.location.reload(); }, 600);
+        setTimeout(admRefresh, 600);
+      } else if (kind === "notfound") {
+        var payload = formObject(form);
+        payload.showSearch = !!form.showSearch.checked;
+        payload.showRecent = !!form.showRecent.checked;
+        await api("PUT", "/api/not-found-config", payload);
+        toast("404 页面设置已保存", "ok");
+        setTimeout(admRefresh, 600);
       } else if (kind === "user") {
         var uid = form.querySelector('[name=id]').value;
         var body = formObject(form);
@@ -214,7 +233,7 @@
         if (uid) await api("PUT", "/api/users/" + uid, body);
         else await api("POST", "/api/users", body);
         toast("用户已保存", "ok");
-        setTimeout(function () { window.location.reload(); }, 500);
+        setTimeout(admRefresh, 500);
       } else if (kind === "post" || kind === "page") {
         var as = e.submitter && e.submitter.getAttribute("data-save-as");
         await window.__admEditor.save(as || "");
@@ -289,6 +308,19 @@
     document.querySelectorAll("[data-su-panel^='" + group + "-']").forEach(function (panel) {
       panel.hidden = panel.getAttribute("data-su-panel") !== group + "-" + input.value;
     });
+
+    if (input.getAttribute("data-adm-act") === "plugin-upload" && input.files && input.files[0]) {
+      var fd = new FormData();
+      fd.append("file", input.files[0]);
+      fetch("/api/plugins", { method: "POST", body: fd })
+        .then(function (r) {
+          if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || "上传失败"); });
+          toast("插件已安装", "ok");
+          setTimeout(admRefresh, 500);
+        })
+        .catch(function (err) { toast(err.message, "err"); })
+        .finally(function () { input.value = ""; });
+    }
   });
 
   function BlockEditor(root) {
@@ -839,6 +871,55 @@
     });
   }
 
+  var navToggled = {};
+  function syncNavAccordion() {
+    document.querySelectorAll(".adm-nav-ghdr").forEach(function (btn) {
+      var g = btn.closest("[data-nav-group]");
+      if (!g || !(g.getAttribute("data-nav-group") in navToggled)) return;
+      var open = navToggled[g.getAttribute("data-nav-group")];
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+      var leaves = btn.nextElementSibling;
+      if (leaves && leaves.classList.contains("adm-nav-leaves")) leaves.hidden = !open;
+    });
+  }
+  function initNavAccordion() {
+    if (window.__navAccBound) return;
+    window.__navAccBound = true;
+    document.addEventListener("click", function (e) {
+      var btn = e.target.closest && e.target.closest(".adm-nav-ghdr");
+      if (!btn) return;
+      var open = btn.getAttribute("aria-expanded") !== "true";
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+      var leaves = btn.nextElementSibling;
+      if (leaves && leaves.classList.contains("adm-nav-leaves")) leaves.hidden = !open;
+      var g = btn.closest("[data-nav-group]");
+      if (g) navToggled[g.getAttribute("data-nav-group")] = open;
+    });
+  }
+
+  function closeNavDrawer() {
+    var sh = document.querySelector(".adm-shell");
+    if (sh) sh.classList.remove("is-nav-open");
+  }
+  function initNavDrawer() {
+    if (window.__navDrawerBound) return;
+    window.__navDrawerBound = true;
+    document.addEventListener("click", function (e) {
+      if (!e.target.closest) return;
+      if (e.target.closest("[data-nav-open]")) {
+        var sh = document.querySelector(".adm-shell");
+        if (sh) sh.classList.add("is-nav-open");
+      } else if (e.target.closest("[data-nav-close]")) {
+        closeNavDrawer();
+      } else if (e.target.closest(".adm-side .adm-nav a")) {
+        closeNavDrawer();
+      }
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeNavDrawer();
+    });
+  }
+
   function markActiveNav() {
     var here = location.pathname.replace(/\/+$/, "") || "/admin";
     document.querySelectorAll(".adm-nav a").forEach(function (a) {
@@ -846,6 +927,8 @@
       a.classList.toggle("is-active", href === here ||
         (href !== "/admin" && here.indexOf(href) === 0));
     });
+    syncNavAccordion();
+    closeNavDrawer();
   }
 
   function markBody() {
@@ -1180,7 +1263,7 @@
       themeSel.__wgBound = true;
       themeSel.value = boot.theme || themeSel.value;
       themeSel.addEventListener("change", function () {
-        location.search = "?theme=" + encodeURIComponent(themeSel.value);
+        admGo(location.pathname + "?theme=" + encodeURIComponent(themeSel.value), "push");
       });
     }
 
@@ -1189,7 +1272,7 @@
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     }
-    function reloadSoon() { setTimeout(function () { location.reload(); }, 250); }
+    function reloadSoon() { setTimeout(admRefresh, 250); }
     function fail(err) { toast(err.message || "请求失败", "err"); }
 
     root.addEventListener("click", function (e) {
@@ -1535,7 +1618,7 @@
           homePath: homePath,
         });
         toast("已保存，侧栏菜单已更新");
-        setTimeout(function () { location.reload(); }, 300);
+        setTimeout(admRefresh, 300);
       } catch (err) {
         setMsg("err", (err && err.message) || "保存失败");
         saveBtn.disabled = false;
@@ -1554,7 +1637,7 @@
     function activeTheme() {
       return list().filter(function (t) { return t.active; })[0] || list()[0] || null;
     }
-    function reloadSoon() { setTimeout(function () { location.reload(); }, 450); }
+    function reloadSoon() { setTimeout(admRefresh, 450); }
     function fail(err) { toast(err.message || "请求失败", "err"); }
 
     root.addEventListener("click", function (e) {
@@ -1569,7 +1652,7 @@
         api("POST", "/api/themes", { name: name, config: base ? base.config : {} })
           .then(function (row) {
             toast("已创建", "ok");
-            location.href = "/admin/themes/" + row.slug;
+            admGo("/admin/themes/" + row.slug, "push");
           })
           .catch(function (err) { fail(err); b.disabled = false; });
         return;
@@ -2066,9 +2149,76 @@
         if (m) m.hidden = true;
       }
     });
+
+    var dragSrc = null;
+    document.addEventListener("dragstart", function (e) {
+      var handle = e.target.closest && e.target.closest(".adm-drag-handle");
+      if (!handle) return;
+      var row = handle.closest("tr[data-cat-id]");
+      if (!row) return;
+      dragSrc = row;
+      row.classList.add("is-dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", row.getAttribute("data-cat-id"));
+    });
+    document.addEventListener("dragend", function (e) {
+      if (dragSrc) dragSrc.classList.remove("is-dragging");
+      document.querySelectorAll(".is-drag-over").forEach(function (r) {
+        r.classList.remove("is-drag-over");
+      });
+      dragSrc = null;
+    });
+    document.addEventListener("dragover", function (e) {
+      var row = e.target.closest && e.target.closest("tr[data-cat-id]");
+      if (!row || !dragSrc) return;
+      if (row.getAttribute("data-parent-id") !== dragSrc.getAttribute("data-parent-id")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      document.querySelectorAll(".is-drag-over").forEach(function (r) {
+        r.classList.remove("is-drag-over");
+      });
+      row.classList.add("is-drag-over");
+    });
+    document.addEventListener("drop", function (e) {
+      var target = e.target.closest && e.target.closest("tr[data-cat-id]");
+      if (!target || !dragSrc) return;
+      e.preventDefault();
+      if (target.getAttribute("data-parent-id") !== dragSrc.getAttribute("data-parent-id")) return;
+      if (target === dragSrc) return;
+
+      var tbody = target.closest("tbody");
+      if (!tbody) return;
+      var rows = Array.from(tbody.querySelectorAll("tr[data-cat-id]"));
+      var srcIdx = rows.indexOf(dragSrc);
+      var tgtIdx = rows.indexOf(target);
+      if (srcIdx < 0 || tgtIdx < 0) return;
+
+      rows.splice(srcIdx, 1);
+      tgtIdx = rows.indexOf(target);
+      rows.splice(tgtIdx, 0, dragSrc);
+
+      rows.forEach(function (r) { tbody.appendChild(r); });
+
+      var items = rows.map(function (r, i) {
+        return {
+          id: Number(r.getAttribute("data-cat-id")),
+          parentId: r.getAttribute("data-parent-id") ? Number(r.getAttribute("data-parent-id")) : null,
+          order: i
+        };
+      });
+      fetch("/api/categories", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: items })
+      }).then(function (res) {
+        if (!res.ok) console.error("Reorder failed", res.status);
+      });
+    });
   }
 
   function initWidgets() {
+    initNavAccordion();
+    initNavDrawer();
     markActiveNav();
     hydrateControls();
     initEditor();
@@ -2102,4 +2252,83 @@
     });
   }
   watchApp();
+
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+  var aSeq = 0;
+  var aKey = location.pathname + location.search;
+  function admEligible(a) {
+    if (!a || !a.getAttribute("href")) return null;
+    var href = a.getAttribute("href");
+    if (href.charAt(0) !== "/" || href.charAt(1) === "/") return null;
+    if (a.target === "_blank" || a.hasAttribute("download") || a.hasAttribute("data-no-pjax")) return null;
+    if (/\.[a-z0-9]+($|[?#])/i.test(href.split("?")[0].split("#")[0])) return null;
+    var url = new URL(href, location.href);
+    if (url.pathname.indexOf("/admin") !== 0) return null;
+    if (url.pathname === location.pathname && url.search === location.search) return null;
+    return url;
+  }
+  async function admGo(rawUrl, mode) {
+    var seq = ++aSeq;
+    var wantUrl = new URL(rawUrl, location.href);
+    var res;
+    try {
+      res = await fetch(wantUrl.pathname + wantUrl.search, { credentials: "same-origin" });
+    } catch {
+      if (seq === aSeq && mode !== "refresh") location.href = wantUrl.href;
+      return false;
+    }
+    if (seq !== aSeq) return false;
+    if (!res.ok || (res.headers.get("content-type") || "").indexOf("text/html") < 0) {
+      location.href = wantUrl.href;
+      return false;
+    }
+    var html = await res.text();
+    if (seq !== aSeq) return false;
+    var doc = new DOMParser().parseFromString(html, "text/html");
+    var nextContent = doc.querySelector(".adm-content");
+    if (!nextContent) { location.href = res.url || wantUrl.href; return false; }
+    var content = document.querySelector(".adm-content");
+    content.innerHTML = nextContent.innerHTML;
+    var h1 = document.querySelector(".adm-topbar h1");
+    var nh1 = doc.querySelector(".adm-topbar h1");
+    if (h1 && nh1) h1.textContent = nh1.textContent;
+    var t = doc.querySelector("title");
+    if (t) document.title = t.textContent;
+    var navCur = document.querySelector(".adm-nav");
+    var navNext = doc.querySelector(".adm-nav");
+    if (navCur && navNext) navCur.innerHTML = navNext.innerHTML;
+    content.classList.remove("adm-nav-in");
+    void content.offsetWidth;
+    content.classList.add("adm-nav-in");
+    var finalUrl = new URL(res.url || wantUrl.href);
+    aKey = finalUrl.pathname + finalUrl.search;
+    if (mode === "push") {
+      history.replaceState({ rv: 1, y: window.scrollY }, "");
+      history.pushState({ rv: 1, y: 0 }, "", finalUrl.pathname + finalUrl.search + finalUrl.hash);
+      window.scrollTo(0, 0);
+    } else if (mode === "back") {
+      window.scrollTo(0, (history.state && history.state.y) || 0);
+    }
+    return true;
+  }
+  function admRefresh() {
+    var y = window.scrollY;
+    admGo(location.pathname + location.search, "refresh").then(function (ok) {
+      if (ok) window.scrollTo(0, y);
+    });
+  }
+  document.addEventListener("click", function (e) {
+    if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    if (!document.querySelector(".adm-shell")) return;
+    var a = e.target.tagName === "A" ? e.target : e.target.closest && e.target.closest("a");
+    var url = admEligible(a);
+    if (!url) return;
+    e.preventDefault();
+    admGo(url.pathname + url.search + url.hash, "push");
+  });
+  window.addEventListener("popstate", function () {
+    if (!document.querySelector(".adm-shell")) { location.reload(); return; }
+    if (location.pathname + location.search === aKey) return;
+    admGo(location.pathname + location.search, "back");
+  });
 })();

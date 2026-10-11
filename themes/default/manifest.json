@@ -1,0 +1,71 @@
+{
+  "name": "Oboext Default",
+  "slug": "default",
+  "description": "Default blog theme with elegant typography",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "isDefault": true,
+  "config": {
+    "background": "#0b0d12",
+    "surface": "#161922",
+    "text": "#e8eaf0",
+    "muted": "#9aa3b2",
+    "accent": "#7c8cff",
+    "accentText": "#0b0d12",
+    "border": "#262b36",
+    "radius": "14px",
+    "font": "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif"
+  },
+  "settingsSchema": {
+    "sections": [
+      {
+        "title": "配色方案",
+        "description": "一键切换整站配色。配色方案只覆盖颜色类令牌（背景、卡片、文字、强调色、描边、阴影等），形状、排版与布局沿用「外观」面板里的设置；选了方案后仍可在「外观」面板微调单项颜色，微调优先级更高。",
+        "fields": [
+          {
+            "key": "palette",
+            "label": "配色方案",
+            "type": "select",
+            "default": "indigo",
+            "options": [
+              { "value": "indigo", "label": "靛蓝夜色（默认）" },
+              { "value": "thyuu", "label": "星度 · 暖金深空" },
+              { "value": "samsara", "label": "萨姆萨拉 · 玻璃金" },
+              { "value": "writer", "label": "写作者 · 暖纸白" },
+              { "value": "somnia", "label": "索姆尼亚 · 近白珊瑚" },
+              { "value": "vapor", "label": "蒸气 · 冷灰蓝" }
+            ],
+            "help": "深色：靛蓝夜色 / 星度 / 萨姆萨拉；浅色：写作者 / 索姆尼亚 / 蒸气。"
+          },
+          {
+            "key": "enableGlass",
+            "label": "毛玻璃效果",
+            "type": "switch",
+            "default": false,
+            "help": "为顶栏、搜索框与卡片加上半透明模糊背景，深色玻璃系配色（如萨姆萨拉）效果最佳。"
+          },
+          {
+            "key": "enableGlow",
+            "label": "背景光晕",
+            "type": "switch",
+            "default": false,
+            "help": "在页面顶部叠加一层柔和的径向光晕，星空 / 深空系配色更有氛围。"
+          }
+        ]
+      },
+      {
+        "title": "图标",
+        "description": "控制主题是否读取你在「菜单」与「分类」中配置的自定义图标（lucide 图标名）。",
+        "fields": [
+          {
+            "key": "useCustomIcons",
+            "label": "获取自定义图标",
+            "type": "switch",
+            "default": false,
+            "help": "开启后顶部菜单、侧栏分类列表与分类页标题会显示你配置的图标（未配置则不显示）；关闭后这些位置一律不显示图标。"
+          }
+        ]
+      }
+    ]
+  }
+}

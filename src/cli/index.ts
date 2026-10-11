@@ -79,6 +79,25 @@ async function sendWebResponse(web: any, res: any): Promise<void> {
 // Send a rendered page document - through onResponse first .
 async function sendPage(req: any, res: any, ssrModule: any, hookCtx: any, page: any, routePath: string): Promise<void> {
   let status = page.status ?? 200;
+  if (page.redirect) {
+    const body = `<!DOCTYPE html><title>Redirecting</title><p>Redirecting to <a href="${page.redirect}">${page.redirect}</a>.</p>`;
+    let headers: Record<string, any> = pageHeaders(ssrModule, routePath, '');
+    if (hookCtx) {
+      const out = await ssrModule.runResponseHooks(hookCtx, new Response(body, {
+        status,
+        headers: { 'content-type': 'text/html; charset=utf-8', location: page.redirect, ...headers },
+      }));
+      status = out.status;
+      headers = webHeadersToNode(out);
+    }
+    headers.location = page.redirect;
+    res.statusCode = status;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Location', page.redirect);
+    for (const [k, v] of Object.entries(headers)) if (k !== 'location') res.setHeader(k, v);
+    res.end(body);
+    return;
+  }
   const nonce = nonceFor(ssrModule, routePath);
   let html = getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, nonce);
   let headers: Record<string, any> = pageHeaders(ssrModule, routePath, nonce);
@@ -141,6 +160,25 @@ async function build(): Promise<void> {
   }));
   await writeBrotli(OUT_DIR);
   await analyze(OUT_DIR, (ssrModule.dynamicRoutes as string[] | undefined) ?? []);
+
+  if (argv.includes('--static')) {
+    const dyn = (ssrModule.dynamicRoutes as string[] | undefined) ?? [];
+    const unbakedApi = Object.entries((ssrModule.apiPrerender ?? {}) as Record<string, boolean>)
+      .filter(([, baked]) => !baked)
+      .map(([routePath]) => routePath);
+    const paramless = routes
+      .filter((r) => r.paramNames.length > 0 && !((ssrModule.routeParams ?? {}) as Record<string, unknown>)[r.routePath])
+      .map((r) => r.routePath);
+    const problems = [...new Set([...dyn, ...unbakedApi, ...paramless, ...skipped])];
+    if (problems.length > 0) {
+      console.error('rosezm: --static export refused - these routes need a server:');
+      for (const p of problems) console.error(`  ${p}`);
+      console.error('(getContext()/$store()/$query(), csp.nonce, buffer = true, an unbaked /api route, a param route with no export const params, or a route the middleware walled)');
+      console.error('drop --static to build the normal dist (the dynamic half renders on demand on Node/edge)');
+      process.exit(1);
+    }
+    console.log('rosezm: static export verified - every route is a baked file, no server needed');
+  }
 }
 
 /**
@@ -331,7 +369,11 @@ function enumerateParams(pattern: string, names: string[], raw: Record<string, u
     let i = 0;
     return pattern
       .split('/')
-      .map((seg) => (seg.startsWith(':') ? encodeURIComponent(values[i++]) : seg))
+      .map((seg) => {
+        if (seg.startsWith(':')) return encodeURIComponent(values[i++]);
+        if (seg.startsWith('*')) return values[i++].split('/').map(encodeURIComponent).join('/');
+        return seg;
+      })
       .join('/');
   });
 }
@@ -622,7 +664,8 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
             writeWebHeaders(apiRes, res);
             res.statusCode = apiRes.status;
             res.end(Buffer.from(await apiRes.arrayBuffer()));
-          } catch {
+          } catch (err) {
+            console.error(`rosezm: ${req.method} ${req.url} api handler failed:`, err instanceof Error ? err.stack ?? err.message : String(err));
             res.statusCode = 500;
             res.setHeader('Content-Type', 'application/json');
             res.end('{"error":"api handler failed"}');
@@ -867,24 +910,51 @@ async function freePort(from: number): Promise<number> {
 }
 
 /**
- * The version from package.json - one source of truth, no constant to drift.
- * Resolved from THIS module (not the cwd): the banner names the framework's
- * version even when it builds somebody else's project. Two layouts answer:
- * in the repo this module sits at src/cli/, in the published package the CLI
- * is bundled to dist-cli/ with the sources beside it - so try both.
+ * The FRAMEWORK's version - one source of truth, no constant to drift.
+ *
+ * Three layouts answer, in order:
+ *  1. src/FRAMEWORK_VERSION, a one-line stamp that ships beside the CLI
+ *     source. It is the only candidate that survives EMBEDDING: a real app
+ *     copies the framework's src/ into its own tree, where the nearest
+ *     package.json is the APP's - which is how a banner ended up naming the
+ *     app's version as the framework's for weeks, with no way to tell which
+ *     framework build was actually running.
+ *  2. the package.json two directories up (this repo: the framework's own),
+ *  3. the one beside the bundle (the published package: dist-cli/ + src/).
+ * A test asserts the stamp equals package.json, so the two cannot drift.
  */
 function version(): string {
-  for (const rel of ['../../package.json', '../package.json']) {
+  for (const rel of ['../FRAMEWORK_VERSION', '../../FRAMEWORK_VERSION', '../../package.json', '../package.json']) {
     try {
-      const v = JSON.parse(fs.readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf-8')).version;
+      const raw = fs.readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf-8');
+      const v = rel.endsWith('FRAMEWORK_VERSION') ? raw.trim() : JSON.parse(raw).version;
       if (v) return v;
     } catch { /* not this layout */ }
   }
   return '0.0.0';
 }
 
+/**
+ * The PROJECT's version, when it is a different package from the framework.
+ * A project that embeds the CLI source (the way a real app does) has its own
+ * package.json, and a banner that named only that one left the operator
+ * unable to tell which FRAMEWORK build was actually running - the two
+ * versions advanced independently for weeks. The banner now names both:
+ * "rosezm v0.4.0 - project: my-app v0.1.1". Absent (running inside the
+ * framework repo itself, or a directory with no package.json) -> nothing.
+ */
+function projectTag(): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
+    if (!pkg.version || pkg.name === 'rosezm') return '';
+    return ` - project: ${pkg.name} v${pkg.version}`;
+  } catch {
+    return '';
+  }
+}
+
 async function dev(): Promise<void> {
-  console.log(`🌹 rosezm v${version()} dev server starting...`);
+  console.log(`🌹 rosezm v${version()}${projectTag()} dev server starting...`);
   try {
     await build();
   } catch (err) {
@@ -919,7 +989,7 @@ async function preview(): Promise<void> {
   const server = http.createServer(serveStatic(OUT_DIR, true));
 
   listenFree(server, PORT, (port) => {
-    console.log(`🌹 rosezm v${version()} preview at http://localhost:` + port);
+    console.log(`🌹 rosezm v${version()}${projectTag()} preview at http://localhost:` + port);
   });
 }
 
@@ -950,7 +1020,7 @@ async function serve(): Promise<void> {
     process.on('SIGTERM', stop);
     process.on('SIGINT', stop);
     cluster.on('exit', () => { if (--live <= 0) process.exit(0); });
-    console.log(`🌹 rosezm v${version()} serve: ${workers} worker${workers > 1 ? 's' : ''} on http://localhost:${port} (cluster, bounded bodies, graceful shutdown, access log on stdout)`);
+    console.log(`🌹 rosezm v${version()}${projectTag()} serve: ${workers} worker${workers > 1 ? 's' : ''} on http://localhost:${port} (cluster, bounded bodies, graceful shutdown, access log on stdout)`);
     return;
   }
   process.on('disconnect', () => process.exit(0));
@@ -958,7 +1028,20 @@ async function serve(): Promise<void> {
   try {
     servicePlugins = (await loadPlugins(SRC_DIR)).filter((p) => p && p.onServe);
   } catch (err) {
-    console.error('rosezm: rosezm.config.js failed to load for the serve hooks:', err instanceof Error ? err.message : err);
+    console.error('rosezm: rosezm.config.js failed to load for the serve hooks:', err instanceof Error ? err.message : String(err));
+  }
+  const storeBridge = {
+    install: (send: ((name: string, value: unknown) => void) | null) => {
+      try { serverModule?.__installStoreTransport?.(send); } catch { /* a stale dist: no bridge, no crash */ }
+    },
+    deliver: (name: string, value: unknown) => {
+      try { serverModule?.__deliverStorePatch?.(name, value); } catch { /* ditto */ }
+    },
+  };
+  try {
+    await loadServer();
+  } catch (err) {
+    console.error('rosezm: dist/server.js failed to load for the serve hooks:', err instanceof Error ? err.message : String(err));
   }
   const http = await import('node:http');
   const server = http.createServer(withAccessLog(serveStatic(OUT_DIR, true), `w${process.pid}`));
@@ -969,9 +1052,9 @@ async function serve(): Promise<void> {
     console.log(`🌹 rosezm worker ${process.pid} listening on http://localhost:${port}`);
     for (const p of servicePlugins) {
       try {
-        await p.onServe({ port, workers });
+        await p.onServe({ port, workers, store: storeBridge });
       } catch (err) {
-        console.error('rosezm: plugin', p.name, 'onServe failed:', err instanceof Error ? err.message : err);
+        console.error('rosezm: plugin', p.name, 'onServe failed:', err instanceof Error ? err.message : String(err));
       }
     }
   });
@@ -994,11 +1077,86 @@ async function serve(): Promise<void> {
   process.on('SIGINT', stop);
 }
 
-// `rosezm new <name>` - a starting project.
+// The templates directory, in the two layouts the CLI ships in: the repo checkout (src/cli -> two up) and the installed package (dist-cli -> one up).
+function templatesDir(): string | null {
+  for (const rel of ['../../templates', '../templates']) {
+    const p = fileURLToPath(new URL(rel, import.meta.url));
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+/** The TypeScript-ready files every scaffolded project gets: the ambient
+ *  globals (editors and tsc both see them) and a strict tsconfig. */
+function writeTypeScriptReady(dir: string): void {
+  fs.writeFileSync(path.join(dir, 'rosezm-env.d.ts'), `/// <reference types="rosezm" />\n`);
+  fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: {
+      target: 'ES2022',
+      module: 'ESNext',
+      moduleResolution: 'bundler',
+      lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+      strict: true,
+      noEmit: true,
+      skipLibCheck: true,
+    },
+    include: ['rosezm-env.d.ts', 'src/**/*.ts'],
+  }, null, 2) + '\n');
+}
+
+// Copy a template into the new project and make it the developer's own: the name. A template's own build output and node_modules never ride along.
+function copyTemplate(dir: string, name: string, display: string): void {
+  const base = templatesDir();
+  const shipped = base ? path.resolve(base, name) : '';
+  const src = fs.existsSync(shipped) ? shipped : path.resolve(name);
+  if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) {
+    const available = base ? fs.readdirSync(base).join(', ') : '(none found)';
+    console.error(`rosezm: no template '${name}' - available: ${available} (or pass a path to any project directory)`);
+    process.exit(1);
+  }
+  fs.cpSync(src, dir, {
+    recursive: true,
+    filter: (s) => !/(^|[\\/])(node_modules|dist|\.git)([\\/]|$)/.test(s),
+  });
+  const pkgFile = path.join(dir, 'package.json');
+  if (fs.existsSync(pkgFile)) {
+    const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
+    pkg.name = path.basename(dir);
+    if (pkg.dependencies?.rosezm) pkg.dependencies.rosezm = `^${version()}`;
+    pkg.devDependencies = { ...pkg.devDependencies, typescript: '^5.6.0' };
+    fs.writeFileSync(pkgFile, JSON.stringify(pkg, null, 2) + '\n');
+  }
+  writeTypeScriptReady(dir);
+  console.log(`🌹 rosezm new: ${display}/ from the '${path.basename(src)}' template`);
+  console.log(`\n   cd ${display}`);
+  console.log(`   npm install && npm run dev`);
+  console.log(`   npm run build    # then deploy dist/`);
+}
+
+/**
+ * `rosezm new <name>` - a starting project. The smallest thing that builds
+ * and runs and shows the syntax: one page (state, {#if}, {#each}, a scoped
+ * style), one README naming the three commands. Not a second demo app - the
+ * point is that a new developer's first `rosezm build` works in seconds.
+ *
+ * `rosezm new <name> --template <t>` - the
+ * official templates (blog, api, admin, site) copied verbatim, with the
+ * dependency rewritten to the published package. A name that is not a
+ * shipped template is resolved as a PATH, so any project directory works as
+ * a template (a team's own starter, a checkout's examples/).
+ *
+ * Trade-off: three files, written from strings. No template engine, no
+ * dependency, no `npm install` run on the developer's behalf (they may use
+ * pnpm/yarn/bun, and a surprise install is worse than a printed command).
+ */
 async function scaffold(): Promise<void> {
-  const name = process.argv[3];
-  if (!name || name.startsWith('-')) {
-    console.log('Usage: rosezm new <name>   (creates <name>/ with a page that builds)');
+  const args = argv.slice(1);
+  const tplIdx = args.indexOf('--template');
+  const template = tplIdx >= 0 ? args[tplIdx + 1] : null;
+  const name = args.find((a, i) => !a.startsWith('-') && i !== (tplIdx >= 0 ? tplIdx + 1 : -1));
+  if (!name || (tplIdx >= 0 && !template)) {
+    const available = templatesDir() ? fs.readdirSync(templatesDir()!).join(', ') : 'blog, api, admin, site';
+    console.log(`Usage: rosezm new <name> [--template <name>]   (creates <name>/ with a page that builds; --template copies an official template - ${available} - or any project directory)`);
     return;
   }
   const dir = path.resolve(name);
@@ -1006,6 +1164,12 @@ async function scaffold(): Promise<void> {
     console.error(`rosezm: ${dir} already exists - pick another name`);
     process.exit(1);
   }
+
+  if (template) {
+    copyTemplate(dir, template, name);
+    return;
+  }
+
   const pages = path.join(dir, 'src', 'pages');
   fs.mkdirSync(pages, { recursive: true });
 
@@ -1024,24 +1188,10 @@ async function scaffold(): Promise<void> {
     devDependencies: { typescript: '^5.6.0' },
   }, null, 2) + '\n');
 
-  fs.writeFileSync(path.join(dir, 'rosezm-env.d.ts'), `/// <reference types="rosezm" />\n`);
-  fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({
-    compilerOptions: {
-      target: 'ES2022',
-      module: 'ESNext',
-      moduleResolution: 'bundler',
-      lib: ['ES2022', 'DOM', 'DOM.Iterable'],
-      strict: true,
-      noEmit: true,
-      skipLibCheck: true,
-    },
-    include: ['rosezm-env.d.ts', 'src/**/*.ts'],
-  }, null, 2) + '\n');
+  writeTypeScriptReady(dir);
 
   fs.writeFileSync(path.join(pages, 'index.rose'), `<script>
   // One file per route: markup, script and styles together.
-  // The script block is TypeScript - interfaces, annotations, generics and
-  // casts all compile, and \`npm run check\` type-checks them.
   interface Item { label: string }
 
   let count = $state(0);
@@ -1259,4 +1409,4 @@ else if (cmd === 'serve') void serve().catch(reportFailure);
 else if (cmd === 'new') void scaffold().catch(reportFailure);
 else if (cmd === 'check') void check().catch(reportFailure);
 else if (cmd === 'prompt') console.log(AI_PROMPT);
-else console.log('Usage: rosezm dev|build|preview|serve|new|check|prompt [dir] [--json]   (dir defaults to the current directory; dist/ is written there; --json prints build failures as machine-readable JSON)');
+else console.log('Usage: rosezm dev|build|preview|serve|new|check|prompt [dir] [--json] [--static]   (dir defaults to the current directory; dist/ is written there; --json prints build failures as machine-readable JSON; --static verifies the build is deployable with no server at all; `new <name> [--template blog|api|admin|site]` scaffolds a project)');

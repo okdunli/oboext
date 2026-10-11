@@ -1,0 +1,129 @@
+<script>
+  // Theme manager (port of components/ThemeManager.tsx). Every on-disk theme
+  // is a card: token strip, manifest meta, activate / settings / delete.
+  // State rides the embedded payload + data-th-* attributes; admin.js owns
+  // the fetch calls and re-renders server-side after each mutation.
+  let d = $data(() => __rvLoad("admin.themes", {}));
+
+  function themes() {
+    return d().themes || [];
+  }
+  function payload() {
+    return JSON.stringify(d());
+  }
+  function accent(t) {
+    return (t.config && t.config.accent) || "#818cf8";
+  }
+  function accentText(t) {
+    return (t.config && t.config.accentText) || "#ffffff";
+  }
+  function radius(t) {
+    return (t.config && t.config.radius) || "12px";
+  }
+  function cardClass(t) {
+    return "adm-th-card" + (t.active ? " is-active" : "");
+  }
+  function strip(t) {
+    var c = (t.config && t.config) || {};
+    return [
+      c.background || "#09090b",
+      c.surface || "#18181b",
+      c.accent || "#818cf8",
+      c.text || "#f4f4f5",
+      c.muted || "#a1a1aa",
+      c.border || "#27272a",
+    ];
+  }
+  function meta(t, k) {
+    return t.meta && t.meta[k] ? t.meta[k] : "";
+  }
+  function version(t) {
+    return t.meta && t.meta.version ? "v" + t.meta.version : "";
+  }
+  function authorUrl(t) {
+    var h = t.meta && t.meta.homepage;
+    return h && /^https?:\/\//i.test(h) ? h : "";
+  }
+  function builtIn(t) {
+    return t.isDefault ? " · 内置" : "";
+  }
+  function canDelete(t) {
+    return themes().length > 1 && !t.isDefault;
+  }
+</script>
+
+<head>
+  <title>主题 - 管理后台</title>
+</head>
+
+<div class="adm-th" data-th-manager data-th={payload()}>
+  <div class="adm-th-head">
+    <h1 class="adm-h1"><span class="adm-h1-ic">🎨</span> 主题</h1>
+    <p class="adm-th-intro">
+      主题决定前台的设计令牌（配色、形状、排版、布局、效果）与自带选项。所有微调在
+      <span class="adm-th-hl">「主题设置」</span>里按声明式 schema 编辑，切换主题不会丢失另一套配置。
+    </p>
+    <div class="adm-th-toolbar">
+      <input class="adm-input adm-th-create-input" data-th-new-name placeholder="新主题名称">
+      <button type="button" class="adm-btn" data-th-create>＋ 新建主题（复制当前配置）</button>
+    </div>
+    <div class="adm-th-upload" data-th-upload>
+      <label class="adm-th-upload-btn">
+        ⬆ 上传主题安装包（.zip）
+        <input type="file" accept=".zip,application/zip" class="adm-hidden-file" data-th-zip>
+      </label>
+      <span class="adm-th-upload-hint">zip 内需含主题文件夹与 manifest.json，最大 30MB</span>
+      <span class="adm-th-upload-msg"></span>
+    </div>
+  </div>
+
+  <div class="adm-th-grid">
+    {#each themes() as t}
+    <div class={cardClass(t)} data-th-id={t.id} data-th-slug={t.slug}>
+      <div class="adm-th-card-hd">
+        <span class="adm-th-mark" style={(() => "background:" + accent(t) + ";color:" + accentText(t) + ";border-radius:" + radius(t))()}>🎨</span>
+        <div class="adm-th-info">
+          <div class="adm-th-name-line">
+            <p class="adm-th-name">{t.name}</p>
+            {#if (() => version(t) !== "")()}
+            <span class="adm-th-version">{version(t)}</span>
+            {/if}
+          </div>
+          {#if (() => meta(t, "description") !== "")()}
+          <p class="adm-th-desc">{meta(t, "description")}</p>
+          {/if}
+          <div class="adm-th-meta">
+            <span class="adm-th-mono">themes/{t.slug}{builtIn(t)}</span>
+            {#if (() => authorUrl(t) !== "")()}
+            <a class="adm-th-author" href={authorUrl(t)} target="_blank" rel="noreferrer noopener">{meta(t, "author")} ↗</a>
+            {/if}
+            {#if (() => authorUrl(t) === "" && meta(t, "author") !== "")()}
+            <span>{meta(t, "author")}</span>
+            {/if}
+            {#if (() => meta(t, "updatedAt") !== "")()}
+            <span>更新于 {meta(t, "updatedAt")}</span>
+            {/if}
+          </div>
+          {#if (() => t.active)()}
+          <span class="adm-th-live">当前生效</span>
+          {/if}
+        </div>
+      </div>
+      <div class="adm-th-strip">
+        {#each strip(t) as c}
+        <span class="adm-th-swatch" title={c} style={(() => "background:" + c)()}></span>
+        {/each}
+      </div>
+      <div class="adm-th-actions">
+        {#if (() => !t.active)()}
+        <button type="button" class="adm-btn adm-btn-sm" data-th-activate>✓ 设为当前</button>
+        {/if}
+        <a class="adm-btn adm-btn-ghost adm-btn-sm" href={(() => "/admin/themes/" + t.slug)()}>⚙ 主题设置</a>
+        {#if (() => canDelete(t))()}
+        <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm adm-th-del" data-th-delete>🗑 删除</button>
+        {/if}
+      </div>
+    </div>
+    {/each}
+  </div>
+</div>

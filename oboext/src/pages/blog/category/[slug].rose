@@ -12,6 +12,7 @@
 
 <head>
   <title>{list().headTitle}</title>
+  {@html list().pluginHead ?? ""}
 </head>
 
 {@html list().main}

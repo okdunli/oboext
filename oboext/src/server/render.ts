@@ -5,24 +5,12 @@
  *
  * Everything here returns trusted strings assembled from escaped fields;
  * block "html" content is author-trusted by design (same contract as the
- * original serializeBlocks). Page loaders wrap the final strings in raw()
- * so the rosefd template plugin can emit them unescaped.
+ * original serializeBlocks). Templates emit these strings via `{@html}`.
  */
 import type { Block } from "./schema.js";
 import type { PostView, TaxRef } from "./queries.js";
 import type { PageView } from "./pages.js";
 import { getAvatarUrl, type AvatarSource } from "./avatar.js";
-import { mintRaw } from "./raw-store.js";
-
-export type RawHtml = { __rvraw: string; __rvhead?: 1 };
-export const raw = (html: string): string => mintRaw(html);
-export const rawHead = (html: string): RawHtml => ({
-  __rvraw: html,
-  __rvhead: 1,
-  toString() {
-    return html;
-  },
-});
 
 export const esc = (s: unknown): string =>
   String(s ?? "")
@@ -281,8 +269,8 @@ function highlightCodeBlocks(html: string): string {
   });
 }
 
-/** blocks -> heading ids -> highlight. No brace mangling: output travels via
- *  raw() at runtime, never through the template parser. */
+/** blocks -> heading ids -> highlight. Output is trusted HTML rendered with
+ *  the template `{@html}` primitive; braces inside cause no parsing issues. */
 export function buildPostBody(p: { content?: Block[] | null; slug: string }): string {
   const blocks = (p.content ?? []) as Block[];
   return highlightCodeBlocks(addHeadingIds(serializeBlocks(blocks), p.slug));

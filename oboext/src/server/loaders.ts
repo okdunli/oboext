@@ -109,10 +109,10 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
   return {
     siteTitle: d.siteTitle,
     siteDescription: d.siteDescription,
-    themeVars: d.varsHtml ? R.raw(d.varsHtml) : "",
-    nav: R.raw(d.navHtml),
-    aside: R.raw(d.asideHtml),
-    footer: R.raw(d.footerHtml),
+    themeHead: d.varsHtml,
+    nav: d.navHtml,
+    aside: d.asideHtml,
+    footer: d.footerHtml,
   };
 }
 
@@ -126,18 +126,15 @@ async function home() {
   ]);
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const items = all.items;
-  const vm = {
-    main: R.raw(
-      R.homeHtml({
-        hero: items.slice(0, 4),
-        latest: items.slice(4, 12),
-        liked: popular.items,
-        random,
-        cats,
-      }),
-    ),
+  return {
+    main: R.homeHtml({
+      hero: items.slice(0, 4),
+      latest: items.slice(4, 12),
+      liked: popular.items,
+      random,
+      cats,
+    }),
   };
-  return vm;
 }
 
 async function blogList(payload: { page?: number }) {
@@ -152,16 +149,14 @@ async function blogList(payload: { page?: number }) {
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   return {
     headTitle: `全部文章 - ${settings.siteTitle ?? ""}`,
-    main: R.raw(
-      R.listPage({
-        title: "全部文章",
-        sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
-        items,
-        page,
-        totalPages,
-        hrefFor: (p) => (p === 1 ? "/blog" : `/blog?page=${p}`),
-      }),
-    ),
+    main: R.listPage({
+      title: "全部文章",
+      sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
+      items,
+      page,
+      totalPages,
+      hrefFor: (p) => (p === 1 ? "/blog" : `/blog?page=${p}`),
+    }),
   };
 }
 
@@ -185,16 +180,14 @@ async function categoryList(payload: { slug: string; page?: number }) {
     `共 ${total} 篇 · 第 ${page}/${totalPages} 页`;
   return {
     headTitle: `分类：${category.name} - ${settings.siteTitle ?? ""}`,
-    main: R.raw(
-      R.listPage({
-        title: `分类：${category.name}`,
-        sub,
-        items,
-        page,
-        totalPages,
-        hrefFor: (n) => `/blog/category/${category.slug}?page=${n}`,
-      }),
-    ),
+    main: R.listPage({
+      title: `分类：${category.name}`,
+      sub,
+      items,
+      page,
+      totalPages,
+      hrefFor: (n) => `/blog/category/${category.slug}?page=${n}`,
+    }),
   };
 }
 
@@ -212,16 +205,14 @@ async function tagList(payload: { slug: string; page?: number }) {
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   return {
     headTitle: `标签：#${tag.name} - ${settings.siteTitle ?? ""}`,
-    main: R.raw(
-      R.listPage({
-        title: `标签：#${tag.name}`,
-        sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
-        items,
-        page,
-        totalPages,
-        hrefFor: (n) => `/blog/tag/${tag.slug}?page=${n}`,
-      }),
-    ),
+    main: R.listPage({
+      title: `标签：#${tag.name}`,
+      sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
+      items,
+      page,
+      totalPages,
+      hrefFor: (n) => `/blog/tag/${tag.slug}?page=${n}`,
+    }),
   };
 }
 
@@ -253,18 +244,16 @@ async function search(payload: { q?: string; page?: number; all?: boolean }) {
   const settings = await getSettings();
   return {
     headTitle: `搜索 - ${settings.siteTitle ?? ""}`,
-    main: R.raw(
-      R.listPage({
-        title: cleaned ? `搜索：“${cleaned}”` : "搜索",
-        sub: cleaned ? `共 ${total} 条结果 · 第 ${page}/${totalPages} 页` : "在顶部搜索框输入关键词",
-        items,
-        page,
-        totalPages,
-        hrefFor,
-        showPager: total > perPage,
-        extra,
-      }),
-    ),
+    main: R.listPage({
+      title: cleaned ? `搜索：“${cleaned}”` : "搜索",
+      sub: cleaned ? `共 ${total} 条结果 · 第 ${page}/${totalPages} 页` : "在顶部搜索框输入关键词",
+      items,
+      page,
+      totalPages,
+      hrefFor,
+      showPager: total > perPage,
+      extra,
+    }),
   };
 }
 
@@ -300,8 +289,8 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     config,
   });
   return {
-    main: R.raw(R.postPage(post, related, commentsHtml)),
-    head: R.rawHead(R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin)),
+    main: R.postPage(post, related, commentsHtml),
+    head: R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin),
   };
 }
 
@@ -330,8 +319,8 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
     config,
   });
   return {
-    main: R.raw(R.pagePage(page, recent.items, commentsHtml)),
-    head: R.rawHead(R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin)),
+    main: R.pagePage(page, recent.items, commentsHtml),
+    head: R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin),
   };
 }
 
@@ -351,18 +340,16 @@ async function archives(payload: { year?: number; month?: number }) {
     });
     return {
       headTitle: `${year} 年 ${month} 月 - ${siteTitle}`,
-      main: R.raw(
-        R.listPage({
-          title: `${year} 年 ${month} 月`,
-          sub: `共 ${items.length} 篇`,
-          items,
-          page: 1,
-          totalPages: 1,
-          hrefFor: () => "#",
-          showPager: false,
-          extra: `<div class="sk-search-all"><a href="/archives?year=${year}">← ${year} 年</a> &nbsp; <a href="/archives">全部归档</a></div>`,
-        }),
-      ),
+      main: R.listPage({
+        title: `${year} 年 ${month} 月`,
+        sub: `共 ${items.length} 篇`,
+        items,
+        page: 1,
+        totalPages: 1,
+        hrefFor: () => "#",
+        showPager: false,
+        extra: `<div class="sk-search-all"><a href="/archives?year=${year}">← ${year} 年</a> &nbsp; <a href="/archives">全部归档</a></div>`,
+      }),
     };
   }
   if (year) {
@@ -395,11 +382,10 @@ async function archives(payload: { year?: number; month?: number }) {
       .join("");
     return {
       headTitle: `${year} 年 - ${siteTitle}`,
-      main: R.raw(
+      main:
         `<section class="sk-section sk-list-page"><h1 class="title_style_01">${year} 年</h1>` +
-          `<div class="sk-list-sub sk-muted">共 ${items.length} 篇</div>` +
-          `<div class="sk-search-all"><a href="/archives">← 返回归档</a></div>${sections}</section>`,
-      ),
+        `<div class="sk-list-sub sk-muted">共 ${items.length} 篇</div>` +
+        `<div class="sk-search-all"><a href="/archives">← 返回归档</a></div>${sections}</section>`,
     };
   }
   const groups = await archiveGroups();
@@ -418,10 +404,9 @@ async function archives(payload: { year?: number; month?: number }) {
     .join("");
   return {
     headTitle: `文章归档 - ${siteTitle}`,
-    main: R.raw(
+    main:
       `<section class="sk-section sk-list-page"><h1 class="title_style_01">文章归档</h1>` +
-        `<div class="sk-list-sub sk-muted">${esc("按年月浏览全部文章")}</div>${items}</section>`,
-    ),
+      `<div class="sk-list-sub sk-muted">${esc("按年月浏览全部文章")}</div>${items}</section>`,
   };
 }
 
@@ -571,7 +556,7 @@ export type LoaderKey = keyof typeof loaders;
 /** Server-only dispatch used by pages and by /api/data. */
 export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unknown> {
   if (key === "chrome" && ctx.pathname && ctx.pathname.indexOf("/admin") === 0) {
-    return { siteTitle: "管理后台", siteDescription: "", themeVars: "", nav: "", aside: "", footer: "" };
+    return { siteTitle: "管理后台", siteDescription: "", themeHead: "", nav: "", aside: "", footer: "" };
   }
   const fn = (loaders as Record<string, (p: any, c: Ctx) => Promise<unknown>>)[key];
   if (!fn) throw new Error(`unknown loader: ${key}`);
@@ -605,6 +590,6 @@ export async function notFoundDocument(ctx: Ctx): Promise<string> {
     `</head><body><div class="th-skyscraper">${c.navHtml}` +
     `<div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">${card}</div></div>` +
     `<aside class="sidebar-column with-separate-line"><div class="sidebar-content">${c.asideHtml}</div></aside>` +
-    `</div></main></div>${c.footerHtml}</div></body><!--/--></html>`
+    `</div></main></div>${c.footerHtml}</div></body></html>`
   );
 }

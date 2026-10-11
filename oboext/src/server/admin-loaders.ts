@@ -34,7 +34,6 @@ import {
   shellNavHtml,
 } from "./admin-menu.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
-import { raw } from "./render.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
 import { db } from "./db.js";
@@ -56,12 +55,12 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
     user: SessionUser | null;
     needsSetup: boolean;
     homePath?: string;
-    navRaw?: ReturnType<typeof raw>;
+    navRaw?: string;
   } = { user, needsSetup: !(await hasAnyUser()) };
   if (user) {
     const prefs = await getAdminMenuPrefs();
     out.homePath = prefs.homePath;
-    out.navRaw = raw(shellNavHtml(user.role, String(_ctx.pathname || ""), prefs));
+    out.navRaw = shellNavHtml(user.role, String(_ctx.pathname || ""), prefs);
   }
   return out;
 }

@@ -62,10 +62,10 @@
 
 <form data-adm-editor data-adm-form="post" data-post={postDataAttr()}>
   <div class="adm-toolbar">
-    <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/posts">← 文章列表</a>
+    <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/posts"><span class="adm-ic adm-ic-sm" style="--i:url(/public/arrow-left.svg)"></span>文章列表</a>
     <span style="flex:1"></span>
     {#if isLive()}
-    <a class="adm-btn adm-btn-ghost adm-btn-sm" href={postUrl()} target="_blank">查看文章 ↗</a>
+    <a class="adm-btn adm-btn-ghost adm-btn-sm" href={postUrl()} target="_blank">查看文章<span class="adm-ic adm-ic-sm" style="--i:url(/public/external-link.svg)"></span></a>
     {/if}
     {#if !isNew()}
     <button
@@ -117,14 +117,14 @@
           </div>
           <div class="adm-blocks"></div>
           <div class="adm-block-add">
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="paragraph">＋ 段落</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="heading">＋ 标题</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="image">＋ 图片</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="quote">＋ 引用</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="code">＋ 代码</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="list">＋ 列表</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="divider">＋ 分割线</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="html">＋ HTML</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="paragraph"><span class="adm-ic adm-ic-sm" style="--i:url(/public/pilcrow.svg)"></span>段落</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="heading"><span class="adm-ic adm-ic-sm" style="--i:url(/public/heading.svg)"></span>标题</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="image"><span class="adm-ic adm-ic-sm" style="--i:url(/public/image.svg)"></span>图片</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="quote"><span class="adm-ic adm-ic-sm" style="--i:url(/public/quote.svg)"></span>引用</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="code"><span class="adm-ic adm-ic-sm" style="--i:url(/public/code.svg)"></span>代码</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="list"><span class="adm-ic adm-ic-sm" style="--i:url(/public/list.svg)"></span>列表</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="divider"><span class="adm-ic adm-ic-sm" style="--i:url(/public/minus.svg)"></span>分割线</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="html"><span class="adm-ic adm-ic-sm" style="--i:url(/public/code-xml.svg)"></span>HTML</button>
           </div>
         </div>
       </div>

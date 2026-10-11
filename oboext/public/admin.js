@@ -41,6 +41,12 @@
   }
   window.admApi = api;
 
+  function admIc(name, size) {
+    var st = "--i:url(/public/" + name + ".svg)";
+    if (size) st = "width:" + size + "px;height:" + size + "px;" + st;
+    return '<span class="adm-ic" aria-hidden="true" style="' + st + '"></span>';
+  }
+
   function formObject(form) {
     var out = {};
     new FormData(form).forEach(function (v, k) {
@@ -319,8 +325,8 @@
       bar += '<option value="' + tp[0] + '"' + (b.type === tp[0] ? " selected" : "") + ">" + tp[1] + "</option>";
     });
     bar += '</select><span class="spacer" style="flex:1"></span>';
-    bar += '<button type="button" class="adm-iconbtn" data-move="-1">↑</button>';
-    bar += '<button type="button" class="adm-iconbtn" data-move="1">↓</button>';
+    bar += '<button type="button" class="adm-iconbtn" data-move="-1" title="上移" aria-label="上移">' + admIc("chevron-up", 14) + "</button>";
+    bar += '<button type="button" class="adm-iconbtn" data-move="1" title="下移" aria-label="下移">' + admIc("chevron-down", 14) + "</button>";
     bar += '<button type="button" class="adm-iconbtn danger" data-del="1">删除</button></div>';
     el.innerHTML = bar;
     var addInput = function (name, placeholder, value, kind) {
@@ -427,7 +433,9 @@
       var del = document.createElement("button");
       del.type = "button";
       del.className = "adm-iconbtn danger";
-      del.textContent = "✕";
+      del.title = "删除";
+      del.setAttribute("aria-label", "删除");
+      del.innerHTML = admIc("x", 14);
       del.addEventListener("click", function () {
         row.remove();
       });
@@ -556,7 +564,7 @@
         String(m.mimeType).indexOf("image/") === 0
           ? '<img class="adm-media-thumb" src="' + esc(m.url) + '" alt="' + esc(m.alt || m.filename) +
             '" loading="lazy" data-media-preview-btn>'
-          : '<div class="adm-media-file" data-media-preview-btn><span class="ic">📄</span><span>' +
+          : '<div class="adm-media-file" data-media-preview-btn>' + admIc("file", 18) + "<span>" +
             esc(m.mimeType) + "</span></div>";
       return (
         '<div class="adm-media-card" data-media-id="' + m.id + '">' +
@@ -567,12 +575,12 @@
         '<p class="adm-media-name" title="' + esc(m.filename) + '">' + esc(m.filename) + "</p>" +
         '<p class="adm-hint">' + sizeText(m.size) + "</p>" +
         '<div class="adm-media-actions"><div class="row-actions">' +
-        '<button type="button" class="adm-iconbtn" data-media-preview-btn title="查看 / 详情">🔍</button>' +
-        '<button type="button" class="adm-iconbtn" data-media-copy data-url="' + esc(m.url) + '" title="复制链接">🔗</button>' +
-        '<button type="button" class="adm-iconbtn" data-media-edit-btn title="编辑信息">✎</button>' +
+        '<button type="button" class="adm-iconbtn" data-media-preview-btn title="查看 / 详情">' + admIc("eye", 14) + "</button>" +
+        '<button type="button" class="adm-iconbtn" data-media-copy data-url="' + esc(m.url) + '" title="复制链接">' + admIc("link", 14) + "</button>" +
+        '<button type="button" class="adm-iconbtn" data-media-edit-btn title="编辑信息">' + admIc("pencil", 14) + "</button>" +
         "</div>" +
         '<button type="button" class="adm-iconbtn danger" data-media-del data-url="/api/media/' + m.id +
-        '" data-confirm="删除该媒体？此操作不可恢复。" title="删除">🗑</button>' +
+        '" data-confirm="删除该媒体？此操作不可恢复。" title="删除">' + admIc("trash-2", 14) + "</button>" +
         "</div></div></div>"
       );
     }
@@ -595,9 +603,9 @@
       try {
         await navigator.clipboard.writeText(url);
         if (btn) {
-          var old = btn.textContent;
-          btn.textContent = "✓";
-          setTimeout(function () { btn.textContent = old; }, 1500);
+          var oldHtml = btn.innerHTML;
+          btn.innerHTML = admIc("check", 14);
+          setTimeout(function () { btn.innerHTML = oldHtml; }, 1500);
         }
       } catch (e) {
         toast("复制失败，请手动复制", "err");
@@ -970,15 +978,15 @@
       html += '<input class="adm-input adm-menu-icon" data-f="icon" value="' + esc(it.icon) +
         '" placeholder="图标标识" title="图标标识（lucide 名称，如 house）">';
       html += '<div class="adm-menu-tools">';
-      html += '<button type="button" class="adm-iconbtn" data-menu-act="up" title="上移" ' +
-        (idx === 0 ? "disabled" : "") + ">↑</button>";
-      html += '<button type="button" class="adm-iconbtn" data-menu-act="down" title="下移" ' +
-        (idx === state.flat.length - 1 ? "disabled" : "") + ">↓</button>";
-      html += '<button type="button" class="adm-iconbtn" data-menu-act="indent" title="作为上一项的子项" ' +
-        (idx === 0 ? "disabled" : "") + ">↳</button>";
+      html += '<button type="button" class="adm-iconbtn" data-menu-act="up" title="上移" aria-label="上移" ' +
+        (idx === 0 ? "disabled" : "") + ">" + admIc("chevron-up", 14) + "</button>";
+      html += '<button type="button" class="adm-iconbtn" data-menu-act="down" title="下移" aria-label="下移" ' +
+        (idx === state.flat.length - 1 ? "disabled" : "") + ">" + admIc("chevron-down", 14) + "</button>";
+      html += '<button type="button" class="adm-iconbtn" data-menu-act="indent" title="作为上一项的子项" aria-label="缩进" ' +
+        (idx === 0 ? "disabled" : "") + ">" + admIc("corner-down-right", 14) + "</button>";
       if (it.depth > 0)
-        html += '<button type="button" class="adm-iconbtn" data-menu-act="outdent" title="升回顶级">↰</button>';
-      html += '<button type="button" class="adm-iconbtn danger" data-menu-act="del" title="删除">🗑</button>';
+        html += '<button type="button" class="adm-iconbtn" data-menu-act="outdent" title="升回顶级" aria-label="升回顶级">' + admIc("corner-up-left", 14) + "</button>";
+      html += '<button type="button" class="adm-iconbtn danger" data-menu-act="del" title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button>";
       html += "</div></div>";
       return html;
     }
@@ -1101,7 +1109,7 @@
       saveBtn.disabled = true;
       try {
         await api("PUT", "/api/menus/" + state.activeId, payload);
-        setMsg("已保存 ✓", true);
+        setMsg("已保存", true);
         var data = await api("GET", "/api/menus");
         state.menus = data || [];
         useMenu(state.activeId);
@@ -1288,7 +1296,7 @@
           html += '<div class="adm-wg-img">' +
             '<img class="adm-wg-img-prev" data-wg-img-prev alt="" src="' + esc(v || "") + '">' +
             '<div class="adm-wg-img-row"><input class="adm-input" data-wg-input placeholder="/uploads/media/... 或 https://..." value="' + esc(v || "") + '">' +
-            '<label class="adm-imgfield-btn">⬆ 上传<input type="file" accept="image/*" class="adm-hidden-file" data-wg-img-file></label>' +
+            '<label class="adm-imgfield-btn">' + admIc("upload", 14) + ' 上传<input type="file" accept="image/*" class="adm-hidden-file" data-wg-img-file></label>' +
             "</div></div>";
         } else if (f.type === "links") {
           var rows = Array.isArray(v) ? v : [];
@@ -1298,9 +1306,9 @@
                 '<input class="adm-input" data-wg-link="label" placeholder="名称" value="' + esc(it.label || "") + '">' +
                 '<input class="adm-input" data-wg-link="url" placeholder="https://" value="' + esc(it.url || "") + '">' +
                 '<input class="adm-input" data-wg-link="icon" placeholder="图标" value="' + esc(it.icon || "") + '">' +
-                '<button type="button" class="adm-iconbtn danger" data-wg-link-del title="删除">🗑</button></div>';
+                '<button type="button" class="adm-iconbtn danger" data-wg-link-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
             }).join("") +
-            '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-wg-link-add>＋ 添加一项</button></div>';
+            '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-wg-link-add>' + admIc("plus", 14) + " 添加一项</button></div>";
         } else {
           html += '<input class="adm-input" data-wg-input placeholder="' + esc(f.placeholder || "") +
             '" value="' + esc(v == null ? "" : v) + '">';
@@ -1315,7 +1323,7 @@
         '<input class="adm-input" data-wg-link="label" placeholder="名称" value="' + esc(it.label || "") + '">' +
         '<input class="adm-input" data-wg-link="url" placeholder="https://" value="' + esc(it.url || "") + '">' +
         '<input class="adm-input" data-wg-link="icon" placeholder="图标" value="' + esc(it.icon || "") + '">' +
-        '<button type="button" class="adm-iconbtn danger" data-wg-link-del title="删除">🗑</button></div>';
+        '<button type="button" class="adm-iconbtn danger" data-wg-link-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
     }
     function liveValue(f) {
       var box = modal.querySelector('[data-wg-fld="' + f.key + '"]');
@@ -1356,7 +1364,7 @@
         '<div class="adm-modal-box adm-wg-modal-box">' +
         '<div class="adm-modal-hd"><div><h2 data-wg-modal-title></h2>' +
         '<p class="adm-wg-modal-sub" data-wg-modal-sub></p></div>' +
-        '<button class="adm-modal-x" data-wg-modal-x>✕</button></div>' +
+        '<button class="adm-modal-x" data-wg-modal-x aria-label="关闭">' + admIc("x", 14) + "</button></div>" +
         '<div class="adm-modal-bd">' +
         '<label class="adm-wg-label">标题</label>' +
         '<input class="adm-input" data-wg-title placeholder="留空则不显示标题">' +
@@ -1700,18 +1708,18 @@
         html += '<div class="adm-wg-img"><img class="adm-wg-img-prev" alt="" src="' + esc(u) + '">' +
           '<div class="adm-wg-img-row"><input class="adm-input" data-k="' + esc(f.key) +
           '" data-t="text" placeholder="/uploads/media/... 或 https://..." value="' + esc(u) + '">' +
-          '<label class="adm-imgfield-btn">⬆ 上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-key="' +
+          '<label class="adm-imgfield-btn">' + admIc("upload", 14) + ' 上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-key="' +
           esc(f.key) + '"></label></div></div>';
       } else if (f.type === "links") {
         var items = Array.isArray(v) ? v : [];
         html += '<div class="adm-wg-links" data-repeat="links" data-k="' + esc(f.key) + '">' +
           items.map(linkRowHtml).join("") +
-          '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>＋ 添加一项</button></div>';
+          '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>' + admIc("plus", 14) + " 添加一项</button></div>";
       } else if (f.type === "categoryRows") {
         var cats = Array.isArray(v) ? v : [];
         html += '<div class="adm-thp-cats" data-repeat="cats" data-k="' + esc(f.key) + '">' +
           cats.map(function (it) { return catRowHtml(it, ""); }).join("") +
-          '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>＋ 添加分类区块</button>' +
+          '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>' + admIc("plus", 14) + " 添加分类区块</button>" +
           '<p class="adm-thp-cats-state">正在加载分类…</p></div>';
         loadCats();
       } else {
@@ -1731,7 +1739,7 @@
         '<input class="adm-input" data-rk="label" placeholder="名称" value="' + esc(it.label || "") + '">' +
         '<input class="adm-input" data-rk="url" placeholder="https://" value="' + esc(it.url || "") + '">' +
         '<input class="adm-input" data-rk="icon" placeholder="图标" value="' + esc(it.icon || "") + '">' +
-        '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除">🗑</button></div>';
+        '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
     }
 
     function catRowHtml(it, opts) {
@@ -1749,9 +1757,9 @@
         (missing ? '<option value="' + esc(it.slug) + '" selected>' + esc(it.slug) + "（已删除）</option>" : "") +
         "</select>" +
         '<input class="adm-input" data-rk="title" placeholder="标题留空则用分类名" value="' + esc(it.title || "") + '">' +
-        '<button type="button" class="adm-iconbtn" data-repeat-up" title="上移">↑</button>' +
-        '<button type="button" class="adm-iconbtn" data-repeat-down" title="下移">↓</button>' +
-        '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除">🗑</button></div>';
+        '<button type="button" class="adm-iconbtn" data-repeat-up" title="上移" aria-label="上移">' + admIc("chevron-up", 14) + "</button>" +
+        '<button type="button" class="adm-iconbtn" data-repeat-down" title="下移" aria-label="下移">' + admIc("chevron-down", 14) + "</button>" +
+        '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
     }
 
     function loadCats() {

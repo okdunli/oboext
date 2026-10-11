@@ -34,6 +34,7 @@ import {
   shellNavHtml,
 } from "./admin-menu.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
+import { listPlugins, getPlugin } from "./plugins.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
 import { db } from "./db.js";
@@ -130,6 +131,20 @@ export async function adminMedia(_p: unknown, ctx: Ctx) {
 export async function adminMenus(_p: unknown, ctx: Ctx) {
   requireUser(ctx);
   return { menus: await listMenus() };
+}
+
+/** Plugin manager: every on-disk plugin with its row + manifest. */
+export async function adminPlugins(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  return { plugins: await listPlugins() };
+}
+
+/** One plugin: manifest settings schema + resolved values for the form. */
+export async function adminPlugin(p: any, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  return getPlugin(String(p?.slug || ""));
 }
 
 /** Widget manager: areas, registered types and the selected theme's instances. */

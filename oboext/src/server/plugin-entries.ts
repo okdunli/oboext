@@ -1,0 +1,12 @@
+export const PLUGIN_ENTRIES: Record<string, () => Promise<any>> = {
+  "announcement-bar": () => import("../../../plugins/announcement-bar/index"),
+  "code-copy": () => import("../../../plugins/code-copy/index"),
+  "comment-guard": () => import("../../../plugins/comment-guard/index"),
+  "copy-copyright": () => import("../../../plugins/copy-copyright/index"),
+  "external-links": () => import("../../../plugins/external-links/index"),
+  "hello-oboext": () => import("../../../plugins/hello-oboext/index"),
+  "image-lightbox": () => import("../../../plugins/image-lightbox/index"),
+  "reading-progress": () => import("../../../plugins/reading-progress/index"),
+  "reading-time": () => import("../../../plugins/reading-time/index"),
+  "seo-schema": () => import("../../../plugins/seo-schema/index"),
+};

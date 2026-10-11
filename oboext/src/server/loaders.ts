@@ -34,6 +34,8 @@ import { getMenuByLocation } from "./menus.js";
 import { getAreaWidgets } from "./widgets.js";
 import { getActiveThemeSlug, getActiveThemeRenderConfig } from "./themes.js";
 import { themeToCss } from "./theme-tokens.js";
+import { HOOKS, applyFilters } from "./hooks.js";
+import { ensurePluginsLoaded } from "./plugins.js";
 
 export type Ctx = {
   query: URLSearchParams;
@@ -43,6 +45,72 @@ export type Ctx = {
   ua: string;
   user?: unknown;
 };
+
+export type HeadContext = {
+  kind: "home" | "post" | "page" | "archive" | "taxonomy" | "search";
+  siteTitle: string;
+  siteUrl: string;
+  title?: string;
+  description?: string;
+  image?: string;
+  publishedAt?: string | null;
+  updatedAt?: string | null;
+  author?: string;
+  url?: string;
+  breadcrumbs?: { label: string; href: string }[];
+};
+
+/** Collect plugin markup injected before </body> (footer.html filter). */
+async function pluginFooterHtml(): Promise<string> {
+  await ensurePluginsLoaded();
+  const payload = applyFilters<{ html: string[] }>(HOOKS.footerHtml, { html: [] });
+  return payload.html.join("\n");
+}
+
+/** Collect plugin <head> nodes for a page (head.tags filter). */
+async function pluginHeadHtml(context: HeadContext): Promise<string> {
+  await ensurePluginsLoaded();
+  const payload = applyFilters<{ nodes: string[]; context: HeadContext }>(
+    HOOKS.headTags,
+    { nodes: [], context },
+  );
+  return payload.nodes.join("\n");
+}
+
+/**
+ * Generic head context for pages whose loader does not build its own:
+ * home, the blog index, search and archives. Entity pages (post, page,
+ * category, tag) carry richer facts and build theirs in their own loaders.
+ */
+function chromeHeadContext(pathname: string, siteTitle: string, origin: string): HeadContext {
+  if (pathname === "/") return { kind: "home", siteTitle, siteUrl: origin };
+  if (pathname === "/blog" || pathname === "/blog/")
+    return {
+      kind: "archive",
+      siteTitle,
+      siteUrl: origin,
+      title: "所有文章",
+      breadcrumbs: [
+        { label: "首页", href: "/" },
+        { label: "文章", href: "/blog" },
+      ],
+    };
+  if (pathname.indexOf("/search") === 0)
+    return { kind: "search", siteTitle, siteUrl: origin, title: "搜索" };
+  return { kind: "archive", siteTitle, siteUrl: origin };
+}
+
+/**
+ * Entity/taxonomy detail pages build head nodes in their own loader (with
+ * the entity's title/dates/breadcrumbs), so the chrome-level pass skips
+ * them to avoid double emission.
+ */
+function chromeSkipsHead(pathname: string): boolean {
+  return (
+    (pathname.indexOf("/blog/") === 0 && pathname !== "/blog/") ||
+    (pathname.indexOf("/pages/") === 0 && pathname !== "/pages/")
+  );
+}
 
 const pageNum = (v: unknown): number => Math.max(1, Number(v) || 1);
 
@@ -105,7 +173,14 @@ async function chromeData(pathname: string) {
 
 async function chrome(_payload: unknown, ctx?: Ctx) {
   const pathname = (ctx && ctx.pathname) || "/";
+  const origin = (ctx && ctx.origin) || "";
   const d = await chromeData(pathname);
+  const isAdmin = pathname.indexOf("/admin") === 0;
+  const pluginFooter = isAdmin ? "" : await pluginFooterHtml();
+  const pluginHead =
+    isAdmin || chromeSkipsHead(pathname)
+      ? ""
+      : await pluginHeadHtml(chromeHeadContext(pathname, d.siteTitle, origin));
   return {
     siteTitle: d.siteTitle,
     siteDescription: d.siteDescription,
@@ -113,6 +188,8 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
     nav: d.navHtml,
     aside: d.asideHtml,
     footer: d.footerHtml,
+    pluginFooter,
+    pluginHead,
   };
 }
 
@@ -160,11 +237,12 @@ async function blogList(payload: { page?: number }) {
   };
 }
 
-async function categoryList(payload: { slug: string; page?: number }) {
+async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) {
   const page = pageNum(payload.page);
-  const [category, settings] = await Promise.all([
+  const [category, settings, cfg] = await Promise.all([
     getCategoryBySlug(payload.slug),
     getSettings(),
+    getPermalinkConfig(),
   ]);
   if (!category) return { notFound: true };
   const perPage = settings.postsPerPage || 10;
@@ -178,8 +256,22 @@ async function categoryList(payload: { slug: string; page?: number }) {
   const sub =
     (category.description ? `${category.description} · ` : "") +
     `共 ${total} 篇 · 第 ${page}/${totalPages} 页`;
+  const catUrl = categoryUrlFor(cfg, category);
+  const pluginHead = await pluginHeadHtml({
+    kind: "taxonomy",
+    siteTitle: settings.siteTitle ?? "",
+    siteUrl: ctx.origin,
+    title: category.name,
+    description: category.description || settings.siteDescription || "",
+    url: `${ctx.origin}${catUrl}`,
+    breadcrumbs: [
+      { label: "首页", href: "/" },
+      { label: category.name, href: catUrl },
+    ],
+  });
   return {
     headTitle: `分类：${category.name} - ${settings.siteTitle ?? ""}`,
+    pluginHead,
     main: R.listPage({
       title: `分类：${category.name}`,
       sub,
@@ -191,9 +283,13 @@ async function categoryList(payload: { slug: string; page?: number }) {
   };
 }
 
-async function tagList(payload: { slug: string; page?: number }) {
+async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
   const page = pageNum(payload.page);
-  const [tag, settings] = await Promise.all([getTagBySlug(payload.slug), getSettings()]);
+  const [tag, settings, cfg] = await Promise.all([
+    getTagBySlug(payload.slug),
+    getSettings(),
+    getPermalinkConfig(),
+  ]);
   if (!tag) return { notFound: true };
   const perPage = settings.postsPerPage || 10;
   const { items, total } = await listPosts({
@@ -203,8 +299,22 @@ async function tagList(payload: { slug: string; page?: number }) {
     offset: (page - 1) * perPage,
   });
   const totalPages = Math.max(1, Math.ceil(total / perPage));
+  const tagUrl = tagUrlFor(cfg, tag);
+  const pluginHead = await pluginHeadHtml({
+    kind: "taxonomy",
+    siteTitle: settings.siteTitle ?? "",
+    siteUrl: ctx.origin,
+    title: `#${tag.name}`,
+    description: settings.siteDescription || "",
+    url: `${ctx.origin}${tagUrl}`,
+    breadcrumbs: [
+      { label: "首页", href: "/" },
+      { label: `#${tag.name}`, href: tagUrl },
+    ],
+  });
   return {
     headTitle: `标签：#${tag.name} - ${settings.siteTitle ?? ""}`,
+    pluginHead,
     main: R.listPage({
       title: `标签：#${tag.name}`,
       sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
@@ -288,9 +398,31 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     avatar: config.avatar,
     config,
   });
+  const metaPayload = applyFilters<{ post: unknown; items: R.MetaItem[] }>(HOOKS.postMeta, {
+    post: { ...post, plainText: R.blocksToPlainText(post.content) },
+    items: [],
+  });
+  const headContext: HeadContext = {
+    kind: "post",
+    siteTitle: settings.siteTitle ?? "",
+    siteUrl: ctx.origin,
+    title: post.seoTitle || post.title,
+    description: post.seoDescription || post.excerpt || settings.siteDescription || "",
+    image: post.featuredImage || undefined,
+    publishedAt: post.publishedAt ? new Date(post.publishedAt).toISOString() : null,
+    updatedAt: post.updatedAt ? new Date(post.updatedAt).toISOString() : null,
+    author: post.author?.name,
+    url: `${ctx.origin}${post.url}`,
+    breadcrumbs: [
+      { label: "首页", href: "/" },
+      { label: post.title, href: post.url },
+    ],
+  };
   return {
-    main: R.postPage(post, related, commentsHtml),
-    head: R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin),
+    main: R.postPage(post, related, commentsHtml, metaPayload.items),
+    head:
+      R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
+      (await pluginHeadHtml(headContext)),
   };
 }
 
@@ -318,9 +450,27 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
     avatar: config.avatar,
     config,
   });
+  const headContext: HeadContext = {
+    kind: "page",
+    siteTitle: settings.siteTitle ?? "",
+    siteUrl: ctx.origin,
+    title: page.seoTitle || page.title,
+    description: page.seoDescription || page.excerpt || settings.siteDescription || "",
+    image: page.featuredImage || undefined,
+    publishedAt: page.publishedAt ? new Date(page.publishedAt).toISOString() : null,
+    updatedAt: page.updatedAt ? new Date(page.updatedAt).toISOString() : null,
+    author: page.author?.name,
+    url: `${ctx.origin}${page.url}`,
+    breadcrumbs: [
+      { label: "首页", href: "/" },
+      { label: page.title, href: page.url },
+    ],
+  };
   return {
     main: R.pagePage(page, recent.items, commentsHtml),
-    head: R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin),
+    head:
+      R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
+      (await pluginHeadHtml(headContext)),
   };
 }
 
@@ -508,20 +658,29 @@ ${xmlItems}
 }
 
 async function robots(ctx: Ctx): Promise<string> {
+  await ensurePluginsLoaded();
   const settings = await getSettings();
+  const base = ctx.origin;
   if ((settings.seoRobots || "").toLowerCase().includes("noindex")) {
-    return "User-agent: *\nDisallow: /\n";
+    const blocked = applyFilters<{ lines: string[]; base: string }>(HOOKS.robotsRules, {
+      lines: ["User-agent: *", "Disallow: /"],
+      base,
+    });
+    return `${blocked.lines.join("\n").trimEnd()}\n`;
   }
-  return [
-    "User-agent: *",
-    "Allow: /",
-    "Disallow: /admin",
-    "Disallow: /api/",
-    "Disallow: /search",
-    "",
-    `Sitemap: ${ctx.origin}/sitemap.xml`,
-    "",
-  ].join("\n");
+  const payload = applyFilters<{ lines: string[]; base: string }>(HOOKS.robotsRules, {
+    lines: [
+      "User-agent: *",
+      "Allow: /",
+      "Disallow: /admin",
+      "Disallow: /api/",
+      "Disallow: /search",
+      "",
+      `Sitemap: ${base}/sitemap.xml`,
+    ],
+    base,
+  });
+  return `${payload.lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
 }
 
 export const loaders = {
@@ -546,6 +705,8 @@ export const loaders = {
   "admin.widgets": admin.adminWidgets,
   "admin.themes": admin.adminThemes,
   "admin.theme-panel": admin.adminThemePanel,
+  "admin.plugins": admin.adminPlugins,
+  "admin.plugin": admin.adminPlugin,
   "admin.menu-settings": admin.adminMenuSettings,
   "admin.taxonomies": admin.adminTaxonomies,
   "admin.users": admin.adminUsers,
@@ -556,7 +717,16 @@ export type LoaderKey = keyof typeof loaders;
 /** Server-only dispatch used by pages and by /api/data. */
 export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unknown> {
   if (key === "chrome" && ctx.pathname && ctx.pathname.indexOf("/admin") === 0) {
-    return { siteTitle: "管理后台", siteDescription: "", themeHead: "", nav: "", aside: "", footer: "" };
+    return {
+      siteTitle: "管理后台",
+      siteDescription: "",
+      themeHead: "",
+      nav: "",
+      aside: "",
+      footer: "",
+      pluginHead: "",
+      pluginFooter: "",
+    };
   }
   const fn = (loaders as Record<string, (p: any, c: Ctx) => Promise<unknown>>)[key];
   if (!fn) throw new Error(`unknown loader: ${key}`);
@@ -575,6 +745,7 @@ export const documents = { sitemap, feed, robots };
  */
 export async function notFoundDocument(ctx: Ctx): Promise<string> {
   const c = await chromeData((ctx && ctx.pathname) || "/");
+  const pluginFooter = await pluginFooterHtml();
   const settings = await getSettings();
   const title = settings.siteTitle ?? "";
   const card =
@@ -590,6 +761,6 @@ export async function notFoundDocument(ctx: Ctx): Promise<string> {
     `</head><body><div class="th-skyscraper">${c.navHtml}` +
     `<div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">${card}</div></div>` +
     `<aside class="sidebar-column with-separate-line"><div class="sidebar-content">${c.asideHtml}</div></aside>` +
-    `</div></main></div>${c.footerHtml}</div></body></html>`
+    `</div></main></div>${c.footerHtml}${pluginFooter}</div></body></html>`
   );
 }

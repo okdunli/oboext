@@ -29,6 +29,13 @@
       if (u) getContext().user = u;
     }
 
+    // Enabled plugins must be registered before any hook fires (chrome
+    // footer/head, comments, pinned posts, sitemap/robots). Warm after the
+    // first request this costs one DB read + the enabled set's setup().
+    if (reg && reg.plugins) {
+      await reg.plugins.ensureLoaded();
+    }
+
     const u = new URL(request.url);
     const p = u.pathname;
 
@@ -100,6 +107,45 @@
         });
       }
       return reg.uploads.serve(rp, request.method);
+    }
+
+    // ------------------------------------------- plugin HTTP gateway
+    // /api/plugin/<slug>/<...path>: the first ENABLED plugin that sets
+    // response on the api.request filter wins; otherwise real 404. Any
+    // method (plugins expose POST endpoints), so this precedes the
+    // GET/HEAD gate below.
+    if (rp.indexOf("/api/plugin/") === 0) {
+      const segs = rp
+        .slice("/api/plugin/".length)
+        .split("/")
+        .map((s) => {
+          try {
+            return decodeURIComponent(s);
+          } catch (e) {
+            return s;
+          }
+        })
+        .filter(Boolean);
+      const json404 = () =>
+        new Response(JSON.stringify({ error: "not found" }), {
+          status: 404,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      if (!segs.length) return json404();
+      const slug = segs[0];
+      const out = await reg.pluginApi.dispatch(slug, segs.slice(1), request);
+      if (!out) return json404();
+      const headers = Object.assign(
+        { "content-type": "application/json; charset=utf-8" },
+        out.headers || {},
+      );
+      const body =
+        out.body == null
+          ? ""
+          : typeof out.body === "string"
+            ? out.body
+            : JSON.stringify(out.body);
+      return new Response(body, { status: out.status || 200, headers });
     }
 
     // --------------------------------------------------- XML / txt documents

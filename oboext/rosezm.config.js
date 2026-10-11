@@ -9,8 +9,8 @@
  *       pages/api/data.rose), browser -> GET /api/data JSON;
  *     - __rvQs: server -> getContext().query (seeded per request by the
  *       middleware), browser -> location.search.
- *  2. relaxed-but-hashed CSP via exported headers; tools/build.mjs swaps the
- *     __RVP_CSP__ sentinel for the build's real inline-script hash.
+ *  2. CSP via exported headers: public pages allow plugin inline scripts
+ *     ('unsafe-inline', original-oboext parity); admin pages stay strict.
  *  3. @server/* imports (server-only modules: api routes, middleware-less)
  *     rewritten to absolute source paths; api modules never enter the client
  *     bundle, so pglite/drizzle stay out of the browser.
@@ -57,14 +57,18 @@ function __rvLoad(key, payload) {
 }
 `;
 
-const CSP_HEADERS = `
+const SCRIPT_HOSTS =
+  "https://giscus.app https://utteranc.es https://cdn.jsdelivr.net https://*.disqus.com";
+const CSP_COMMON =
+  "style-src 'unsafe-inline' 'self'; " +
+  "img-src 'self' data: https://picsum.photos https://www.gravatar.com https://cn.gravatar.com https://cravatar.cn https://weavatar.com https://seccdn.libravatar.org https://q1.qlogo.cn https://*.disquscdn.com; " +
+  "font-src data:; connect-src 'self' https:; frame-src https://giscus.app https://*.disqus.com; " +
+  "form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'";
+const cspHeadersFor = (admin) => `
 export const headers = {
   "Content-Security-Policy":
-    "script-src 'self' __RVP_CSP__ https://giscus.app https://utteranc.es https://cdn.jsdelivr.net https://*.disqus.com; " +
-    "style-src 'unsafe-inline' 'self'; " +
-    "img-src 'self' data: https://picsum.photos https://www.gravatar.com https://cn.gravatar.com https://cravatar.cn https://weavatar.com https://seccdn.libravatar.org https://q1.qlogo.cn https://*.disquscdn.com; " +
-    "font-src data:; connect-src 'self' https:; frame-src https://giscus.app https://*.disqus.com; " +
-    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'",
+    "script-src 'self' ${admin ? "" : "'unsafe-inline' "}${SCRIPT_HOSTS}; " +
+    ${JSON.stringify(CSP_COMMON)},
 };
 `;
 
@@ -86,7 +90,8 @@ export default [
       const m = code.match(SCRIPT_RE);
       if (!m) return code;
       const body = m[1];
-      const injected = `${PREAMBLE}\n${CSP_HEADERS}\n${body}`;
+      const cspHeaders = cspHeadersFor(filePath.replace(/\\/g, "/").includes("/pages/admin/"));
+      const injected = `${PREAMBLE}\n${cspHeaders}\n${body}`;
       return code.slice(0, m.index) + code.slice(m.index).replace(m[0], `<script>${injected}</script>`);
     },
   },

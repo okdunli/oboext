@@ -4,6 +4,7 @@
   //   POST  public comment submission (guests allowed; logged-in identity
   //         overrides the guest fields server-side, like the original)
   import { apiGate, readBody, publicListComments, createPublicComment } from "@server/admin";
+  import { HOOKS, applyAsyncFilters } from "@server/hooks";
 
   export async function GET(request) {
     return apiGate(async () => {
@@ -24,6 +25,19 @@
       const postId = Number(body.postId);
       if (!Number.isInteger(postId)) {
         return new Response(JSON.stringify({ error: "缺少 postId" }), {
+          status: 422,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      }
+      // Guard plugins (comment-captcha, …) reject before any DB write.
+      const gate = await applyAsyncFilters(HOOKS.commentSubmission, {
+        data: body,
+        userId: ctx.user ? ctx.user.id : null,
+        ip: ctx.ip || null,
+        reject: undefined,
+      });
+      if (gate.reject) {
+        return new Response(JSON.stringify({ error: gate.reject }), {
           status: 422,
           headers: { "content-type": "application/json; charset=utf-8" },
         });

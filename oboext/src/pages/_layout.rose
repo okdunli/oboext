@@ -30,6 +30,7 @@
   <meta name="twitter:description" content={chrome().siteDescription}>
   <link rel="stylesheet" href="/public/theme.css">
   {@html chrome().themeHead}
+  {#if publicPath()}{@html chrome().pluginHead}{/if}
   <link rel="icon" href="data:,">
 </head>
 
@@ -46,5 +47,6 @@
   <slot />
   </div></div><aside class="sidebar-column with-separate-line"><div class="sidebar-content">{@html chrome().aside}</div></aside></div></main></div>
 {@html chrome().footer}
+{@html chrome().pluginFooter}
 </div>
 {/if}

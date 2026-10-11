@@ -1,0 +1,33 @@
+<script>
+  // /api/plugins/:slug
+  //   GET   full plugin view (row + manifest schema + resolved settings)
+  //   PATCH { enabled?: boolean } or { settings?: object }
+  import { apiGate, readBody, requireCap } from "@server/admin";
+  import { getPlugin, setPluginEnabled, updatePluginSettings } from "@server/plugins";
+
+  function pathSlug(request) {
+    return decodeURIComponent(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return getPlugin(pathSlug(request));
+    });
+  }
+
+  export async function PATCH(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const slug = pathSlug(request);
+      const body = await readBody(request);
+      if (typeof body?.enabled === "boolean") {
+        return setPluginEnabled(slug, body.enabled);
+      }
+      if (body && typeof body.settings === "object" && body.settings !== null) {
+        return updatePluginSettings(slug, body.settings);
+      }
+      return getPlugin(slug);
+    });
+  }
+</script>

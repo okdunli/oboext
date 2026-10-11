@@ -1,17 +1,20 @@
 <script>
-  // Categories: create/edit/delete against /api/categories. The page reads
-
-  // submit flips between POST (new) and PUT (existing).
+  // Categories manager — port of <TaxonomyManager type="category" />. Same
+  // shape as the tags page: a horizontal add bar, one full-width table, and
+  // a modal for editing. Categories additionally carry a parent, description
+  // and an icon (a lucide kebab name; any other text is shown verbatim).
   let d = $data(() => __rvLoad("admin.taxonomies", {}));
   function cats() {
     return d().categories || [];
+  }
+  function topCats() {
+    return cats().filter((c) => !c.parentId);
   }
   function parentName(c) {
     if (!c.parentId) return "—";
     const p = cats().find((x) => x.id === c.parentId);
     return p ? p.name : "—";
   }
-  // attribute-safe accessors (no quotes inside the template expression)
   function descOf(c) {
     return c.description || "";
   }
@@ -27,98 +30,147 @@
   function confirmDelete(c) {
     return "确认删除分类「" + c.name + "」？子分类会提升为顶级分类。";
   }
+  function ic(n) {
+    return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/' + n + '.svg)"></span>';
+  }
+  function catGlyph(c) {
+    const v = c.icon || "";
+    if (/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v)) return ic(v);
+    if (v) return '<span class="adm-tax-emoji">' + v + "</span>";
+    return ic("folder");
+  }
 </script>
 
 <head>
   <title>分类 - 管理后台</title>
 </head>
 
-<div class="adm-grid adm-cols-2">
-  <div class="adm-card">
-    <div class="adm-card-hd"><strong id="cat-form-title">新增分类</strong></div>
-    <div class="adm-card-bd">
-      <form data-adm-form="create-category" data-add-label="新增分类">
+<form class="adm-card adm-tax-add adm-tax-add-cat" data-adm-form="create-category">
+  <div class="adm-tax-fields">
+    <div class="adm-field">
+      <label>名称</label>
+      <input class="adm-input" name="name" required placeholder="例如：技术随笔">
+    </div>
+    <div class="adm-field">
+      <label>别名（可选）</label>
+      <input class="adm-input" name="slug" placeholder="留空自动生成">
+    </div>
+    <div class="adm-field">
+      <label>父分类</label>
+      <select class="adm-select" name="parentId">
+        <option value="">无（顶级）</option>
+        {#each topCats() as c}
+        <option value={c.id}>{c.name}</option>
+        {/each}
+      </select>
+    </div>
+    <div class="adm-field adm-tax-grow">
+      <label>描述（可选）</label>
+      <input class="adm-input" name="description" placeholder="分类说明">
+    </div>
+    <div class="adm-field">
+      <label>图标名（可选）</label>
+      <input class="adm-input" name="icon" placeholder="如 folder">
+    </div>
+  </div>
+  <button class="adm-btn" type="submit">{@html ic("plus")} 添加</button>
+</form>
+
+<div class="adm-card adm-table-wrap adm-tax-table">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th>名称</th>
+        <th style="width:24%">别名</th>
+        <th style="width:120px">父分类</th>
+        <th>描述</th>
+        <th style="width:200px;text-align:right">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each cats() as c}
+      <tr>
+        <td>
+          <span class="adm-tax-name" style={c.parentId ? "padding-left:18px" : ""}>{@html (c.parentId ? '<span class="adm-tax-child">└</span>' : "") + catGlyph(c)}<span class="title">{c.name}</span></span>
+        </td>
+        <td><span class="adm-muted">{c.slug}</span></td>
+        <td><span class="adm-muted">{parentName(c)}</span></td>
+        <td><span class="adm-muted">{descOf(c)}</span></td>
+        <td>
+          <div class="row-actions">
+            <a class="adm-iconbtn" href={"/blog/category/" + c.slug} target="_blank" title="查看">
+              {@html ic("external-link")}
+            </a>
+            <button
+              type="button"
+              class="adm-iconbtn"
+              data-tax-edit
+              data-id={c.id}
+              data-name={c.name}
+              data-slug={c.slug}
+              data-description={descOf(c)}
+              data-icon={iconOf(c)}
+              data-parentid={parentOf(c)}
+              title="编辑名称 / 描述 / 图标"
+            >{@html ic("pencil")} 编辑</button>
+            <button
+              type="button"
+              class="adm-iconbtn danger"
+              data-adm-act="delete"
+              data-url={"/api/categories/" + c.id}
+              data-confirm={confirmDelete(c)}
+              title="删除"
+            >{@html ic("trash-2")} 删除</button>
+          </div>
+        </td>
+      </tr>
+      {/each}
+    </tbody>
+  </table>
+  {#each emptyHint() as _}
+  <div class="adm-empty">还没有分类，在上方添加第一个吧。</div>
+  {/each}
+</div>
+
+<div class="adm-modal" data-tax-modal hidden>
+  <div class="adm-modal-box">
+    <form data-adm-form="edit-category">
+      <div class="adm-modal-hd">
+        <h2>编辑分类</h2>
+        <button type="button" class="adm-modal-x" data-tax-cancel>{@html ic("x")}</button>
+      </div>
+      <div class="adm-modal-bd">
         <input type="hidden" name="id">
         <div class="adm-field">
           <label>名称</label>
-          <input class="adm-input" name="name" required placeholder="例如：技术随笔">
+          <input class="adm-input" name="name" required maxlength="100">
         </div>
         <div class="adm-field">
-          <label>别名（slug）</label>
-          <input class="adm-input" name="slug" placeholder="留空按名称自动生成">
+          <label>别名（留空保存则保持现有别名）</label>
+          <input class="adm-input" name="slug" maxlength="120">
+        </div>
+        <div class="adm-field">
+          <label>父分类</label>
+          <select class="adm-select" name="parentId">
+            <option value="">无（顶级）</option>
+            {#each topCats() as c}
+            <option value={c.id}>{c.name}</option>
+            {/each}
+          </select>
         </div>
         <div class="adm-field">
           <label>描述</label>
-          <textarea class="adm-textarea" name="description" rows="3" placeholder="分类说明（可选）"></textarea>
+          <textarea class="adm-textarea" name="description" rows="2" maxlength="500"></textarea>
         </div>
-        <div class="adm-form-grid">
-          <div class="adm-field">
-            <label>图标</label>
-            <input class="adm-input" name="icon" placeholder="emoji 或图标名">
-          </div>
-          <div class="adm-field">
-            <label>父分类</label>
-            <select class="adm-select" name="parentId">
-              <option value="">无（顶级分类）</option>
-              {#each cats() as c}
-              <option value={c.id}>{c.name}</option>
-              {/each}
-            </select>
-          </div>
+        <div class="adm-field">
+          <label>图标名（lucide，如 folder；也可留空）</label>
+          <input class="adm-input" name="icon" placeholder="folder">
         </div>
-        <div style="display:flex;gap:8px;margin-top:6px">
-          <button class="adm-btn" type="submit">新增分类</button>
-          <button class="adm-btn adm-btn-ghost" type="button" data-adm-act="tax-new" data-form='[data-adm-form="create-category"]'>取消编辑</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <div class="adm-card adm-table-wrap">
-    <table class="adm-table">
-      <thead>
-        <tr>
-          <th>名称</th>
-          <th style="width:110px">父分类</th>
-          <th style="width:120px"></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each cats() as c}
-        <tr>
-          <td>
-            <div class="title">{c.icon ? c.icon + " " : ""}{c.name}</div>
-            <div class="sub">/{c.slug}{c.description ? " · " + c.description : ""}</div>
-          </td>
-          <td class="adm-hint">{parentName(c)}</td>
-          <td>
-            <div class="row-actions">
-              <a class="adm-iconbtn" href={"/blog/category/" + c.slug} target="_blank">查看</a>
-              <button
-                class="adm-iconbtn"
-                data-adm-act="tax-edit"
-                data-form='[data-adm-form="create-category"]'
-                data-id={c.id}
-                data-name={c.name}
-                data-slug={c.slug}
-                data-description={descOf(c)}
-                data-icon={iconOf(c)}
-                data-parentid={parentOf(c)}
-              >编辑</button>
-              <button
-                class="adm-iconbtn danger"
-                data-adm-act="delete"
-                data-url={"/api/categories/" + c.id}
-                data-confirm={confirmDelete(c)}
-              >删除</button>
-            </div>
-          </td>
-        </tr>
-        {/each}
-      </tbody>
-    </table>
-    {#each emptyHint() as _}
-    <div class="adm-empty">还没有分类，在左侧创建第一个吧。</div>
-    {/each}
+      </div>
+      <div class="adm-modal-ft">
+        <button type="button" class="adm-btn adm-btn-ghost" data-tax-cancel>取消</button>
+        <button type="submit" class="adm-btn">保存</button>
+      </div>
+    </form>
   </div>
 </div>

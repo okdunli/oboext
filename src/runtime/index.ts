@@ -879,3 +879,36 @@ export function $sessionCookie(
     secure || sameSite === 'None' ? 'Secure' : '',
   ].filter(Boolean).join('; ');
 }
+
+export function reportVitals(): void {
+  if (typeof window === 'undefined' || typeof performance === 'undefined') return;
+  const live: Record<string, number> = {};
+  (window as unknown as { __rosefd_vitals?: Record<string, number> }).__rosefd_vitals = live;
+  const send = (name: string, value: number) => {
+    live[name] = value;
+    window.dispatchEvent(new CustomEvent('rosefd:vitals', { detail: { name, value, route: location.pathname } }));
+  };
+  const nav = performance.getEntriesByType?.('navigation')?.[0] as PerformanceNavigationTiming | undefined;
+  if (nav) send('ttfb', Math.round(nav.responseStart));
+  const paints = performance.getEntriesByType?.('paint') ?? [];
+  const fcp = paints.find((p) => p.name === 'first-contentful-paint');
+  if (fcp) send('fcp', Math.round(fcp.startTime));
+  const PO = (window as unknown as { PerformanceObserver?: typeof PerformanceObserver }).PerformanceObserver;
+  if (!PO) return;
+  let cls = 0;
+  let inp = 0;
+  const flush = () => {
+    if (cls) send('cls', Math.round(cls * 1000) / 1000);
+    if (inp) send('inp', Math.round(inp));
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flush();
+  });
+  new PO((list) => {
+    for (const e of list.getEntries() as Array<PerformanceEntry & { value?: number; duration?: number; interactionId?: number }>) {
+      if (e.entryType === 'layout-shift' && !(e as unknown as { hadRecentInput?: boolean }).hadRecentInput) cls += e.value ?? 0;
+      if (e.entryType === 'event' && e.interactionId) inp = Math.max(inp, e.duration ?? 0);
+      if (e.entryType === 'largest-contentful-paint') send('lcp', Math.round(e.startTime));
+    }
+  }).observe({ entryTypes: ['layout-shift', 'event', 'largest-contentful-paint'] });
+}

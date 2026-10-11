@@ -1,6 +1,8 @@
 <script>
-  // Tags: create/edit/delete against /api/tags. Same form-fill delegation as
-  // categories; tags only carry name + slug.
+  // Tags manager — port of <TaxonomyManager type="tag" />. Original layout:
+  // a horizontal "add" bar on top, then one full-width table below; editing
+  // opens a modal (not a left-hand form, which the earlier 2-column port got
+  // wrong). Persistence: POST/PUT/DELETE /api/tags via admin.js.
   let d = $data(() => __rvLoad("admin.taxonomies", {}));
   function tags() {
     return d().tags || [];
@@ -8,74 +10,100 @@
   function emptyHint() {
     return tags().length ? [] : [1];
   }
+  function ic(n) {
+    return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/' + n + '.svg)"></span>';
+  }
 </script>
 
 <head>
   <title>标签 - 管理后台</title>
 </head>
 
-<div class="adm-grid adm-cols-2">
-  <div class="adm-card">
-    <div class="adm-card-hd"><strong>新增标签</strong></div>
-    <div class="adm-card-bd">
-      <form data-adm-form="create-tag" data-add-label="新增标签">
+<form class="adm-card adm-tax-add" data-adm-form="create-tag">
+  <div class="adm-tax-fields">
+    <div class="adm-field">
+      <label>名称</label>
+      <input class="adm-input" name="name" required placeholder="例如：Node.js">
+    </div>
+    <div class="adm-field">
+      <label>别名（可选）</label>
+      <input class="adm-input" name="slug" placeholder="留空按名称自动生成">
+    </div>
+  </div>
+  <button class="adm-btn" type="submit">{@html ic("plus")} 添加</button>
+</form>
+
+<div class="adm-card adm-table-wrap adm-tax-table">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th>名称</th>
+        <th style="width:34%">别名</th>
+        <th style="width:200px;text-align:right">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each tags() as t}
+      <tr>
+        <td>
+          <span class="adm-tax-name">{@html ic("tags")}<span class="title">{t.name}</span></span>
+        </td>
+        <td><span class="adm-muted">{t.slug}</span></td>
+        <td>
+          <div class="row-actions">
+            <a class="adm-iconbtn" href={"/blog/tag/" + t.slug} target="_blank" title="查看">
+              {@html ic("external-link")}
+            </a>
+            <button
+              type="button"
+              class="adm-iconbtn"
+              data-tax-edit
+              data-id={t.id}
+              data-name={t.name}
+              data-slug={t.slug}
+              title="编辑名称 / 别名"
+            >{@html ic("pencil")} 编辑</button>
+            <button
+              type="button"
+              class="adm-iconbtn danger"
+              data-adm-act="delete"
+              data-url={"/api/tags/" + t.id}
+              data-confirm={"确认删除标签「" + t.name + "」？文章关联会一并解除。"}
+              title="删除"
+            >{@html ic("trash-2")} 删除</button>
+          </div>
+        </td>
+      </tr>
+      {/each}
+    </tbody>
+  </table>
+  {#each emptyHint() as _}
+  <div class="adm-empty">还没有标签，在上方添加第一个吧。</div>
+  {/each}
+</div>
+
+<div class="adm-modal" data-tax-modal hidden>
+  <div class="adm-modal-box">
+    <form data-adm-form="edit-tag">
+      <div class="adm-modal-hd">
+        <h2>编辑标签</h2>
+        <button type="button" class="adm-modal-x" data-tax-cancel>{@html ic("x")}</button>
+      </div>
+      <div class="adm-modal-bd">
         <input type="hidden" name="id">
         <div class="adm-field">
           <label>名称</label>
-          <input class="adm-input" name="name" required placeholder="例如：Node.js">
+          <input class="adm-input" name="name" required maxlength="100">
         </div>
         <div class="adm-field">
-          <label>别名（slug）</label>
-          <input class="adm-input" name="slug" placeholder="留空按名称自动生成">
+          <label>别名（留空保存则保持现有别名）</label>
+          <input class="adm-input" name="slug" maxlength="120">
         </div>
-        <div style="display:flex;gap:8px;margin-top:6px">
-          <button class="adm-btn" type="submit">新增标签</button>
-          <button class="adm-btn adm-btn-ghost" type="button" data-adm-act="tax-new" data-form='[data-adm-form="create-tag"]'>取消编辑</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <div class="adm-card adm-table-wrap">
-    <table class="adm-table">
-      <thead>
-        <tr>
-          <th>名称</th>
-          <th style="width:120px"></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each tags() as t}
-        <tr>
-          <td>
-            <div class="title">#{t.name}</div>
-            <div class="sub">/{t.slug}</div>
-          </td>
-          <td>
-            <div class="row-actions">
-              <a class="adm-iconbtn" href={"/blog/tag/" + t.slug} target="_blank">查看</a>
-              <button
-                class="adm-iconbtn"
-                data-adm-act="tax-edit"
-                data-form='[data-adm-form="create-tag"]'
-                data-id={t.id}
-                data-name={t.name}
-                data-slug={t.slug}
-              >编辑</button>
-              <button
-                class="adm-iconbtn danger"
-                data-adm-act="delete"
-                data-url={"/api/tags/" + t.id}
-                data-confirm={"确认删除标签「" + t.name + "」？文章关联会一并解除。"}
-              >删除</button>
-            </div>
-          </td>
-        </tr>
-        {/each}
-      </tbody>
-    </table>
-    {#each emptyHint() as _}
-    <div class="adm-empty">还没有标签，在左侧创建第一个吧。</div>
-    {/each}
+      </div>
+      <div class="adm-modal-ft">
+        <button type="button" class="adm-btn adm-btn-ghost" data-tax-cancel>取消</button>
+        <button type="submit" class="adm-btn">保存</button>
+      </div>
+    </form>
   </div>
 </div>

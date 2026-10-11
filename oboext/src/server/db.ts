@@ -12,8 +12,8 @@
  *  - Local:  DB_DRIVER=pglite (default), data dir ./.data/pglite_live
  *  - Prod:   DB_DRIVER=postgres + DATABASE_URL (Neon / Vercel Postgres)
  */
-import fs from "node:fs";
-import path from "node:path";
+import fs from "fs";
+import path from "path";
 import { sql, type SQL } from "drizzle-orm";
 import * as schema from "./schema";
 

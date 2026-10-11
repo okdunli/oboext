@@ -8,6 +8,7 @@
     createTheme,
     getThemeMeta,
     getActiveThemeSlug,
+    isPublicThemePorted,
   } from "@server/themes";
 
   export async function GET() {
@@ -16,7 +17,12 @@
       const [rows, activeSlug] = await Promise.all([listThemes(), getActiveThemeSlug()]);
       return {
         activeThemeSlug: activeSlug,
-        themes: rows.map((t) => ({ ...t, active: t.slug === activeSlug, meta: getThemeMeta(t.slug) })),
+        themes: rows.map((t) => ({
+          ...t,
+          active: t.slug === activeSlug,
+          ported: isPublicThemePorted(t.slug),
+          meta: getThemeMeta(t.slug),
+        })),
       };
     });
   }

@@ -108,6 +108,13 @@
       e.preventDefault();
       a.parentElement.classList.toggle("open");
     });
+    document.addEventListener("rv:nav", () => {
+      syncMenu();
+      if (sidebarOpen) closeSidebar();
+      if (toolbox) toolbox.classList.remove("mobile-show");
+      if (loginMain) loginMain.classList.remove("mobile-show");
+      syncNav();
+    });
 
     const TIPS = ["生成海报", "分享到微博", "分享到QQ", "分享到QQ空间", "点赞"];
     const readLiked = () => {
@@ -239,15 +246,30 @@
     document.addEventListener("mouseover", onTipOver);
     document.addEventListener("mouseout", onTipOut);
 
-    let io = null;
-    let fallback = null;
+    pageFx();
+
+    window.addEventListener("pagehide", () => {
+      if (fx.flipTimer) clearInterval(fx.flipTimer);
+      if (fx.io) fx.io.disconnect();
+      clearTimeout(fx.fallback);
+      clearTimeout(disappearTimer);
+      hideTip();
+    });
+  }
+
+  const fx = { io: null, fallback: null, flipTimer: null };
+  function pageFx() {
+    if (fx.flipTimer) { clearInterval(fx.flipTimer); fx.flipTimer = null; }
+    if (fx.io) { fx.io.disconnect(); fx.io = null; }
+    clearTimeout(fx.fallback);
+
     const SEL = ".sk-frame .post-card-col, .sk-frame .sk-section, .sk-frame .post-wrapper, .sk-frame .sk-crumbs";
     if ("IntersectionObserver" in window) {
-      io = new IntersectionObserver((entries) => {
+      fx.io = new IntersectionObserver((entries) => {
         for (const en of entries) {
           if (!en.isIntersecting) continue;
           en.target.classList.add("is-in");
-          io.unobserve(en.target);
+          fx.io.unobserve(en.target);
         }
       }, { rootMargin: "0px 0px -8% 0px", threshold: 0.04 });
     }
@@ -258,11 +280,10 @@
         el.style.transitionDelay = Math.min(i % 4, 3) * 0.07 + "s";
       }
       el.classList.add("sk-reveal");
-      if (io) io.observe(el);
+      if (fx.io) fx.io.observe(el);
     });
-    fallback = setTimeout(() => targets.forEach((el) => el.classList.add("is-in")), 1600);
+    fx.fallback = setTimeout(() => targets.forEach((el) => el.classList.add("is-in")), 1600);
 
-    let flipTimer = null;
     const sec = document.getElementById("cardFlip");
     if (sec) {
       const pages = Array.prototype.slice.call(sec.querySelectorAll(".cardFlip-slider .page"));
@@ -298,7 +319,8 @@
       const prev = sec.querySelector(".navigator .prev");
       if (next) next.addEventListener("click", () => go(1));
       if (prev) prev.addEventListener("click", () => go(-1));
-      if (n > 1) flipTimer = setInterval(() => go(1), 5000);
+      draw();
+      if (n > 1) fx.flipTimer = setInterval(() => go(1), 5000);
     }
 
     const row = document.querySelector(".post-card-nested-row");
@@ -326,15 +348,74 @@
       });
       if (total > row.getBoundingClientRect().width) row.classList.add("native-scroll");
     }
-
-    window.addEventListener("pagehide", () => {
-      if (flipTimer) clearInterval(flipTimer);
-      if (io) io.disconnect();
-      clearTimeout(fallback);
-      clearTimeout(disappearTimer);
-      hideTip();
-    });
   }
+  document.addEventListener("rv:nav", pageFx);
+
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+  let pjaxSeq = 0;
+  let pjaxKey = location.pathname + location.search;
+  function pjaxEligible(a) {
+    if (!a || !a.getAttribute("href")) return false;
+    const href = a.getAttribute("href");
+    if (!href.startsWith("/") || href.startsWith("//")) return false;
+    if (a.target === "_blank" || a.hasAttribute("download") || a.hasAttribute("data-no-pjax")) return false;
+    if (/\.[a-z0-9]+($|[?#])/i.test(href.split("?")[0].split("#")[0])) return false;
+    const url = new URL(href, location.href);
+    if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/admin")) return false;
+    if (url.pathname === location.pathname && url.search === location.search) return false;
+    return url;
+  }
+  async function pjaxGo(rawUrl, push) {
+    const seq = ++pjaxSeq;
+    const wantUrl = new URL(rawUrl, location.href);
+    let res;
+    try {
+      res = await fetch(wantUrl.pathname + wantUrl.search, { credentials: "same-origin" });
+    } catch {
+      if (seq === pjaxSeq) location.href = wantUrl.href;
+      return;
+    }
+    if (seq !== pjaxSeq) return;
+    if (!res.ok || (res.headers.get("content-type") || "").indexOf("text/html") < 0) {
+      location.href = wantUrl.href;
+      return;
+    }
+    const html = await res.text();
+    if (seq !== pjaxSeq) return;
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const nextMain = doc.getElementById("sk-main");
+    if (!nextMain) { location.href = res.url || wantUrl.href; return; }
+    const main = document.getElementById("sk-main");
+    main.innerHTML = nextMain.innerHTML;
+    const t = doc.querySelector("title");
+    if (t) document.title = t.textContent;
+    const finalUrl = new URL(res.url || wantUrl.href);
+    if (push) {
+      history.replaceState({ rv: 1, y: window.scrollY }, "");
+      history.pushState({ rv: 1, y: 0 }, "", finalUrl.pathname + finalUrl.search + finalUrl.hash);
+    }
+    pjaxKey = finalUrl.pathname + finalUrl.search;
+    document.dispatchEvent(new CustomEvent("rv:nav"));
+    if (finalUrl.hash) {
+      const el = document.getElementById(finalUrl.hash.slice(1)) || document.querySelector(finalUrl.hash);
+      if (el) { el.scrollIntoView(); return; }
+    }
+    window.scrollTo(0, push ? 0 : ((history.state && history.state.y) || 0));
+  }
+  document.addEventListener("click", (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    if (!document.getElementById("sk-main")) return;
+    const a = e.target.tagName === "A" ? e.target : e.target.closest && e.target.closest("a");
+    const url = pjaxEligible(a);
+    if (!url) return;
+    e.preventDefault();
+    pjaxGo(url.pathname + url.search + url.hash, true);
+  });
+  window.addEventListener("popstate", () => {
+    if (!document.getElementById("sk-main")) { location.reload(); return; }
+    if (location.pathname + location.search === pjaxKey) return;
+    pjaxGo(location.pathname + location.search, false);
+  });
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);

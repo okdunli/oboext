@@ -10,8 +10,8 @@
  * request (no cross-response cache).
  */
 import { desc, eq } from "drizzle-orm";
-import fs from "node:fs";
-import path from "node:path";
+import fs from "fs";
+import path from "path";
 import { db } from "./db.js";
 import { siteSettings, themes, type Theme, type ThemeConfig } from "./schema.js";
 import { ServiceError } from "./admin.js";
@@ -59,6 +59,18 @@ export type ThemeManifest = {
 };
 
 const THEMES_DIR = path.join(process.cwd(), "themes");
+
+/**
+ * Themes whose public chrome is actually ported to rosefd renderers. The
+ * other on-disk themes are still editable/manageable but cannot be
+ * activated: the server-rendered site only ships these layouts (T20 tracks
+ * the remaining ports). The admin list badges them as in-progress.
+ */
+export const PORTED_PUBLIC_THEMES = new Set(["skyscraper", "default", "pseudolinear", "codeman", "bluemix"]);
+
+export function isPublicThemePorted(slug: string): boolean {
+  return PORTED_PUBLIC_THEMES.has(slug);
+}
 
 /** Areas every theme gets for free, so widgets work in minimal themes. */
 export const BASE_WIDGET_AREAS: ThemeWidgetArea[] = [
@@ -169,6 +181,23 @@ export async function syncThemes(): Promise<void> {
   const rows = await db.select({ slug: themes.slug }).from(themes);
   for (const r of rows) {
     if (!discovered.has(r.slug)) await db.delete(themes).where(eq(themes.slug, r.slug));
+  }
+  const [s] = await db
+    .select({ activeThemeSlug: siteSettings.activeThemeSlug })
+    .from(siteSettings)
+    .where(eq(siteSettings.id, 1));
+  const active = s?.activeThemeSlug || "default";
+  if (discovered.has(active) && !PORTED_PUBLIC_THEMES.has(active)) {
+    const target =
+      manifests.find((m) => PORTED_PUBLIC_THEMES.has(m.slug)) ??
+      manifests.find((m) => m.isDefault) ??
+      null;
+    if (target) {
+      await db
+        .update(siteSettings)
+        .set({ activeThemeSlug: target.slug })
+        .where(eq(siteSettings.id, 1));
+    }
   }
 }
 
@@ -429,6 +458,9 @@ export async function deleteTheme(id: number): Promise<{ id: number }> {
 /** Mark a theme as the public-site active theme. */
 export async function setActiveTheme(id: number): Promise<Theme> {
   const theme = await getThemeById(id);
+  if (!PORTED_PUBLIC_THEMES.has(theme.slug)) {
+    throw new ServiceError("该主题的前台模板尚未适配，暂不能启用", 422);
+  }
   await db
     .update(siteSettings)
     .set({ activeThemeSlug: theme.slug, updatedAt: new Date() })
@@ -454,6 +486,8 @@ export type ThemePanel = {
   hasManifest: boolean;
   /** Palette token tables for the panel's live preview. */
   palettes: Record<string, unknown>;
+  /** Currently selected palette key (raw settings value), null when unset. */
+  palette: string | null;
 };
 
 /** Resolve by numeric id or slug — admin routes accept both. */
@@ -497,6 +531,10 @@ export async function getThemePanel(idOrSlug: string | number): Promise<ThemePan
     isActive: settings?.activeThemeSlug === theme.slug,
     hasManifest: !!manifest,
     palettes: Object.fromEntries(PALETTE_PRESETS.map((p) => [p.key, p.tokens])),
+    palette: (() => {
+      const raw = (theme.settings as Record<string, unknown> | null)?.palette;
+      return typeof raw === "string" && raw ? raw : null;
+    })(),
   };
 }
 
@@ -517,7 +555,7 @@ export async function updateThemePanel(
   const configKeys = new Set(THEME_CONFIG_KEYS);
   const schema = getThemeSettingsSchema(theme.slug);
 
-  const previousRaw = resolveSettings(schema, theme.settings).palette;
+  const previousRaw = (theme.settings as Record<string, unknown> | null)?.palette;
   const previousPalette =
     typeof previousRaw === "string" && previousRaw ? previousRaw : null;
   const nextRaw = payload.palette;
@@ -551,6 +589,7 @@ export async function updateThemePanel(
   }
 
   const settingsPatch = coerceSettings(schema, rest);
+  if (nextPalette && getPalettePreset(nextPalette)) settingsPatch.palette = nextPalette;
 
   const [row] = await db
     .update(themes)
@@ -592,11 +631,12 @@ export async function getThemeSettings(slug: string): Promise<Record<string, unk
 }
 
 export async function getActiveThemeRenderConfig(): Promise<ThemeConfig> {
-  const [theme, settings] = await Promise.all([getActiveTheme(), getActiveThemeSettings()]);
+  const theme = await getActiveTheme();
   const manifest = getThemeManifest(theme.slug);
+  const rawPalette = (theme.settings as Record<string, unknown> | null)?.palette;
   return paletteLayeredConfig(
     theme.config,
     { ...DEFAULT_THEME_CONFIG, ...(manifest?.config ?? {}) },
-    typeof settings.palette === "string" ? settings.palette : undefined,
+    typeof rawPalette === "string" ? rawPalette : undefined,
   );
 }

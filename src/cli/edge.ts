@@ -120,6 +120,10 @@ export async function createEdgeHandler(
     const refused = crossSiteWrite(request);
     if (refused) return refused;
     const { pathname, searchParams } = new URL(request.url);
+    const canonical = pathname.replace(/\/+$/, '') || '/';
+    if (canonical !== pathname) {
+      return new Response(null, { status: 308, headers: { location: canonical + new URL(request.url).search } });
+    }
     mod.setQuery?.(Object.fromEntries(searchParams));
     const hookCtx = mod.hasRequestHooks || mod.hasResponseHooks
       ? { request, url: new URL(request.url), method: request.method, pathname, state: {} as Record<string, unknown> }

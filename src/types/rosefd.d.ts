@@ -22,6 +22,9 @@ declare function $data<T>(fn: () => T | Promise<T>): Getter<T>;
 /** The per-request bag filled by `pages/_middleware.rose` (auth, db, cache). */
 declare function getContext<T = Record<string, unknown>>(): T;
 
+// The parsed query string of the request being rendered (`?page=2&q=x` -> `{ page: '2', q: 'x' }`).
+declare function $query(): Record<string, string>;
+
 // Translate a key from src/locales/<lang>.json.
 declare function $t(key: string, vars?: Record<string, string | number>): string;
 

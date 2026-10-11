@@ -1,10 +1,9 @@
 <script>
   // skyscraper chrome shell. Interactions (drawers, dark mode, share bar,
   // scroll-reveal, cardFlip) live in /public/theme.js as vanilla JS. Routes
-  // ship zero framework JS on purpose: 0.2.0 streams pages that carry a
-  // client bundle, and streamed response bodies cannot pass through
-  // onResponse (the raw-HTML token swap). Chrome HTML comes from the live
-  // database through the "chrome" loader ($data, per request).
+  // ship zero framework JS on purpose (csr=false). Chrome HTML comes from
+  // the live database through the "chrome" loader ($data, per request) and
+  // is emitted with the {@html} primitive (rosezm 0.2.4).
   let chrome = $data(() => __rvLoad("chrome", {}));
 
   function adminPath() {
@@ -30,6 +29,7 @@
   <meta name="twitter:title" content={chrome().siteTitle}>
   <meta name="twitter:description" content={chrome().siteDescription}>
   <link rel="stylesheet" href="/public/theme.css">
+  {@html chrome().themeHead}
   <link rel="icon" href="data:,">
 </head>
 
@@ -37,15 +37,14 @@
 <slot />
 {/if}
 {#if publicPath()}
-{chrome().themeVars}
 <script src="/public/noflash.js"></script>
 <script src="/public/theme.js"></script>
 <script src="/public/comments.js"></script>
 <div class="th-skyscraper">
-{chrome().nav}
+{@html chrome().nav}
   <div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">
   <slot />
-  </div></div><aside class="sidebar-column with-separate-line"><div class="sidebar-content">{chrome().aside}</div></aside></div></main></div>
-{chrome().footer}
+  </div></div><aside class="sidebar-column with-separate-line"><div class="sidebar-content">{@html chrome().aside}</div></aside></div></main></div>
+{@html chrome().footer}
 </div>
 {/if}

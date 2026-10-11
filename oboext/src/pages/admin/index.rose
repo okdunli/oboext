@@ -1,8 +1,14 @@
 <script>
   // Dashboard — counters, post status distribution, recent activity.
   let st = $data(() => __rvLoad("admin.dashboard", {}));
-  const counts = st().counts;
-  const postStatus = st().postStatus;
+  // Accessors, never eager top-level reads: the compiler initializes $data
+  // state after the script body (0.2.4), so reading st() here is a TDZ error.
+  function counts() {
+    return st().counts;
+  }
+  function postStatus() {
+    return st().postStatus;
+  }
   // NB: {#each} compiles its expression as a zero-arg call — arrays exposed to
   // the template must ride function accessors.
   function recentPosts() {
@@ -35,14 +41,14 @@
 </head>
 
 <div class="adm-grid adm-stats">
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">✎</span> 文章</div><div class="v">{counts.posts}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">💬</span> 评论</div><div class="v">{counts.comments}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">⏳</span> 待审评论</div><div class="v">{counts.commentsPending}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">👤</span> 用户</div><div class="v">{counts.users}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">▤</span> 分类</div><div class="v">{counts.categories}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">#</span> 标签</div><div class="v">{counts.tags}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">🖼</span> 媒体</div><div class="v">{counts.media}</div></div>
-  <div class="adm-card adm-stat"><div class="k"><span class="ic">📄</span> 页面</div><div class="v">{counts.pages}</div></div>
+  <div class="adm-card adm-stat"><div class="k"><span class="ic">✎</span> 文章</div><div class="v">{counts().posts}</div></div>
+  <div class="adm-card adm-stat"><div class="k"><span class="ic">💬</span> 评论</div><div class="v">{counts().comments}</div></div>
+  <div class="adm-card adm-stat"><div class="k"><span class="ic">⏳</span> 待审评论</div><div class="v">{counts().commentsPending}</div></div>
+  <div class="adm-card adm-stat"><div class="k"><span class="ic">👤</span> 用户</div><div class="v">{counts().users}</div></div>
+  <div class="adm-card adm-stat"><div class="k"><span class="ic">▤</span> 分类</div><div class="v">{counts().categories}</div></div>
+  <div class="adm-card adm-stat"><div class="k"><span class="ic">#</span> 标签</div><div class="v">{counts().tags}</div></div>
+  <div class="adm-card adm-stat"><div class="k"><span class="ic">🖼</span> 媒体</div><div class="v">{counts().media}</div></div>
+  <div class="adm-card adm-stat"><div class="k"><span class="ic">📄</span> 页面</div><div class="v">{counts().pages}</div></div>
 </div>
 
 <div class="adm-grid adm-cols-2" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
@@ -53,9 +59,9 @@
     </div>
     <div class="adm-card-bd">
       <div class="adm-kv">
-        <span class="k">已发布</span><b>{postStatus.published}</b>
-        <span class="k">草稿</span><b>{postStatus.draft}</b>
-        <span class="k">已归档</span><b>{postStatus.archived}</b>
+        <span class="k">已发布</span><b>{postStatus().published}</b>
+        <span class="k">草稿</span><b>{postStatus().draft}</b>
+        <span class="k">已归档</span><b>{postStatus().archived}</b>
       </div>
     </div>
   </div>

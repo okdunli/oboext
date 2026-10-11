@@ -27,40 +27,6 @@
     throw err;
   }));
 
-  // Framework workaround (rosezm 0.1.0, reported upstream): the Node router
-  // matches the FULL req.url and answers 404 for any path carrying a query
-  // string - /blog?page=2, /search?q=x, even /post?utm=1. The middleware
-  // asks this forwarder to RE-ENTER this same server at the bare pathname;
-  // the real URL rides back in x-rv-url (the middleware reads it). This is
-  // deliberately app-layer only: the framework source is not modified.
-  const HOP_REQ = new Set(["host", "connection", "content-length", "accept-encoding", "x-rv-url"]);
-  const HOP_RES = new Set(["content-encoding", "content-length", "transfer-encoding", "connection"]);
-
-  async function forward(request) {
-    const u = new URL(request.url);
-    const bare = u.pathname.length > 1 ? u.pathname.replace(/\/+$/, "") : "/";
-    const target = new URL(bare, "http://127.0.0.1:" + (process.env.PORT || "3000"));
-    const headers = new Headers();
-    request.headers.forEach((v, k) => {
-      if (!HOP_REQ.has(k.toLowerCase())) headers.set(k, v);
-    });
-    headers.set("accept-encoding", "identity");
-    headers.set("x-rv-url", u.origin + u.pathname + u.search);
-    const init = { method: request.method, headers, redirect: "manual" };
-    // page POSTs arrive as form bodies
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      init.body = await request.formData();
-    }
-    const res = await fetch(target, init);
-    const out = new Headers();
-    const cookies = typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
-    res.headers.forEach((v, k) => {
-      if (k !== "set-cookie" && !HOP_RES.has(k.toLowerCase())) out.set(k, v);
-    });
-    for (const c of cookies) out.append("set-cookie", c);
-    return new Response(res.body, { status: res.status, headers: out });
-  }
-
   globalThis.__oboeLoaders = {
     ready,
     dispatch,
@@ -72,10 +38,6 @@
       userFromRequest: (request) => getSessionFromRequest(request),
       hasAnyUser: () => hasAnyUser(),
     },
-    forward: (request) => forward(request).catch((err) => {
-      console.error("[oboext] query forward failed:", err);
-      return new Response("Bad Gateway", { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } });
-    }),
     searchRedirect: async (q) => {
       await ready();
       return searchRedirect(q);

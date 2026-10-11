@@ -9,7 +9,7 @@
 </script>
 
 <head>
-  {page().head}
+  {@html page().head}
 </head>
 
-{page().main}
+{@html page().main}

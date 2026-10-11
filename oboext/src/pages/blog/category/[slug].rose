@@ -14,4 +14,4 @@
   <title>{list().headTitle}</title>
 </head>
 
-{list().main}
+{@html list().main}

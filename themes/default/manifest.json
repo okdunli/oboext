@@ -2,7 +2,7 @@
   "name": "Oboext Default",
   "slug": "default",
   "description": "Default blog theme with elegant typography",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "Oboext",
   "isDefault": true,
   "config": {

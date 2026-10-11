@@ -11,7 +11,7 @@
   // Browser-side __rvLoad() GETs this very endpoint; server-side it calls
   // dispatch() directly. One loader map, per-request database reads.
   import { dispatch, documents, searchRedirect, notFoundDocument } from "@server/loaders";
-  import { themeCssContent } from "@server/theme-chrome";
+  import { themeCssContent, serveThemeAsset } from "@server/theme-chrome";
   import { getPost, getCategoryBySlug, getTagBySlug } from "@server/queries";
   import { getPublishedPage } from "@server/pages";
   import { serveUpload } from "@server/storage";
@@ -87,6 +87,9 @@
     },
     themeStyle: {
       css: (slug) => themeCssContent(slug),
+    },
+    themeAssets: {
+      serve: (rel, method) => serveThemeAsset(rel, method),
     },
   };
 

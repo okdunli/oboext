@@ -24,6 +24,16 @@
   function isNotSkyscraper() {
     return chrome().themeSlug !== "skyscraper";
   }
+  // Safety net: guarantees links never render as default-underlined even if a
+  // theme's own stylesheet fails to load or a class mismatch leaves an <a>
+  // unstyled. Themes still set their own link colour via their stylesheet.
+  // Injected as raw HTML (not a template literal) because the CSS braces would
+  // otherwise be parsed as a template expression.
+  function linkResetHtml() {
+    return isNotSkyscraper()
+      ? '<style id="rv-link-reset">a{text-decoration:none}</style>'
+      : '';
+  }
 </script>
 
 <head>
@@ -39,6 +49,7 @@
   {#if chrome().cssHref}
   <link rel="stylesheet" href={chrome().cssHref}>
   {/if}
+  {@html linkResetHtml()}
   {@html chrome().themeHead}
   {#if publicPath()}{@html chrome().pluginHead}{/if}
   <link rel="icon" href="data:,">

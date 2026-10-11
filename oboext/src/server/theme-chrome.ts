@@ -14,6 +14,7 @@ import type { PostView, TaxRef } from "./queries.js";
 import type { PageView } from "./pages.js";
 import * as R from "./render.js";
 import { esc, fmtDate } from "./render.js";
+import { mimeFor } from "./storage.js";
 
 export interface ThemeChrome {
   slug: string;
@@ -54,6 +55,25 @@ export type HomeParts = {
   random: PostView[];
   cats: TaxRef[];
   settings: Record<string, unknown>;
+  recent?: PostView[];
+  sections?: { row: { category: TaxRef; title: string; icon: string | null }; posts: PostView[] }[];
+  rankings?: { most_comments: RankPost[]; most_likes: RankPost[]; most_reads: RankPost[] } | null;
+  rankTabs?: { labels: Record<string, string>; order: string[]; defaultTab: string };
+  themeSettings?: Record<string, unknown>;
+  blogIndex?: string;
+  showHero?: boolean;
+  bannerMax?: number;
+  recentCount?: number;
+};
+
+export type RankPost = {
+  id: number;
+  url: string;
+  title: string;
+  thumbnail: string | null;
+  likes: number;
+  comments: number;
+  views: number;
 };
 
 export type ListParts = {
@@ -71,6 +91,10 @@ export type PostPageParts = {
   post: PostView;
   bodyHtml: string;
   related: PostView[];
+
+  popular?: PostView[];
+
+  random?: PostView[];
   commentsHtml: string;
   metaHtml: string;
   tagsHtml: string;
@@ -124,6 +148,46 @@ export function themeCssContent(slug: string): string {
     if (extra.css) css += "\n" + extra.css;
   } catch { /* no extra */ }
   return css;
+}
+
+export function serveThemeAsset(urlPath: string, method = "GET"): Response {
+  const notFound = () =>
+    new Response("Not found", {
+      status: 404,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  const forbidden = () =>
+    new Response("Forbidden", {
+      status: 403,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  if (method !== "GET" && method !== "HEAD") {
+    return new Response("Method not allowed", {
+      status: 405,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
+  try {
+    const rel = decodeURIComponent(urlPath.replace(/^\/theme-assets\//, ""));
+    const segments = rel.split("/").filter(Boolean);
+    if (segments.length < 2) return notFound();
+    const themesRoot = path.resolve(THEMES_DIR);
+    const target = path.resolve(themesRoot, segments[0], "assets", ...segments.slice(1));
+    if (!target.startsWith(themesRoot + path.sep)) return forbidden();
+    const st = fs.statSync(target);
+    if (st.isDirectory()) return notFound();
+    const data = fs.readFileSync(target);
+    return new Response(method === "HEAD" ? null : new Uint8Array(data), {
+      status: 200,
+      headers: {
+        "content-type": mimeFor(target),
+        "content-length": String(data.length),
+        "cache-control": "public, max-age=31536000, immutable",
+      },
+    });
+  } catch {
+    return notFound();
+  }
 }
 
 function menuItemsHtml(items: MenuItem[], cls: string, activeUrl: string): string {
@@ -181,7 +245,7 @@ const skyscraperChrome: ThemeChrome = {
     R.pagePage(parts.page, parts.recent, parts.commentsHtml),
 };
 
-const defaultBodyFix = `body,html{background:var(--bg,#09090b)!important;color:var(--text,#f4f4f5)!important;}`;
+const defaultBodyFix = `body{background:var(--bg,#09090b);color:var(--text,#f4f4f5)}`;
 
 function defaultMenuUl(items: MenuItem[], cls: string): string {
   if (!items.length) return "";
@@ -363,7 +427,7 @@ const defaultChrome: ThemeChrome = {
   pagePage: defaultPagePage,
 };
 
-const pseudoBodyFix = `body,html{background:#0c0d1a!important;color:#f3f1ff!important;}`;
+const pseudoBodyFix = `body{background:#0c0d1a;color:#f3f1ff}`;
 
 function pseudoNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
@@ -471,7 +535,7 @@ const pseudolinearChrome: ThemeChrome = {
   pagePage: pseudoPagePage,
 };
 
-const cmBodyFix = `body,html{background:#050a06!important;color:#9bff7a!important;}`;
+const cmBodyFix = `body{background:#050a06;color:#9bff7a}`;
 
 function cmNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
@@ -650,6 +714,14 @@ function bmixIc(icon: string, size: number, marginRight = 6): string {
     heart: "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z",
     comments: "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z",
     eye: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z",
+    clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zm0-16v6l4 2",
+    "bars-staggered": "M2 6h20M2 12h14M2 18h20",
+    "chevron-left": "m15 18-6-6 6-6",
+    "chevron-right": "m9 18 6-6-6-6",
+    lightbulb: "M9 18h6M10 22h4M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5",
+    "pen-line": "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z",
+    book: "M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20",
+    "ranking-star": "M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z",
   };
   const circle = icon === "eye" ? `<circle cx="12" cy="12" r="3"/>` : "";
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:${marginRight}px">${circle}<path d="${paths[icon] || paths.bookmark}"/></svg>`;
@@ -697,15 +769,168 @@ function bmixPager(page: number, total: number, hrefFor: (p: number) => string):
     `</ul>`;
 }
 
+function bmixHeroScene(p: PostView, i: number): string {
+  const { title1, title2 } = bmixSplitTitle(p.title);
+  const t = bmixCardTone(p.slug || p.url, i, 1);
+  const vars = Object.entries(t.vars).map(([k, v]) => `${k}:${v}`).join(";");
+  const darkCls = t.dark ? " is-dark" : "";
+  const role = i === 0 ? "current" : i === 1 ? "future-0" : i === 2 ? "future-1" : i === 3 ? "past-0" : "past-1";
+  const img = p.featuredImage
+    ? `<img class="bg" src="${esc(p.featuredImage)}" alt="${esc(title1)}" loading="eager">`
+    : "";
+  const meta = `<div class="metas"><span>${bmixIc("heart", 12)} ${p.likes ?? 0}</span>` +
+    `<span class="ml-8">${bmixIc("comments", 12)} ${p.commentsCount ?? 0}</span>` +
+    `<span class="ml-8">${bmixIc("eye", 12)} ${p.views ?? 0}</span></div>`;
+  return `<div class="scene ${role}"><a href="${esc(p.url)}" class="card-container${darkCls}" style="${vars}" aria-label="${esc(p.title)}">` +
+    `<div class="bg-wrapper">${img}</div>` +
+    `<div class="card-wrapper"><div class="card flex"><div class="info flex flex-col justify-center">` +
+    `<div class="main-title ${title2 ? "type-2" : "type-1 truncate"}"><span class="block truncate">${esc(title1)}</span>` +
+    (title2 ? `<span class="block truncate">${esc(title2)}</span>` : "") +
+    `</div>${meta}</div>` +
+    (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="">` : "") +
+    `</div></div></a></div>`;
+}
+
+function bmixBanner(posts: PostView[], max: number): string {
+  const visible = (posts || []).slice(0, Math.max(1, Math.min(max, 5)));
+  if (!visible.length) return `<div class="coverflow-swiper"><div class="slider"><div class="stage"></div></div></div>`;
+  const scenes = visible.map((p, i) => bmixHeroScene(p, i)).join("");
+  const dots = visible.length > 1
+    ? `<div class="anchors-wrapper"><div class="anchors">${visible
+        .map((_, i) => `<button type="button" class="anchor${i === 0 ? " active" : ""}" aria-label="第 ${i + 1} 张"></button>`)
+        .join("")}</div></div>`
+    : "";
+  const controls = visible.length > 1
+    ? `<div class="controls"><button type="button" class="prev" aria-label="上一个">${bmixIc("chevron-left", 16)}</button><button type="button" class="next" aria-label="下一个">${bmixIc("chevron-right", 16)}</button></div>`
+    : "";
+  return `<div class="coverflow-swiper"><div class="slider"><div class="stage">${scenes}</div>${controls}${dots}</div></div>`;
+}
+
+function bmixCatNav(activeHref: string, cats: TaxRef[], blogIndex: string): string {
+  const isActive = (href: string) => activeHref === href;
+  const parentIds = new Set(cats.filter((c) => (c as any).parentId != null).map((c) => (c as any).parentId));
+  const roots = cats.filter((c) => (c as any).parentId == null || !parentIds.has((c as any).parentId));
+  const items: string[] = [];
+  items.push(`<li data-ai="0" class="${isActive("/") ? "is-active" : ""}"><a href="/" target="_self" aria-current="${isActive("/") ? "page" : ""}">${bmixIc("lightbulb", 13, 6)}智能推荐</a></li>`);
+  items.push(`<li data-ai="1" class="${isActive(blogIndex) ? "is-active" : ""}"><a href="${esc(blogIndex)}" target="_self" aria-current="${isActive(blogIndex) ? "page" : ""}">${bmixIc("pen-line", 13, 6)}最新文章</a></li>`);
+  let ai = 2;
+  for (const root of roots) {
+    const children = cats.filter((c) => (c as any).parentId === (root as any).id);
+    if (children.length) {
+      const sub = children
+        .map((c) => `<li class="${isActive(c.url) ? "is-active" : ""}"><a href="${esc(c.url)}" target="_self" aria-current="${isActive(c.url) ? "page" : ""}">${bmixIc("bookmark", 11, 6)}${esc(c.name)}</a></li>`)
+        .join("");
+      items.push(`<li data-ai="${ai++}" class="has-submenu${isActive(root.url) || children.some((c) => isActive(c.url)) ? " is-active" : ""}"><span class="pill-toggle" role="link" aria-expanded="false">${bmixIc("book", 13, 6)}${esc(root.name)}<svg class="caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span><ul class="submenu" data-level="1">${sub}</ul></li>`);
+    } else {
+      items.push(`<li data-ai="${ai++}" class="${isActive(root.url) ? "is-active" : ""}"><a href="${esc(root.url)}" target="_self" aria-current="${isActive(root.url) ? "page" : ""}">${bmixIc("bookmark", 13, 6)}${esc(root.name)}</a></li>`);
+    }
+  }
+  return `<div class="nav-cat"><div class="pf_scroller flex"><ul class="menu" data-level="0">` +
+    `<li class="anchor" aria-hidden="true" style="transform:translateX(0px);width:0px;opacity:0"></li>` +
+    items.join("") +
+    `</ul></div></div>`;
+}
+
+function bmRankIcon(key: string): string {
+  return key === "most_likes" ? "heart" : key === "most_reads" ? "eye" : "comments";
+}
+
+function bmixRankings(
+  boards: { most_comments: RankPost[]; most_likes: RankPost[]; most_reads: RankPost[] } | null | undefined,
+  tabs: { labels: Record<string, string>; order: string[]; defaultTab: string } | undefined,
+): string {
+  if (!boards) return "";
+  const empty = boards.most_comments.length === 0 && boards.most_likes.length === 0 && boards.most_reads.length === 0;
+  if (empty) return "";
+  const order = tabs?.order && tabs.order.length === 3 ? tabs.order : ["most_comments", "most_likes", "most_reads"];
+  const labels = tabs?.labels || {};
+  const DEF: Record<string, string> = { most_comments: "热评文章", most_likes: "大家喜欢", most_reads: "阅读最多" };
+  const tabsHtml = order
+    .map((k) => `<div class="tab${k === order[0] ? " active" : ""}">${bmixIc(bmRankIcon(k), 14)}${esc(labels[k] || DEF[k] || k)}</div>`)
+    .join("");
+  const board = (boards as any)[order[0]] || [];
+  const first = board[0];
+  const rest = board.slice(1, 3);
+  const GOLD = "/theme-assets/bluemix/rankings/873a161a.svg";
+  const SILVER = "/theme-assets/bluemix/rankings/b31ba85e.svg";
+  const BRONZE = "/theme-assets/bluemix/rankings/661ec968.svg";
+  const firstCard = first
+    ? `<div class="place-wrapper"><a href="${esc(first.url)}" class="first-place active"><span class="thumbnail-wrapper">${first.thumbnail ? `<img class="thumbnail r-full" src="${esc(first.thumbnail)}" alt="">` : `<span class="thumbnail r-full rk-noimg"></span>`}</span><span class="first-info"><span class="main-title">${esc(first.title)}</span><span class="metas"><span>${bmixIc("heart", 11)} ${first.likes}</span><span>${bmixIc("comments", 11)} ${first.comments}</span><span>${bmixIc("eye", 11)} ${first.views}</span></span></span><img class="place place-gold" src="${esc(GOLD)}" alt=""></a></div>`
+    : "";
+  const others = rest
+    .map((p: RankPost, g: number) => `<div class="place-wrapper"><a href="${esc(p.url)}" class="other-place"><img class="place" src="${esc(g === 0 ? SILVER : BRONZE)}" alt=""><span class="other-title">${esc(p.title)}</span><span class="other-meta">${bmixIc(bmRankIcon(order[0]), 11)} ${order[0] === "most_likes" ? p.likes : order[0] === "most_reads" ? p.views : p.comments}</span></a></div>`)
+    .join("");
+  return `<div class="widget-rankings mb-20"><div class="cat-title flex items-center extra-large justify-center"><div class="custom-icon mr-5">${bmixIc("ranking-star", 15)}</div><div class="content text-primary-gray text-bulge-primary-gray">排行榜</div></div>` +
+    `<div class="rankings-wrapper relative"><div class="rankings-tabs"><div class="rankings-tab-row"><div class="tab-anchor" style="transform:translate(0%)"></div>${tabsHtml}</div></div>` +
+    `<div class="card-container"><div class="rankings">${firstCard}${others}</div></div></div></div>`;
+}
+
+function bmixHomeArticleRow(p: PostView): string {
+  const img = p.featuredImage
+    ? `background-image:url("${p.featuredImage.replace(/"/g, "%22")}")`
+    : "background-image:linear-gradient(135deg,#dce8f7,#bcd6f3)";
+  return `<div class="article mb-10 flex items-center g-8"><a href="${esc(p.url)}" class="thumbnail flex-shrink-0" style="${img}"></a>` +
+    `<span class="info"><a href="${esc(p.url)}" class="title block">${esc(p.title)}</a>` +
+    `<span class="metas flex gx-5 mt-1"><span class="text-error">${bmixIc("heart", 10)} ${p.likes ?? 0}</span>` +
+    `<span class="text-primary">${bmixIc("comments", 10)} ${p.commentsCount ?? 0}</span>` +
+    `<span class="text-success">${bmixIc("eye", 10)} ${p.views ?? 0}</span></span></span></div>`;
+}
+
+function bmixHomeSidebar(posts: PostView[], settings: Record<string, unknown>, ts: Record<string, unknown>): string {
+  const items = posts || [];
+  const popular = [...items].sort((a, b) => (b.views ?? 0) - (a.views ?? 0)).slice(0, 4);
+  const recent = items.filter((p) => !popular.some((q) => q.id === p.id)).slice(0, 4);
+  const avatarRaw =
+    (typeof (ts as any)?.sidebarAvatarImage === "string" && (ts as any).sidebarAvatarImage.trim()) ||
+    (settings.logoUrl as string) ||
+    (items[0]?.featuredImage as string) ||
+    "linear-gradient(135deg,#7ba3e0,#b59df0)";
+  const isGradient = avatarRaw.startsWith("linear-gradient");
+  const avatarStyle = isGradient ? `background-image:${avatarRaw}` : `background-image:url("${avatarRaw.replace(/"/g, "%22")}")`;
+  const avatarNode = `<div class="avatar" style="${avatarStyle}"></div>`;
+  const bloggerDesc = String(settings.tagline ?? settings.siteDescription ?? "Design a colorful life");
+  return `<div class="panel"><div class="wrapper"><aside class="bmx-blocks">` +
+    `<div class="widget-blogger flex items-center g-8">${avatarNode}<div class="metas"><div class="name">${esc(String(settings.siteTitle ?? ""))}</div><div class="description text-embossed">${esc(bloggerDesc)}</div></div></div>` +
+    `<div class="widget-title"><div class="title">热门文章</div></div><div class="widget-articles mb-20">${popular.map(bmixHomeArticleRow).join("")}</div>` +
+    `<div class="widget-title"><div class="title">最新文章</div></div><div class="widget-articles mb-20">${(recent.length ? recent : items.slice(0, 4)).map(bmixHomeArticleRow).join("")}</div>` +
+    `</aside></div></div>`;
+}
+
+function bmixSection(title: string, to: string, icon: string | null, posts: PostView[]): string {
+  const cards = posts.map((p, i) => bmixPostCard(p, i)).join("");
+  const titleHtml = `<div class="cat-title flex items-center large">` +
+    (icon ? `<div class="custom-icon mr-5">${bmixIc(icon, 15)}</div>` : `<div class="icon flex default mr-5 ml-2"></div>`) +
+    `<div class="content text-primary-gray text-bulge-primary-gray">${esc(title)}</div>` +
+    `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span>` +
+    `<a href="${esc(to)}" class="more-btn flex items-center justify-center text-sm r-full text-embossed truncate"><span class="flex items-center justify-center"><span class="more-text">更多</span>${bmixIc("chevron-right", 7)}</span></a></div></div>`;
+  return `<section class="home-category">${titleHtml}<div class="home-category-articles">${cards}</div></section>`;
+}
+
 function bmixHome(parts: HomeParts): string {
-  const all = [...parts.hero, ...parts.latest].slice(0, 8);
-  const cards = all.map((p, i) => bmixPostCard(p, i)).join("");
-  const inner = all.length
-    ? `<div class="cat-title flex items-center large"><div class="icon flex default mr-5 ml-2"></div><div class="content text-primary-gray text-bulge-primary-gray">近期文章</div></div><div class="recent-articles">${cards}</div>`
-    : `<p class="text-primary-gray" style="padding:24px">还没有已发布的文章。去后台发布一篇，或先导入示例内容吧。</p>`;
-  return `<div class="home"><div class="content-wrapper flex container-np line reverse">` +
-    `<div class="main-content">${inner}</div>` +
-    `</div></div>`;
+  const ts = parts.themeSettings || {};
+  const showHero = parts.showHero !== false;
+  const bannerMax = parts.bannerMax || 5;
+  const recentCount = parts.recentCount || 8;
+  const recent = parts.recent && parts.recent.length ? parts.recent : [...parts.hero, ...parts.latest];
+  const inner = recent.length === 0
+    ? `<p class="text-primary-gray" style="padding:24px">还没有已发布的文章。去后台发布一篇，或先导入示例内容吧。</p>`
+    : `<div class="recent-articles">${recent.slice(0, recentCount).map((p, i) => bmixPostCard(p, i)).join("")}</div>`;
+  const catTitle = `<div class="cat-title flex items-center large"><div class="icon flex default mr-5 ml-2"></div><div class="content text-primary-gray text-bulge-primary-gray">近期文章</div></div>`;
+  const mainContent = `${catTitle}${inner}`;
+  const sidebar = bmixHomeSidebar(recent, parts.settings, ts as Record<string, unknown>);
+  const catNav = bmixCatNav("/", parts.cats, parts.blogIndex || "/blog");
+  const banner = showHero ? bmixBanner(recent, bannerMax) : "";
+  const rankings = bmixRankings(parts.rankings, parts.rankTabs);
+  const sections = (parts.sections || []).map((s) => bmixSection(s.row.title, s.row.category.url, s.row.icon, s.posts)).join("");
+  return `<div class="home">` +
+    banner +
+    `<div class="content-wrapper flex container-np line reverse">` +
+    `<div class="sidebar"><div class="pf_scroller sidebar-sticky"><div class="sidebar-content">${sidebar}</div></div></div>` +
+    `<div class="main-content">${catNav}${mainContent}</div>` +
+    `</div>` +
+    rankings +
+    sections +
+    `</div>`;
 }
 
 function bmixListPage(parts: ListParts): string {
@@ -719,17 +944,126 @@ function bmixListPage(parts: ListParts): string {
     `</div></div>`;
 }
 
+/** Inject stable h2/h3 ids so the side TOC anchors match them; captures the
+ *  heading list in the same pass. */
+function bmixHeadings(html: string, slug: string): { html: string; toc: { id: string; text: string; level: number }[] } {
+  const toc: { id: string; text: string; level: number }[] = [];
+  let i = 0;
+  const out = html.replace(/<h([23])[^>]*>(.*?)<\/h\1>/gi, (m, lv, inner) => {
+    const id = `${slug}-h${i++}`;
+    const text = inner.replace(/<[^>]+>/g, "").trim();
+    if (text) toc.push({ id, text, level: Number(lv) });
+    return `<h${lv} id="${id}">${inner}</h${lv}>`;
+  });
+  return { html: out, toc };
+}
+
+/** One thumbnail+title+heart/comment/view row, same markup as the theme widgets. */
+function bmixSideRow(p: PostView): string {
+  const img = p.featuredImage
+    ? `background-image:url("${p.featuredImage.replace(/"/g, "%22")}")`
+    : "background-image:linear-gradient(135deg,#dce8f7,#bcd6f3)";
+  return `<div class="article mb-10 flex items-center g-8">` +
+    `<a href="${esc(p.url)}" class="thumbnail flex-shrink-0" style="${img}"></a>` +
+    `<span class="info"><a href="${esc(p.url)}" class="title block">${esc(p.title)}</a>` +
+    `<span class="metas flex gx-5 mt-1">` +
+    `<span class="text-error">${bmixIc("heart", 10)} ${p.likes ?? 0}</span>` +
+    `<span class="text-primary">${bmixIc("comments", 10)} ${p.commentsCount ?? 0}</span>` +
+    `<span class="text-success">${bmixIc("eye", 10)} ${p.views ?? 0}</span>` +
+    `</span></span></div>`;
+}
+
+function bmixArticleGroup(title: string, posts: PostView[], emptyText?: string): string {
+  const empty = posts.length === 0 && emptyText
+    ? `<div class="article mb-10 flex items-center g-8"><span class="info"><span class="title block text-primary-gray">${esc(emptyText)}</span></span></div>`
+    : "";
+  return `<div class="widget-title"><div class="title">${esc(title)}</div></div>` +
+    `<div class="widget-articles mb-20">${empty}${posts.map(bmixSideRow).join("")}</div>`;
+}
+
+function bmixPostToc(toc: { id: string; text: string; level: number }[]): string {
+  if (!toc.length) return "";
+  const lis = toc.map((h) =>
+    `<li data-toc-type="${h.level === 2 ? "H2" : "H3"}">` +
+    `<a class="toc_wrapper" href="#${h.id}" data-bmx-toc-link="${h.id}"><span>${esc(h.text)}</span></a></li>`).join("");
+  return `<div class="widget-toc mb-10"><ul>${lis}</ul></div>`;
+}
+
+/** Sidebar article-section tabs: bookmark (TOC + related) by default, bars
+ *  switches to popular/random. Both panes render server-side; theme-bluemix.js
+ *  toggles visibility with a light slide-in animation. */
+function bmixPostSidebar(toc: { id: string; text: string; level: number }[], post: PostView, related: PostView[], popular: PostView[], randomPool: PostView[]): string {
+  const busy = new Set([...related.map((p) => p.id), ...popular.map((p) => p.id)]);
+  const random: PostView[] = [];
+  for (const p of randomPool) { if (random.length >= 4) break; if (!busy.has(p.id)) random.push(p); }
+  for (const p of randomPool) { if (random.length >= 4) break; if (!random.some((r) => r.id === p.id)) random.push(p); }
+  const bookmarkPane = `<div class="bmx-tab-pane bmx-tab-pane--active" data-bmx-tab-pane="bookmark">` +
+    bmixPostToc(toc) + bmixArticleGroup("相关文章", related, "暂无其它文章") + `</div>`;
+  const barsPane = `<div class="bmx-tab-pane" data-bmx-tab-pane="bars" style="display:none">` +
+    bmixArticleGroup("大家喜欢", popular) + bmixArticleGroup("随机文章", random) + `</div>`;
+  return `<div class="sidebar-titles"><ul class="grid cols-2">` +
+    `<li class="anchor" aria-hidden="true"></li>` +
+    `<li class="title" data-bmx-tab="bars"><a href="#" aria-label="大家喜欢" data-role="tab">${bmixIc("bars-staggered", 12, 0)}</a></li>` +
+    `<li class="title active" data-bmx-tab="bookmark"><a href="#" aria-label="目录·相关" data-role="tab">${bmixIc("bookmark", 12, 0)}</a></li>` +
+    `</ul></div>` +
+    `<div class="panel"><div class="wrapper">` +
+    `<aside class="bmx-blocks bmx-tab-stage">${bookmarkPane}${barsPane}</aside>` +
+    `</div></div>`;
+}
+
+/** bluemix article page — coverflow hero + two-column (sidebar / main). */
 function bmixPostPage(parts: PostPageParts): string {
   const p = parts.post;
-  return `<article class="container-np" style="padding:24px 40px;max-width:860px"><header style="margin-bottom:24px">` +
-    `<h1 style="font-size:28px;font-weight:700;line-height:1.3;margin:0">${esc(p.title)}</h1>` +
-    `<div style="margin-top:12px;display:flex;gap:16px;font-size:13px;color:var(--muted)">` +
-    `<span>${esc(p.author?.name ?? "未知作者")}</span><time>${fmtDate(p.publishedAt)}</time><span>${p.views} 阅读</span>` +
-    `</div>${parts.metaHtml}</header>` +
-    (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" style="width:100%;border-radius:16px;margin-bottom:24px">` : "") +
-    `<div class="prose-cms">${parts.bodyHtml}</div>` +
-    parts.tagsHtml + parts.shareHtml + parts.commentsHtml +
-    `</article>`;
+  const { html: bodyHtml, toc } = bmixHeadings(parts.bodyHtml, p.slug || "post");
+  const { title1, title2 } = bmixSplitTitle(p.title);
+  const t = bmixCardTone(p.slug || p.url, 0);
+  const vars = Object.entries(t.vars).map(([k, v]) => `${k}:${v}`).join(";");
+  const darkCls = t.dark ? " is-dark" : "";
+  const hasImage = !!p.featuredImage;
+  const imgUrl = hasImage ? esc(p.featuredImage!) : "";
+  const date = fmtDate(p.publishedAt);
+  const badges = [];
+  const bg = p.featuredImage
+    ? `<div class="bg-wrapper"><img class="bg" src="${imgUrl}" alt="${esc(p.title)}" loading="eager"></div>`
+    : `<div class="bg-wrapper"></div>`;
+  const heroCard = `<div class="card-container${darkCls} bg-blur" data-bmix-hero style="${vars}">` +
+    bg +
+    `<div class="card-wrapper"><div class="card flex">` +
+    `<div class="info flex flex-col justify-center">` +
+    `<div class="main-title ${title2 ? "type-2" : "type-1 truncate"}">` +
+    `<span class="block truncate">${esc(title1)}</span>` +
+    (title2 ? `<span class="block truncate">${esc(title2)}</span>` : "") +
+    `</div>` +
+    `<div class="metas">` +
+    `<span>${bmixIc("heart", 12)} ${p.likes ?? 0}</span>` +
+    `<span class="ml-8">${bmixIc("comments", 12)} ${p.commentsCount ?? 0}</span>` +
+    `<span class="ml-8">${bmixIc("eye", 12)} ${p.views ?? 0}</span>` +
+    (date ? `<span class="ml-8">${bmixIc("clock", 12)} ${date}</span>` : "") +
+    (badges.length ? badges.map((b) => `<span class="ml-8">${bmixIc("clock", 12)} ${esc(b)}</span>`).join("") : "") +
+    `</div></div>` +
+    (hasImage ? `<img src="${imgUrl}" alt="" >` : "") +
+    `</div></div></div>`;
+  const sidebar = bmixPostSidebar(toc, p, parts.related || [], parts.popular || [], parts.random || []);
+  return `<div class="single"><div data-post-type="article">` +
+    `<div class="coverflow-swiper"><div class="container-np"><div class="slider mx-10">` +
+    `<div class="stage"><div class="scene current">${heroCard}</div></div>` +
+    `</div></div></div>` +
+    `<div class="content-wrapper flex container-np line reverse">` +
+    `<div class="sidebar"><div class="pf_scroller sidebar-sticky"><div class="sidebar-content">${sidebar}</div></div></div>` +
+    `<div class="main-content">` +
+    `<div class="model-wrapper article"><div class="model">` +
+    `<article class="bmx-blocks" data-bmix-article>${bodyHtml}</article>` +
+    parts.shareHtml +
+    `</div></div>` +
+    (parts.commentsHtml
+      ? `<div class="model-wrapper"><div class="model">` +
+        `<div class="cat-title flex items-center large"><div class="custom-icon mr-5">${bmixIc("comments", 14)}</div>` +
+        `<div class="content text-primary-gray text-bulge-primary-gray">${p.commentsCount} 条回应</div>` +
+        `<div class="line flex-grow ml-8 flex items-center justify-end"></div></div>` +
+        parts.commentsHtml +
+        `</div></div>`
+      : "") +
+    `</div></div></div></div>`;
 }
 
 function bmixPagePage(parts: PagePageParts): string {
@@ -778,7 +1112,7 @@ const BLUEMIX_VARS = `
 const bluemixChrome: ThemeChrome = {
   slug: "bluemix",
   cssHref: () => themeCssHref("bluemix"),
-  bodyFix: () => `body{background:#e5e9ef!important;color:var(--text-color-2,#324057)!important;}html{background:#e5e9ef!important;}`,
+  bodyFix: () => `body{background:#e5e9ef;color:var(--text-color-2,#324057)}`,
   headExtra: () => `<style id="rv-theme-bluemix-vars">${BLUEMIX_VARS}</style>`,
   nav: (settings, items) => bmixNav(settings, items),
   bodyOpen: (settings, items) => `<div class="th-bluemix">` + bmixNav(settings, items) + `<main id="sk-main">`,

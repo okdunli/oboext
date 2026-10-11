@@ -58,18 +58,18 @@
 
 <div class="adm-th" data-th-manager data-th={payload()}>
   <div class="adm-th-head">
-    <h1 class="adm-h1"><span class="adm-h1-ic">🎨</span> 主题</h1>
+    <h1 class="adm-h1"><span class="adm-h1-ic"><span class="adm-ic" style="width:20px;height:20px;--i:url(/public/palette.svg)"></span></span> 主题</h1>
     <p class="adm-th-intro">
       主题决定前台的设计令牌（配色、形状、排版、布局、效果）与自带选项。所有微调在
       <span class="adm-th-hl">「主题设置」</span>里按声明式 schema 编辑，切换主题不会丢失另一套配置。
     </p>
     <div class="adm-th-toolbar">
       <input class="adm-input adm-th-create-input" data-th-new-name placeholder="新主题名称">
-      <button type="button" class="adm-btn" data-th-create>＋ 新建主题（复制当前配置）</button>
+      <button type="button" class="adm-btn" data-th-create><span class="adm-ic" style="--i:url(/public/plus.svg)"></span>新建主题（复制当前配置）</button>
     </div>
     <div class="adm-th-upload" data-th-upload>
       <label class="adm-th-upload-btn">
-        ⬆ 上传主题安装包（.zip）
+        <span class="adm-ic adm-ic-sm" style="--i:url(/public/upload.svg)"></span>上传主题安装包（.zip）
         <input type="file" accept=".zip,application/zip" class="adm-hidden-file" data-th-zip>
       </label>
       <span class="adm-th-upload-hint">zip 内需含主题文件夹与 manifest.json，最大 30MB</span>
@@ -81,7 +81,7 @@
     {#each themes() as t}
     <div class={cardClass(t)} data-th-id={t.id} data-th-slug={t.slug}>
       <div class="adm-th-card-hd">
-        <span class="adm-th-mark" style={(() => "background:" + accent(t) + ";color:" + accentText(t) + ";border-radius:" + radius(t))()}>🎨</span>
+        <span class="adm-th-mark" style={(() => "background:" + accent(t) + ";color:" + accentText(t) + ";border-radius:" + radius(t))()}><span class="adm-ic adm-ic-lg" style="--i:url(/public/palette.svg)"></span></span>
         <div class="adm-th-info">
           <div class="adm-th-name-line">
             <p class="adm-th-name">{t.name}</p>
@@ -95,7 +95,7 @@
           <div class="adm-th-meta">
             <span class="adm-th-mono">themes/{t.slug}{builtIn(t)}</span>
             {#if (() => authorUrl(t) !== "")()}
-            <a class="adm-th-author" href={authorUrl(t)} target="_blank" rel="noreferrer noopener">{meta(t, "author")} ↗</a>
+            <a class="adm-th-author" style="display:inline-flex;align-items:center;gap:4px" href={authorUrl(t)} target="_blank" rel="noreferrer noopener">{meta(t, "author")}<span class="adm-ic adm-ic-sm" style="--i:url(/public/external-link.svg)"></span></a>
             {/if}
             {#if (() => authorUrl(t) === "" && meta(t, "author") !== "")()}
             <span>{meta(t, "author")}</span>
@@ -116,11 +116,11 @@
       </div>
       <div class="adm-th-actions">
         {#if (() => !t.active)()}
-        <button type="button" class="adm-btn adm-btn-sm" data-th-activate>✓ 设为当前</button>
+        <button type="button" class="adm-btn adm-btn-sm" data-th-activate><span class="adm-ic adm-ic-sm" style="--i:url(/public/check.svg)"></span>设为当前</button>
         {/if}
-        <a class="adm-btn adm-btn-ghost adm-btn-sm" href={(() => "/admin/themes/" + t.slug)()}>⚙ 主题设置</a>
+        <a class="adm-btn adm-btn-ghost adm-btn-sm" href={(() => "/admin/themes/" + t.slug)()}><span class="adm-ic adm-ic-sm" style="--i:url(/public/settings-2.svg)"></span>主题设置</a>
         {#if (() => canDelete(t))()}
-        <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm adm-th-del" data-th-delete>🗑 删除</button>
+        <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm adm-th-del" data-th-delete><span class="adm-ic adm-ic-sm" style="--i:url(/public/trash-2.svg)"></span>删除</button>
         {/if}
       </div>
     </div>

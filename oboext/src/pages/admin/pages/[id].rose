@@ -45,10 +45,10 @@
 
 <form data-adm-editor data-adm-form="page" data-page={pageDataAttr()}>
   <div class="adm-toolbar">
-    <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/pages">← 页面列表</a>
+    <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/pages"><span class="adm-ic adm-ic-sm" style="--i:url(/public/arrow-left.svg)"></span>页面列表</a>
     <span style="flex:1"></span>
     {#if isLive()}
-    <a class="adm-btn adm-btn-ghost adm-btn-sm" href={pageUrl()} target="_blank">查看页面 ↗</a>
+    <a class="adm-btn adm-btn-ghost adm-btn-sm" href={pageUrl()} target="_blank">查看页面<span class="adm-ic adm-ic-sm" style="--i:url(/public/external-link.svg)"></span></a>
     {/if}
     {#if !isNew()}
     <button
@@ -97,14 +97,14 @@
           </div>
           <div class="adm-blocks"></div>
           <div class="adm-block-add">
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="paragraph">＋ 段落</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="heading">＋ 标题</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="image">＋ 图片</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="quote">＋ 引用</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="code">＋ 代码</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="list">＋ 列表</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="divider">＋ 分割线</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="html">＋ HTML</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="paragraph"><span class="adm-ic adm-ic-sm" style="--i:url(/public/pilcrow.svg)"></span>段落</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="heading"><span class="adm-ic adm-ic-sm" style="--i:url(/public/heading.svg)"></span>标题</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="image"><span class="adm-ic adm-ic-sm" style="--i:url(/public/image.svg)"></span>图片</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="quote"><span class="adm-ic adm-ic-sm" style="--i:url(/public/quote.svg)"></span>引用</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="code"><span class="adm-ic adm-ic-sm" style="--i:url(/public/code.svg)"></span>代码</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="list"><span class="adm-ic adm-ic-sm" style="--i:url(/public/list.svg)"></span>列表</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="divider"><span class="adm-ic adm-ic-sm" style="--i:url(/public/minus.svg)"></span>分割线</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="html"><span class="adm-ic adm-ic-sm" style="--i:url(/public/code-xml.svg)"></span>HTML</button>
           </div>
         </div>
       </div>
@@ -164,7 +164,7 @@
         <div class="adm-card-hd"><strong>自定义字段</strong></div>
         <div class="adm-card-bd">
           <div class="adm-metas" data-adm-metas></div>
-          <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-meta" style="margin-top:8px">＋ 添加字段</button>
+          <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-meta" style="margin-top:8px"><span class="adm-ic adm-ic-sm" style="--i:url(/public/plus.svg)"></span>添加字段</button>
         </div>
       </div>
     </div>

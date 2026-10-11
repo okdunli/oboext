@@ -290,6 +290,7 @@ button { font-family: inherit; }
 .adm-table .sub { color: var(--adm-faint); font-size: 12px; margin-top: 2px; }
 .adm-table .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
 .adm-iconbtn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   border: 1px solid var(--adm-border); background: transparent; color: var(--adm-muted);
   border-radius: 7px; padding: 5px 9px; font-size: 12.5px; cursor: pointer;
 }
@@ -802,6 +803,7 @@ button { font-family: inherit; }
 }
 .adm-th-upload-btn {
   position: relative; cursor: pointer; font-size: 12.5px; color: var(--adm-muted);
+  display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid var(--adm-border); border-radius: 8px; padding: 7px 12px;
   transition: border-color .15s, color .15s;
 }

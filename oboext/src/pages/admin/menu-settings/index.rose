@@ -50,7 +50,7 @@
 
 <div class="adm-ms" data-ms-manager>
   <div class="adm-ms-head">
-    <span class="adm-ms-tile">▣</span>
+    <span class="adm-ms-tile"><span class="adm-ic adm-ic-lg" style="--i:url(/public/panel-left.svg)"></span></span>
     <h1 class="adm-h1" style="margin:0">菜单与首页</h1>
   </div>
   <p class="adm-ms-intro">
@@ -73,11 +73,11 @@
           <input type="checkbox" class="adm-ms-check" data-ms-check data-on={x.on}
                  data-disabled={rowDisabled(x)}>
           <span class="adm-ms-label">{x.label}</span>
-          <span class="adm-ms-badge adm-ms-badge-hook">🔌 扩展</span>
-          <span class="adm-ms-badge adm-ms-badge-lock">🔒 锁定</span>
+          <span class="adm-ms-badge adm-ms-badge-hook"><span class="adm-ic" style="width:12px;height:12px;--i:url(/public/plug.svg)"></span>扩展</span>
+          <span class="adm-ms-badge adm-ms-badge-lock"><span class="adm-ic" style="width:12px;height:12px;--i:url(/public/lock.svg)"></span>锁定</span>
           <span class="adm-ms-right">
-            <span class="adm-ms-homebadge">🏠 当前首页</span>
-            <button type="button" class="adm-ms-homebtn" data-ms-home>🏠 设为首页</button>
+            <span class="adm-ms-homebadge"><span class="adm-ic" style="width:12px;height:12px;--i:url(/public/house.svg)"></span>当前首页</span>
+            <button type="button" class="adm-ms-homebtn" data-ms-home><span class="adm-ic" style="width:12px;height:12px;--i:url(/public/house.svg)"></span>设为首页</button>
           </span>
         </li>
     {/if}
@@ -93,7 +93,7 @@
   <div class="adm-ms-bar">
     <span class="adm-ms-msg" data-ms-msg></span>
     <button type="button" class="adm-btn adm-btn-sm" data-ms-save>
-      <span data-ms-save-label>💾 保存设置</span>
+      <span data-ms-save-label style="display:inline-flex;align-items:center;gap:6px"><span class="adm-ic adm-ic-sm" style="--i:url(/public/save.svg)"></span>保存设置</span>
     </button>
   </div>
 </div>

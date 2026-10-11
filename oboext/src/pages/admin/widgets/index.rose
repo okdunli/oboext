@@ -60,11 +60,16 @@
   function wgDownClass(x) {
     return "adm-iconbtn" + (x.downDisabled ? " is-disabled" : "");
   }
-  function wgEye(x) {
-    return x.enabled ? "👁" : "🚫";
+  function wgEyeIcon(x) {
+    return x.enabled ? "eye" : "eye-off";
   }
   function wgEyeTitle(x) {
     return x.enabled ? "隐藏" : "显示";
+  }
+  function ic(n, size) {
+    size = size || 16;
+    return '<span class="adm-ic" aria-hidden="true" style="width:' + size +
+      "px;height:" + size + "px;--i:url(/public/" + n + ".svg)\"></span>";
   }
   function payload() {
     return JSON.stringify(d());
@@ -76,7 +81,7 @@
 </head>
 
 <div class="adm-wg-head">
-  <h1 class="adm-h1"><span class="adm-h1-ic">🧩</span> 小工具</h1>
+  <h1 class="adm-h1"><span class="adm-h1-ic"><span class="adm-ic" style="width:20px;height:20px;--i:url(/public/puzzle.svg)"></span></span> 小工具</h1>
   <p class="adm-wg-intro">
     把小工具放到主题声明的<span class="adm-wg-hl">「区域」</span>里——侧边栏、页脚以及主题自定义的模块位。
     每个小工具都有自己的设置项，由类型声明自动生成表单。侧边栏需要在
@@ -103,7 +108,7 @@
   {#if (() => x.kind === "head")()}
   <section class="adm-wg-area">
     <div class="adm-wg-area-hd">
-      <h3 class="adm-wg-area-title">▦ {x.label}
+      <h3 class="adm-wg-area-title"><span class="adm-ic adm-ic-sm" style="--i:url(/public/layout-grid.svg)"></span> {x.label}
         <span class="adm-wg-key">{x.key}</span>
       </h3>
       <span class="adm-wg-count">{x.count} 项</span>
@@ -115,16 +120,16 @@
   {#if (() => x.kind === "row")()}
       <div class={wgRowClass(x)} data-wg-id={x.id} data-wg-area={x.area}>
         <div class="adm-wg-arrows">
-          <button type="button" class={wgUpClass(x)} data-wg-move="-1" title="上移">↑</button>
-          <button type="button" class={wgDownClass(x)} data-wg-move="1" title="下移">↓</button>
+          <button type="button" class={wgUpClass(x)} data-wg-move="-1" title="上移" aria-label="上移"><span class="adm-ic adm-ic-sm" style="--i:url(/public/chevron-up.svg)"></span></button>
+          <button type="button" class={wgDownClass(x)} data-wg-move="1" title="下移" aria-label="下移"><span class="adm-ic adm-ic-sm" style="--i:url(/public/chevron-down.svg)"></span></button>
         </div>
         <div class="adm-wg-info">
           <p class="adm-wg-name">{wgRowTitle(x)}</p>
           <p class="adm-wg-mono">{x.wtype}</p>
         </div>
-        <button type="button" class="adm-iconbtn" data-wg-toggle title={wgEyeTitle(x)}>{wgEye(x)}</button>
-        <button type="button" class="adm-iconbtn" data-wg-edit title="设置">⚙</button>
-        <button type="button" class="adm-iconbtn danger" data-wg-del title="删除">🗑</button>
+        <button type="button" class="adm-iconbtn" data-wg-toggle title={wgEyeTitle(x)}>{@html ic(wgEyeIcon(x), 14)}</button>
+        <button type="button" class="adm-iconbtn" data-wg-edit title="设置"><span class="adm-ic adm-ic-sm" style="--i:url(/public/settings-2.svg)"></span></button>
+        <button type="button" class="adm-iconbtn danger" data-wg-del title="删除"><span class="adm-ic adm-ic-sm" style="--i:url(/public/trash-2.svg)"></span></button>
       </div>
   {/if}
 
@@ -137,7 +142,7 @@
     <div class="adm-wg-picker" data-wg-picker data-wg-area={x.key} hidden>
       <div class="adm-wg-picker-hd">
         <span>选择类型</span>
-        <button type="button" class="adm-iconbtn" data-wg-picker-x title="取消">✕</button>
+        <button type="button" class="adm-iconbtn" data-wg-picker-x title="取消" aria-label="取消"><span class="adm-ic adm-ic-sm" style="--i:url(/public/x.svg)"></span></button>
       </div>
       <div class="adm-wg-picker-list">
   {/if}
@@ -152,7 +157,7 @@
   {#if (() => x.kind === "tail")()}
       </div>
     </div>
-    <button type="button" class="adm-wg-addbtn" data-wg-add-open data-wg-area={x.area}>＋ 添加小工具</button>
+    <button type="button" class="adm-wg-addbtn" style="display:inline-flex;align-items:center;justify-content:center;gap:6px" data-wg-add-open data-wg-area={x.area}><span class="adm-ic adm-ic-sm" style="--i:url(/public/plus.svg)"></span>添加小工具</button>
   </section>
   {/if}
 

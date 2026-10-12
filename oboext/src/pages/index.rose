@@ -1,8 +1,0 @@
-<script>
-  // Home page: all sections render from the live database through the
-  // "home" loader. Client-only interactions (cardFlip, fan-out) live in
-  // /public/theme.js; this route ships zero framework JS.
-  let home = $data(() => __rvLoad("home", {}));
-</script>
-
-{@html home().main}

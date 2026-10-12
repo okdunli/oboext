@@ -348,12 +348,13 @@ function skipLiteral(src: string, i: number): number | null {
   if (q === '"' || q === "'") return skipQuoted(src, i);
   if (q === '`') return skipTemplate(src, i);
   if (q !== '/') return null;
+  if (src[i + 1] === '/' || src[i + 1] === '*') return null;
   let b = i - 1;
   while (b >= 0 && /\s/.test(src[b])) b--;
   if (b >= 0) {
-    if (!'(,=:[!&|?{};+-*%<>~^'.includes(src[b])) {
+    if (!'(,=:[!&|?{};+-*%~^'.includes(src[b])) {
       const word = /(\w+)$/.exec(src.slice(0, b + 1))?.[1] ?? '';
-      if (!['return', 'typeof', 'case', 'in', 'of', 'new', 'delete', 'void', 'do', 'else', 'instanceof'].includes(word)) return null;
+      if (!['return', 'typeof', 'case', 'in', 'of', 'new', 'delete', 'void', 'do', 'else', 'instanceof', 'yield', 'await'].includes(word)) return null;
     }
   }
   let j = i + 1;
@@ -2649,8 +2650,17 @@ export const hasResponseHooks = hooks.some((p) => p.onResponse);
     })
     .join('\n');
 
-  const nfIdx = infos.findIndex((info) => info.isNotFound);
-  const notFoundRender = nfIdx >= 0 ? (split ? loaderOf(nfIdx) : compose(nfIdx)) : 'null';
+  const notFoundEntries = infos
+    .map((info, i) => ({ info, i }))
+    .filter(({ info }) => info.isNotFound)
+    .map(({ info, i }) => {
+      const rel = path.relative(path.join(root, 'src', 'pages'), info.filePath).replace(/\\/g, '/');
+      const dir = path.posix.dirname(rel);
+      const prefix = dir === '.' ? '/' : '/' + dir;
+      return { prefix, render: split ? loaderOf(i) : compose(i) };
+    })
+    .sort((a, b) => b.prefix.length - a.prefix.length);
+  const notFoundTable = `[\n${notFoundEntries.map((e) => `  ['${e.prefix}', ${e.render}],`).join('\n')}\n]`;
 
   const errIdx = infos.findIndex((info) => info.isError);
   const errorRender = errIdx >= 0 ? (split ? loaderOf(errIdx) : compose(errIdx)) : 'null';
@@ -2847,8 +2857,23 @@ const apiRoutes = [
   }).join(',\n  ')}
 ];
 
-// pages/404.rose (with its layouts) or null -> built-in plain 404
-const notFound = ${notFoundRender};
+// Not-found pages, deepest segment first: the root 404.rose ('/') and any
+// pages/<seg>/_notfound.rose, each already composed with its layout chain.
+// notFoundFor picks the nearest one up the path - an /admin miss answers
+// the admin 404, a public miss the site's - and notFoundPage is the whole
+// answer (real 404 status, or the built-in plain 404 when the app has none).
+const notFoundRoutes = ${notFoundTable};
+const notFoundFor = (pathname) => {
+  for (const [prefix, render] of notFoundRoutes) {
+    if (prefix === '/' || pathname === prefix || pathname.startsWith(prefix + '/')) return render;
+  }
+  return null;
+};
+const notFoundPage = async (pathname) => {
+  const nf = notFoundFor(pathname);
+  if (nf) return { ...(await renderFallback(pathname, nf)), status: 404 };
+  return { html: '<h1>404</h1><p>Page not found</p>', state: '{}', head: [], status: 404, ...docAttrs(pathname) };
+};
 
 // pages/500.rose (with its layouts) or null -> built-in plain 500: a route
 // whose render throws degrades to this instead of failing the response.
@@ -2928,8 +2953,7 @@ export async function renderPage(pathname, form) {
  // I18n: a [lang] segment naming no dictionary is a 404 - the URL is the contract.
       const langIdx = patternParts.indexOf(':lang');
       if (langIdx >= 0 && !isLocale(pathParts[langIdx])) {
-        if (notFound) return { ...(await renderFallback(pathname, notFound)), status: 404 };
-        return { html: '<h1>404</h1><p>Page not found</p>', state: '{}', head: [], status: 404, ...docAttrs(pathname) };
+        return await notFoundPage(pathname);
       }
  // The document's <html lang>/<dir> follow this route's locale
       // (the default's when the route is not localized)
@@ -2959,8 +2983,7 @@ export async function renderPage(pathname, form) {
               // The canonical case: a login action that sends the visitor on.
               return { redirect: err.path, status: err.status ?? 303, ...docAttrs(pathname) };
             } else if (err && err.__rosefd === 'notFound') {
-              if (notFound) return { ...(await renderFallback(pathname, notFound)), status: 404 };
-              return { html: '<h1>404</h1><p>Page not found</p>', state: '{}', head: [], status: 404, ...docAttrs(pathname) };
+              return await notFoundPage(pathname);
             } else {
               throw err;
             }
@@ -2977,8 +3000,7 @@ export async function renderPage(pathname, form) {
           return { redirect: err.path, status: err.status ?? 307, ...docAttrs(pathname) };
         }
         if (signal === 'notFound') {
-          if (notFound) return { ...(await renderFallback(pathname, notFound)), status: 404 };
-          return { html: '<h1>404</h1><p>Page not found</p>', state: '{}', head: [], status: 404, ...docAttrs(pathname) };
+          return await notFoundPage(pathname);
         }
         console.error('Rose Frame Driver: render failed for', pathname, err instanceof Error ? err.message : err);
         if (errorPage) return { ...(await renderFallback(pathname, errorPage)), status: 500 };
@@ -2990,10 +3012,9 @@ export async function renderPage(pathname, form) {
       return { html: rendered.html, state, head: rendered.head, status: actionStatus || 200, csr: route.csr !== false, lang: docLang, dir: localeDir(docLang) };
     }
   }
-  if (notFound) {
-    return { ...(await renderFallback(pathname, notFound)), status: 404 };
-  }
-  return { html: '<h1>404</h1><p>Page not found</p>', state: '{}', head: [], status: 404, ...docAttrs(pathname) };
+  // no route matched (and no i18n bail above): the nearest not-found page
+  // for this path - a segment's _notfound.rose or the root 404.rose
+  return await notFoundPage(pathname);
 }
 
 // Would renderPageStream handle this path? (matched route = stream, anything
@@ -3185,8 +3206,14 @@ const getRender = async (route) => {
   return (route.render ??= (await route.load()).render);
 };
 
-// pages/404.rose (with its layouts) or null -> built-in plain 404
-const notFound = ${notFoundRender};
+// Not-found pages, deepest segment first (the server's table, client half): the root 404.rose ('/') and any pages/<seg>/_notfound.rose.
+const notFoundRoutes = ${notFoundTable};
+const notFoundFor = (pathname) => {
+  for (const [prefix, render] of notFoundRoutes) {
+    if (prefix === '/' || pathname === prefix || pathname.startsWith(prefix + '/')) return render;
+  }
+  return null;
+};
 
 // Pages/500.rose (with its layouts) or null -> built-in plain 500: a route whose render throws on the client degrades to this instead of breaking.
 const errorPage = ${errorRender};
@@ -3403,7 +3430,7 @@ export async function start(container, pathname, initial) {
       // I18n: an unknown locale paints the 404 page, same as the server (before the prefetch check: a cached entry for a bogus locale is discarded).
       const langIdx = route.pattern.split('/').indexOf(':lang');
 ${langDirBlock}
-        await paintFallback(container, notFound, '<h1>404</h1><p>Page not found</p>');
+        await paintFallback(container, notFoundFor(pathname), '<h1>404</h1><p>Page not found</p>');
         return;
       }
       // Prefetched on hover/focus/touch: the render already ran, so paint its HTML and adopt its signal entries - events then patch the very nodes we.
@@ -3447,7 +3474,7 @@ ${langDirBlock}
         flushMounts();
       });
       if (signal === 'notFound') {
-        await paintFallback(container, notFound, '<h1>404</h1><p>Page not found</p>');
+        await paintFallback(container, notFoundFor(pathname), '<h1>404</h1><p>Page not found</p>');
         return;
       }
       if (signal) {
@@ -3460,14 +3487,14 @@ ${langDirBlock}
       return;
     }
   }
-  // Unmatched route: pages/404.rose renders (with its head + interactivity)
+  // Unmatched route: the nearest not-found page renders (with its head + interactivity) - a segment's _notfound.rose or the root 404.rose - else //.
 ${hasLang ? ` // the same app-root gate as above - a mount never touches the
   // host document's language or direction.
   if (container === document.getElementById('app')) {
     document.documentElement.lang = __defLocale;
     document.documentElement.removeAttribute('dir');
   }` : ''}
-  await paintFallback(container, notFound, '<h1>404</h1><p>Page not found</p>');
+  await paintFallback(container, notFoundFor(pathname), '<h1>404</h1><p>Page not found</p>');
 }
 
 // Adopt a server-rendered response in place - the JS-enabled half of progressive-enhancement forms: the bootstrap POSTs a <form method="POST">.
@@ -3636,12 +3663,12 @@ function getRouteInfo(filePath: string, root: string): RouteInfo {
   const base = path.posix.basename(withoutExt);
   const isComponent = filePath.replace(/\\/g, '/').includes('/src/components/');
   const isLayout = !isComponent && base === '_layout';
-  const isNotFound = !isComponent && base === '404';
+  const isNotFound = !isComponent && (base === '404' || base === '_notfound');
   const isError = !isComponent && base === '500';
   const isApi = !isComponent && (withoutExt === 'api' || withoutExt.startsWith('api/'));
   const isMiddleware = !isComponent && withoutExt === '_middleware';
 
-  let parts = withoutExt.split('/').filter((p) => p !== '_layout');
+  let parts = withoutExt.split('/').filter((p) => p !== '_layout' && p !== '_notfound');
   if (parts.length > 1 && parts[parts.length - 1] === 'index') parts = parts.slice(0, -1);
   const CATCH_ALL = /^\[\.\.\.(\w+)\]$/;
   const OPTIONAL_CATCH_ALL = /^\[\[\.\.\.(\w+)\]\]$/;

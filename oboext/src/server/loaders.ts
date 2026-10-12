@@ -25,7 +25,7 @@ import {
   relatedPosts,
   type PostView,
 } from "./queries.js";
-import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor } from "./links.js";
+import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, resolveSitePath, paginate } from "./links.js";
 import { resolveCommentConfig } from "./comments-config.js";
 import { getPublishedPage } from "./pages.js";
 import * as R from "./render.js";
@@ -361,7 +361,7 @@ async function home() {
 }
 
 async function blogList(payload: { page?: number }) {
-  const [settings, themeSlug] = await Promise.all([getSettings(), getActiveThemeSlug()]);
+  const [settings, themeSlug, cfg] = await Promise.all([getSettings(), getActiveThemeSlug(), getPermalinkConfig()]);
   const perPage = settings.postsPerPage || 10;
   const page = pageNum(payload.page);
   const { items, total } = await listPosts({
@@ -379,7 +379,7 @@ async function blogList(payload: { page?: number }) {
       items,
       page,
       totalPages,
-      hrefFor: (p) => (p === 1 ? "/blog" : `/blog?page=${p}`),
+      hrefFor: (p) => paginate(blogIndexUrlFor(cfg), p),
     }),
   };
 }
@@ -427,7 +427,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
       items,
       page,
       totalPages,
-      hrefFor: (n) => `/blog/category/${category.slug}?page=${n}`,
+      hrefFor: (n) => paginate(catUrl, n),
     }),
   };
 }
@@ -472,7 +472,7 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
       items,
       page,
       totalPages,
-      hrefFor: (n) => `/blog/tag/${tag.slug}?page=${n}`,
+      hrefFor: (n) => paginate(tagUrl, n),
     }),
   };
 }
@@ -816,6 +816,36 @@ async function notFound(_p: unknown, _ctx: Ctx) {
   return { settings, recent };
 }
 
+async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
+  const res = await resolveSitePath(payload.segments ?? []);
+  if (!res) return null;
+  const page = Math.max(1, Number(payload.page) || 1);
+  let out: Record<string, any>;
+  switch (res.kind) {
+    case "home":
+      out = await home();
+      break;
+    case "post":
+      out = await postDetail({ slug: res.post.slug }, ctx);
+      break;
+    case "page":
+      out = await pageDetail({ slug: res.page.slug }, ctx);
+      break;
+    case "blogIndex":
+      out = await blogList({ page }, ctx);
+      break;
+    case "category":
+      out = await categoryList({ slug: res.category.slug, page }, ctx);
+      break;
+    case "tag":
+      out = await tagList({ slug: res.tag.slug, page }, ctx);
+      break;
+  }
+
+  if (out.notFound) return null;
+  return { kind: res.kind === "blogIndex" ? "blog" : res.kind, ...out };
+}
+
 export const loaders = {
   chrome,
   home,
@@ -827,6 +857,7 @@ export const loaders = {
   page: pageDetail,
   archives,
   notFound,
+  resolve,
   "admin.session": admin.adminSession,
   "admin.dashboard": admin.adminDashboard,
   "admin.posts": admin.adminPosts,
@@ -871,51 +902,3 @@ export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unk
 /** Raw document builders for middleware-intercepted XML/txt routes. */
 export const documents = { feed, robots };
 
-/**
- * Standalone 404 document. The framework renders pages/404.rose only for
- * UNMATCHED routes; a matched dynamic route whose entity is missing cannot
- * change its HTTP status from inside the component, so the middleware asks
- * for this and returns it with a real 404. It reuses the same chrome, so it
- * stays pixel-identical (minus client routing - a 404 is a dead end).
- */
-export async function notFoundDocument(ctx: Ctx): Promise<string> {
-  const c = await chromeData((ctx && ctx.pathname) || "/");
-  const pluginFooter = await pluginFooterHtml();
-  const siteSettings = await getSettings();
-  const siteTitle = siteSettings.siteTitle ?? "";
-  const nf = await getNotFoundSettings();
-  const lines = (nf.message || "").split(/\n+/).map(l => l.trim()).filter(Boolean);
-  const msgHtml = lines.map(l => `<p>${R.esc(l)}</p>`).join("");
-  const searchHtml = nf.showSearch
-    ? `<form class="nf-search" action="/search" method="get"><input type="search" name="q" placeholder="搜索文章…" aria-label="搜索文章"><button type="submit"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> 搜索</button></form>`
-    : "";
-  let recentHtml = "";
-  if (nf.showRecent) {
-    const result = await listPosts({ status: "published", limit: 6 });
-    const items = result.items || [];
-    if (items.length > 0) {
-      const lis = items.map((p: PostView) => `<li><a href="${R.esc(p.url)}">${R.esc(p.title)}</a></li>`).join("");
-      recentHtml = `<div class="nf-recent"><h2>最近文章</h2><ul>${lis}</ul></div>`;
-    }
-  }
-  const card =
-    `<div class="nf-wrap"><div class="nf-box"><span class="nf-icon"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16.24 7.76l-2.12 6.12-6.12 2.12 2.12-6.12z"/></svg></span>` +
-    `<h1 class="nf-title">${R.esc(nf.title)}</h1>` +
-    `<div class="nf-message">${msgHtml}</div>` +
-    searchHtml +
-    `<div class="nf-home"><a href="/"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> 返回首页</a></div>` +
-    recentHtml +
-    `</div></div>`;
-  const nfStyle = `.nf-wrap{display:flex;justify-content:center;padding:4rem 1rem}.nf-box{width:100%;max-width:36rem;text-align:center}.nf-icon{display:inline-flex;align-items:center;justify-content:center;width:4rem;height:4rem;border-radius:9999px;border:1px solid var(--primary-color,var(--accent,#1f8bff));color:var(--primary-color,var(--accent,#1f8bff));margin-bottom:1.5rem}.nf-title{font-size:1.875rem;font-weight:700;color:var(--text-color,var(--text,#1f2937));margin:0}.nf-message{margin-top:.75rem;font-size:.875rem;line-height:1.5;color:var(--muted-color,var(--muted,#6b7280))}.nf-message p{margin:.25rem 0}.nf-search{display:flex;max-width:28rem;margin:1.75rem auto 0;gap:.5rem}.nf-search input{flex:1;height:2.5rem;border-radius:9999px;border:1px solid var(--border-color,var(--border,#e5e7eb));background:var(--surface-color,var(--surface,#fff));color:var(--text-color,var(--text,#1f2937));padding:0 1rem;font-size:.875rem;outline:none}.nf-search button{display:inline-flex;align-items:center;gap:.375rem;height:2.5rem;padding:0 1.25rem;border-radius:9999px;background:var(--primary-color,var(--accent,#1f8bff));color:#fff;font-size:.875rem;font-weight:500;border:none;cursor:pointer}.nf-home{margin-top:1.5rem}.nf-home a{display:inline-flex;align-items:center;gap:.375rem;font-size:.875rem;font-weight:500;color:var(--primary-color,var(--accent,#1f8bff));text-decoration:none}.nf-recent{margin-top:2.5rem;border-radius:1rem;border:1px solid var(--border-color,var(--border,#e5e7eb));background:var(--surface-color,var(--surface,#fff));padding:1.5rem;text-align:left}.nf-recent h2{font-size:.875rem;font-weight:600;margin:0 0 .75rem}.nf-recent ul{list-style:none;padding:0;margin:0}.nf-recent li{margin-bottom:.5rem}.nf-recent a{display:block;font-size:.875rem;color:var(--muted-color,var(--muted,#6b7280));text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}`;
-  return (
-    `<!DOCTYPE html>\n<html lang="zh-CN"><head><meta charset="UTF-8">` +
-    `<meta name="viewport" content="width=device-width, initial-scale=1">` +
-    `<title>404 - ${R.esc(siteTitle)}</title>` +
-    `<meta name="robots" content="noindex">` +
-    `<link rel="stylesheet" href="/public/theme.css">${c.varsHtml}<style>${nfStyle}</style><link rel="icon" href="data:,">` +
-    `</head><body><div class="th-skyscraper">${c.navHtml}` +
-    `<div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">${card}</div></div>` +
-    `<aside class="sidebar-column with-separate-line"><div class="sidebar-content">${c.asideHtml}</div></aside>` +
-    `</div></main></div>${c.footerHtml}${pluginFooter}</div></body></html>`
-  );
-}

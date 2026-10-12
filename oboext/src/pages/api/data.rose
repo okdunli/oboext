@@ -10,11 +10,9 @@
   //
   // Browser-side __rvLoad() GETs this very endpoint; server-side it calls
   // dispatch() directly. One loader map, per-request database reads.
-  import { dispatch, documents, searchRedirect, notFoundDocument } from "@server/loaders";
+  import { dispatch, documents, searchRedirect } from "@server/loaders";
   import { buildSitemapDocument } from "@server/sitemap";
   import { themeCssContent, serveThemeAsset } from "@server/theme-chrome";
-  import { getPost, getCategoryBySlug, getTagBySlug } from "@server/queries";
-  import { getPublishedPage } from "@server/pages";
   import { serveUpload } from "@server/storage";
   import { ensureMigrations } from "@server/db";
   import { getSessionFromRequest, hasAnyUser } from "@server/auth";
@@ -64,33 +62,11 @@
       await ready();
       return searchRedirect(q);
     },
-    notFound: async (ctx) => {
-      await ready();
-      return notFoundDocument(ctx);
-    },
     // /admin <-> /admin/dashboard swap driven by the adminHomePath preference
     adminHome: {
       redirect: async (pathname) => {
         await ready();
         return homeRedirectFor(pathname, await getAdminMenuPrefs());
-      },
-    },
-    exists: {
-      post: async (s) => {
-        await ready();
-        return Boolean(await getPost(s));
-      },
-      page: async (s) => {
-        await ready();
-        return Boolean(await getPublishedPage(s));
-      },
-      category: async (s) => {
-        await ready();
-        return Boolean(await getCategoryBySlug(s));
-      },
-      tag: async (s) => {
-        await ready();
-        return Boolean(await getTagBySlug(s));
       },
     },
     themeStyle: {

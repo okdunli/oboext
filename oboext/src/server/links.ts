@@ -1,14 +1,11 @@
-/**
- * Permalink layer — ported from lib/services/links.ts.
- *
- * Config lives in the options KV (key "permalinks"). The live database ships
- * with an empty options table, so the defaults apply: posts at /blog/<slug>,
- * categories at /blog/category/<slug>, tags at /blog/tag/<slug>. Pinyin /
- * initials modes resolve through the persisted columns the schema carries.
- */
+
+
 import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";
+import type { PostView } from "./queries.js";
+import type { PageView } from "./pages.js";
+import type { Category, Tag } from "./schema.js";
 
 export type PostLinkMode = "slug" | "id" | "pinyin" | "initial" | "custom";
 
@@ -170,11 +167,199 @@ export function tagUrlFor(cfg: PermalinkConfig, tag: { slug: string }): string {
 
 export function blogIndexUrlFor(cfg: PermalinkConfig): string {
   const segs = baseSegs(cfg.postBase);
-  return joinPath(segs.length ? segs : ["blog"]);
+
+  return joinPath(segs.length ? segs : [ROOT_BLOG_INDEX_SEGMENT]);
 }
+
+export const ROOT_BLOG_INDEX_SEGMENT = "blog";
 
 /** Pagination href: page 1 is the plain path, later pages carry ?page=. */
 export function paginate(path: string, page: number): string {
-  const base = path === "/" ? "" : path;
-  return page <= 1 ? path : `${base}/?page=${page}`;
+
+  if (page <= 1) return path;
+  return path === "/" ? `/?page=${page}` : `${path}?page=${page}`;
+}
+
+/** Which persisted column a captured tail segment reverses through. */
+type SlugKind = "slug" | "pinyin" | "initial";
+
+type TailMatcher = {
+  regex: RegExp;
+  hasId: boolean;
+  slugGroup: SlugKind | null;
+  segCount: number;
+};
+
+/** Compile the active post tail shape (custom pattern → named-group regex). */
+export function buildTailMatcher(cfg: PermalinkConfig): TailMatcher {
+  if (cfg.postMode === "custom") {
+    const groups = cfg.postPattern.split("/").map((seg) =>
+      seg
+        .replace(/[.*+?^${}()|[\]\\]/g, (ch) => (ch === "{" || ch === "}" ? ch : "\\" + ch))
+        .replace(/\{id\}/g, "(?<id>\\d+)")
+        .replace(/\{pinyin\}/g, "(?<pinyin>[^/]+)")
+        .replace(/\{initial\}/g, "(?<initial>[^/]+)")
+        .replace(/\{slug\}/g, "(?<slug>[^/]+)")
+        .replace(/\{year\}/g, "(?<year>\\d{4})")
+        .replace(/\{(month|day)\}/g, "(?<$1>\\d{1,2})"),
+    );
+    const pattern = groups.join("/");
+    const slugGroup: SlugKind | null = pattern.includes("(?<pinyin>")
+      ? "pinyin"
+      : pattern.includes("(?<initial>")
+        ? "initial"
+        : pattern.includes("(?<slug>")
+          ? "slug"
+          : null;
+    return {
+      regex: new RegExp("^" + pattern + "$"),
+      hasId: pattern.includes("(?<id>"),
+      slugGroup,
+      segCount: groups.length,
+    };
+  }
+  if (cfg.postMode === "id") {
+    return { regex: /^(?<id>\d+)$/, hasId: true, slugGroup: null, segCount: 1 };
+  }
+  const kind: SlugKind = cfg.postMode === "pinyin" ? "pinyin" : cfg.postMode === "initial" ? "initial" : "slug";
+  return { regex: new RegExp(`^(?<${kind}>[^/]+)$`), hasId: false, slugGroup: kind, segCount: 1 };
+}
+
+/** Pure: does a tail match the post shape, and which lookup key does it yield? */
+export function matchPostTail(
+  cfg: PermalinkConfig,
+  tail: string[],
+): { id?: number; slug?: string; slugKind?: SlugKind; dateParts?: Record<string, string> } | null {
+  const m = buildTailMatcher(cfg);
+  if (tail.length !== m.segCount) return null;
+  const hit = tail.join("/").match(m.regex);
+  if (!hit) return null;
+  const g = hit.groups ?? {};
+
+  const dateParts: Record<string, string> = {};
+  for (const k of ["year", "month", "day"] as const) if (g[k]) dateParts[k] = g[k];
+  const key = { dateParts: Object.keys(dateParts).length ? dateParts : undefined };
+  if (m.hasId && g.id) return { id: Number(g.id), ...key };
+  if (m.slugGroup && g[m.slugGroup]) {
+    return { slug: decodeURIComponent(g[m.slugGroup]), slugKind: m.slugGroup, ...key };
+  }
+  return null;
+}
+
+function dateTokensMatch(post: PostView, parts: Record<string, string>): boolean {
+  const d = post.publishedAt ? new Date(post.publishedAt)
+    : post.createdAt ? new Date(post.createdAt) : new Date();
+  const actual: Record<string, string> = {
+    year: String(d.getFullYear()),
+    month: String(d.getMonth() + 1).padStart(2, "0"),
+    day: String(d.getDate()).padStart(2, "0"),
+  };
+  return Object.entries(parts).every(([k, v]) => v.padStart(2, "0") === actual[k]);
+}
+
+/** Resolve a post tail to a published post (null when nothing matches). */
+async function fetchPostByTail(
+  tail: string[],
+  cfg: PermalinkConfig,
+): Promise<PostView | null> {
+  const key = matchPostTail(cfg, tail);
+  if (!key) return null;
+
+  const { getPost } = await import("./queries.js");
+  try {
+    const post = await getPost(String(key.slug ?? key.id ?? ""));
+    if (post && key.dateParts && !dateTokensMatch(post, key.dateParts)) return null;
+    return post;
+  } catch {
+    return null;
+  }
+}
+
+export type SitePathResolution =
+  | { kind: "home" }
+  | { kind: "blogIndex" }
+  | { kind: "post"; post: PostView }
+  | { kind: "page"; page: PageView }
+  | { kind: "category"; category: Category }
+  | { kind: "tag"; tag: Tag };
+
+function startsWith(segs: string[], prefix: string[]): boolean {
+  return prefix.length > 0 && prefix.every((s, i) => s === segs[i]);
+}
+
+/**
+ * Resolve an arbitrary site path (used by the root catch-all, so prefixes can
+ * be renamed or deleted). Root-level collisions resolve post → page →
+ * category → tag; trade-off: cross-type same-slug collisions are left to
+ * authors, upgrade path is a per-type disambiguation table.
+ */
+export async function resolveSitePath(
+  rawSegments: string[],
+): Promise<SitePathResolution | null> {
+  const cfg = await getPermalinkConfig();
+  const segments = rawSegments.map((s) => decodeURIComponent(s)).filter(Boolean);
+  if (!segments.length) return { kind: "home" };
+
+  const pb = baseSegs(cfg.postBase);
+  const pgb = baseSegs(cfg.pageBase);
+  const cb = baseSegs(cfg.categoryBase);
+  const tb = baseSegs(cfg.tagBase);
+  const tailMatcher = buildTailMatcher(cfg);
+
+  if (pb.length && segments.length === pb.length && startsWith(segments, pb)) {
+    return { kind: "blogIndex" };
+  }
+
+  if (startsWith(segments, pb)) {
+    const post = await fetchPostByTail(segments.slice(pb.length), cfg);
+    if (post) return { kind: "post", post };
+  }
+  if (startsWith(segments, pgb) && segments.length === pgb.length + 1) {
+    const { getPublishedPage } = await import("./pages.js");
+    try {
+      const page = await getPublishedPage(segments[pgb.length]);
+      if (page) return { kind: "page", page };
+    } catch {
+      /* fall through */
+    }
+  }
+  if (startsWith(segments, cb) && segments.length === cb.length + 1) {
+    const { getCategoryBySlug } = await import("./queries.js");
+    const category = await getCategoryBySlug(segments[cb.length]);
+    if (category) return { kind: "category", category };
+  }
+  if (startsWith(segments, tb) && segments.length === tb.length + 1) {
+    const { getTagBySlug } = await import("./queries.js");
+    const tag = await getTagBySlug(segments[tb.length]);
+    if (tag) return { kind: "tag", tag };
+  }
+
+  if (segments.length === 1) {
+
+    if (pb.length === 0 && segments[0] === ROOT_BLOG_INDEX_SEGMENT) {
+      return { kind: "blogIndex" };
+    }
+    const post = await fetchPostByTail(segments, cfg);
+    if (post) return { kind: "post", post };
+    const { getPublishedPage } = await import("./pages.js");
+    try {
+      const page = await getPublishedPage(segments[0]);
+      if (page) return { kind: "page", page };
+    } catch {
+      /* continue */
+    }
+    const { getCategoryBySlug, getTagBySlug } = await import("./queries.js");
+    const category = await getCategoryBySlug(segments[0]);
+    if (category) return { kind: "category", category };
+    const tag = await getTagBySlug(segments[0]);
+    if (tag) return { kind: "tag", tag };
+    return null;
+  }
+
+  if (pb.length === 0 && segments.length === tailMatcher.segCount) {
+    const post = await fetchPostByTail(segments, cfg);
+    if (post) return { kind: "post", post };
+  }
+
+  return null;
 }

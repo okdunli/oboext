@@ -1,6 +1,6 @@
 {
   "name": "oboext",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "license": "MIT",
   "description": "Fast & lightweight self-hosted dynamic content management system engine with tiny footprint, built-in admin panel and smooth content editing.",
   "type": "module",

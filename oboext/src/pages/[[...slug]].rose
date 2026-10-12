@@ -1,0 +1,33 @@
+<script>
+  // The single public content entry point (original parity:
+  // app/(site)/[[...slug]]/page.tsx). `slug` arrives as the segment ARRAY;
+  // the "resolve" loader maps it through the permalink gateway to the
+  // entity's canonical view model, so renaming or deleting a prefix in
+
+  //
+  // An unresolvable path throws notFound(): the framework answers with the
+  // app's own 404 route and a real 404 status (the nearest segment's
+  // _notfound.rose, or the root 404.rose). Fixed routes (/search, /archives)
+  // outrank this catch-all through the router's specificity order.
+  let slug = $state([]);
+  let view = $data(async () => {
+    const v = await __rvLoad("resolve", {
+      segments: slug(),
+      page: Number(__rvQs().get("page") || 1),
+    });
+    if (!v) notFound();
+    return v;
+  });
+</script>
+
+{#if view().head}
+<head>{@html view().head}</head>
+{/if}
+{#if view().headTitle}
+<head>
+  <title>{view().headTitle}</title>
+  {@html view().pluginHead ?? ""}
+</head>
+{/if}
+
+{@html view().main}

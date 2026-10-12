@@ -3,9 +3,13 @@
   //
   // Responsibilities:
   //   1. serve sitemap.xml / feed.xml / robots.txt straight from the loaders;
-  //   2. 302 the unique-hit search to its post (original SearchPage parity);
-  //   3. answer real 404s for missing posts/categories/tags - a matched
-  //      dynamic route cannot set 404 from inside its component.
+  //   2. 302 the unique-hit search to its post (original SearchPage parity).
+  //
+  // Missing entities (a post slug that resolves to nothing) are answered by
+  // the root [[...slug]] resolver page itself: it throws notFound(), which
+  // the framework turns into the app's own 404 route with a real 404 status
+  // - no hard-coded prefix list here, so renaming a permalink prefix in the
+  // admin rewires the whole site without touching this file.
   //
   // rosefd 0.2.4 routes by pathname (P0-1): query strings reach the render
   // via $query()/getContext().query, so the old loopback re-entry is gone.
@@ -85,16 +89,6 @@
     if (!reg) return;
 
     const rp = real.pathname;
-
-    // ------------------------------------- trailing-slash normalisation
-    // rosefd's router 404s on "/admin/" (and any "/x/" form) while the
-    // non-trailing variant works. Normalise to the canonical form — this
-    // matches the original app (which never used trailing slashes)
-    // and satisfies the project's hard constraint "/admin/ must 301 -> /admin".
-    // Root "/" is exempt.
-    if (rp.length > 1 && rp.endsWith("/")) {
-      return Response.redirect(new URL(rp.replace(/\/+$/, ""), real.origin), 301);
-    }
 
     // ------------------------------------------------- /admin login wall
     // Whitelist: /admin/login and /admin/setup. First run (no users) sends
@@ -216,39 +210,6 @@
         if (to) return Response.redirect(new URL(to, real.origin), 302);
       }
       return;
-    }
-
-    // -------------------------------------------- missing entities -> real 404
-    const dec = (s) => {
-      try {
-        return decodeURIComponent(s);
-      } catch (e) {
-        return s;
-      }
-    };
-    const missing404 = async () =>
-      new Response(await reg.notFound(ctx), {
-        status: 404,
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
-
-    if (rp.indexOf("/blog/category/") === 0) {
-      const slug = dec(rp.slice("/blog/category/".length)).replace(/\/+$/, "");
-      if (slug && !(await reg.exists.category(slug))) return missing404();
-      return;
-    }
-    if (rp.indexOf("/blog/tag/") === 0) {
-      const slug = dec(rp.slice("/blog/tag/".length)).replace(/\/+$/, "");
-      if (slug && !(await reg.exists.tag(slug))) return missing404();
-      return;
-    }
-    if (rp.indexOf("/blog/") === 0 && rp !== "/blog/") {
-      const slug = dec(rp.slice("/blog/".length)).replace(/\/+$/, "");
-      if (slug && !(await reg.exists.post(slug))) return missing404();
-    }
-    if (rp.indexOf("/pages/") === 0 && rp !== "/pages/") {
-      const slug = dec(rp.slice("/pages/".length)).replace(/\/+$/, "");
-      if (slug && !(await reg.exists.page(slug))) return missing404();
     }
   }
 </script>

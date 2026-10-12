@@ -25,9 +25,9 @@ import {
   relatedPosts,
   type PostView,
 } from "./queries.js";
-import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, pageUrlFor } from "./links.js";
+import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor } from "./links.js";
 import { resolveCommentConfig } from "./comments-config.js";
-import { getPublishedPage, listPublishedPages } from "./pages.js";
+import { getPublishedPage } from "./pages.js";
 import * as R from "./render.js";
 import * as admin from "./admin-loaders.js";
 import { getMenuByLocation } from "./menus.js";
@@ -749,49 +749,6 @@ function escXml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
-const day = (v: Date | string | null | undefined): string | undefined => {
-  if (!v) return undefined;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? undefined : d.toISOString().slice(0, 10);
-};
-
-async function sitemap(ctx: Ctx): Promise<string> {
-  const [{ items }, categories, tags, pageRows, cfg] = await Promise.all([
-    listPosts({ status: "published", limit: 10000, pinned: false }),
-    listCategories(),
-    listTags(),
-    listPublishedPages({ limit: 10000 }),
-    getPermalinkConfig(),
-  ]);
-  const base = ctx.origin;
-  const blogIndex = blogIndexUrlFor(cfg);
-  const urls: string[] = [
-    `<url><loc>${escXml(base)}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
-  ];
-  if (blogIndex !== "/")
-    urls.push(
-      `<url><loc>${escXml(base)}${escXml(blogIndex)}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`,
-    );
-  for (const p of items)
-    urls.push(
-      `<url><loc>${escXml(base)}${escXml(p.url)}</loc>${
-        day(p.updatedAt ?? p.publishedAt) ? `<lastmod>${day(p.updatedAt ?? p.publishedAt)}</lastmod>` : ""
-      }<changefreq>weekly</changefreq><priority>0.8</priority></url>`,
-    );
-  for (const c of categories)
-    urls.push(`<url><loc>${escXml(base)}${escXml(categoryUrlFor(cfg, c))}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>`);
-  for (const t of tags)
-    urls.push(`<url><loc>${escXml(base)}${escXml(tagUrlFor(cfg, t))}</loc><changefreq>weekly</changefreq><priority>0.4</priority></url>`);
-  for (const g of pageRows.items)
-    urls.push(
-      `<url><loc>${escXml(base)}${escXml(pageUrlFor(cfg, g))}</loc>${
-        day(g.updatedAt ?? g.publishedAt) ? `<lastmod>${day(g.updatedAt ?? g.publishedAt)}</lastmod>` : ""
-      }<changefreq>monthly</changefreq><priority>0.6</priority></url>`,
-    );
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join(
-    "\n",
-  )}\n</urlset>`;
-}
 
 async function feed(ctx: Ctx): Promise<string> {
   const settings = await getSettings();
@@ -912,7 +869,7 @@ export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unk
 }
 
 /** Raw document builders for middleware-intercepted XML/txt routes. */
-export const documents = { sitemap, feed, robots };
+export const documents = { feed, robots };
 
 /**
  * Standalone 404 document. The framework renders pages/404.rose only for

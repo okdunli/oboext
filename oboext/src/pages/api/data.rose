@@ -11,6 +11,7 @@
   // Browser-side __rvLoad() GETs this very endpoint; server-side it calls
   // dispatch() directly. One loader map, per-request database reads.
   import { dispatch, documents, searchRedirect, notFoundDocument } from "@server/loaders";
+  import { buildSitemapDocument } from "@server/sitemap";
   import { themeCssContent, serveThemeAsset } from "@server/theme-chrome";
   import { getPost, getCategoryBySlug, getTagBySlug } from "@server/queries";
   import { getPublishedPage } from "@server/pages";
@@ -47,6 +48,13 @@
     },
     uploads: {
       serve: (pathname, method) => serveUpload(pathname, method),
+    },
+    // Hook-based sitemap: buildSitemapDocument runs sitemap.urls +
+    // sitemap.document filters (sitemap-plus and friends extend it), and
+    // answers null for an unclaimed query (?part= / ?kind=) -> the
+    // middleware returns a real 404.
+    sitemap: {
+      document: (request) => buildSitemapDocument(request),
     },
     auth: {
       userFromRequest: (request) => getSessionFromRequest(request),

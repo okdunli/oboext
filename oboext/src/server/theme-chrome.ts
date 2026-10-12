@@ -658,7 +658,13 @@ function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
     lis +
     `</ul></div></div>` +
     `<div class="menu-funcs items-center">` +
-    `<span class="self-center"><form action="/search" method="get" class="nav-search" role="search"><button type="submit" aria-label="搜索">&#9210;</button><input name="q" placeholder="搜索…" aria-label="搜索"></form></span>` +
+    `<button type="button" class="theme-toggle cursor-hand" aria-label="切换深色模式" title="切换深色 / 浅色">` +
+      `<span class="theme-toggle-ic ic-moon">${bmixIc("moon", 15)}</span>` +
+      `<span class="theme-toggle-ic ic-sun">${bmixIc("sun", 15)}</span>` +
+    `</button>` +
+    `<span class="self-center sf-search">` +
+      `<button type="button" class="nav-search cursor-hand" aria-label="搜索" aria-expanded="false">${bmixIc("search", 16)}</button>` +
+    `</span>` +
     `</div>` +
     `</div></div></div>`;
 }
@@ -709,6 +715,12 @@ function bmixSplitTitle(raw: string): { title1: string; title2: string } {
 }
 
 function bmixIc(icon: string, size: number, marginRight = 6): string {
+  if (icon === "sun") {
+    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:${marginRight}px"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+  }
+  if (icon === "moon") {
+    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:${marginRight}px"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>`;
+  }
   const paths: Record<string, string> = {
     bookmark: "M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z",
     heart: "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z",
@@ -835,6 +847,27 @@ function bmRankIcon(key: string): string {
   return key === "most_likes" ? "heart" : key === "most_reads" ? "eye" : "comments";
 }
 
+function bmRankPane(
+  boards: any,
+  key: string,
+  labels: Record<string, string>,
+  GOLD: string,
+  SILVER: string,
+  BRONZE: string,
+): string {
+  const board = (boards as any)[key] || [];
+  const first = board[0];
+  const rest = board.slice(1, 3);
+  const icon = bmRankIcon(key);
+  const firstCard = first
+    ? `<div class="place-wrapper"><a href="${esc(first.url)}" class="first-place active"><span class="thumbnail-wrapper">${first.thumbnail ? `<img class="thumbnail r-full" src="${esc(first.thumbnail)}" alt="">` : `<span class="thumbnail r-full rk-noimg"></span>`}</span><span class="first-info"><span class="main-title">${esc(first.title)}</span><span class="metas"><span>${bmixIc("heart", 11)} ${first.likes}</span><span>${bmixIc("comments", 11)} ${first.comments}</span><span>${bmixIc("eye", 11)} ${first.views}</span></span></span><img class="place place-gold" src="${esc(GOLD)}" alt=""></a></div>`
+    : "";
+  const others = rest
+    .map((p: RankPost, g: number) => `<div class="place-wrapper"><a href="${esc(p.url)}" class="other-place"><img class="place" src="${esc(g === 0 ? SILVER : BRONZE)}" alt=""><span class="other-title">${esc(p.title)}</span><span class="other-meta">${bmixIc(icon, 11)} ${key === "most_likes" ? p.likes : key === "most_reads" ? p.views : p.comments}</span></a></div>`)
+    .join("");
+  return `<div class="rankings">${firstCard}${others}</div>`;
+}
+
 function bmixRankings(
   boards: { most_comments: RankPost[]; most_likes: RankPost[]; most_reads: RankPost[] } | null | undefined,
   tabs: { labels: Record<string, string>; order: string[]; defaultTab: string } | undefined,
@@ -845,24 +878,18 @@ function bmixRankings(
   const order = tabs?.order && tabs.order.length === 3 ? tabs.order : ["most_comments", "most_likes", "most_reads"];
   const labels = tabs?.labels || {};
   const DEF: Record<string, string> = { most_comments: "热评文章", most_likes: "大家喜欢", most_reads: "阅读最多" };
-  const tabsHtml = order
-    .map((k) => `<div class="tab${k === order[0] ? " active" : ""}">${bmixIc(bmRankIcon(k), 14)}${esc(labels[k] || DEF[k] || k)}</div>`)
-    .join("");
-  const board = (boards as any)[order[0]] || [];
-  const first = board[0];
-  const rest = board.slice(1, 3);
   const GOLD = "/theme-assets/bluemix/rankings/873a161a.svg";
   const SILVER = "/theme-assets/bluemix/rankings/b31ba85e.svg";
   const BRONZE = "/theme-assets/bluemix/rankings/661ec968.svg";
-  const firstCard = first
-    ? `<div class="place-wrapper"><a href="${esc(first.url)}" class="first-place active"><span class="thumbnail-wrapper">${first.thumbnail ? `<img class="thumbnail r-full" src="${esc(first.thumbnail)}" alt="">` : `<span class="thumbnail r-full rk-noimg"></span>`}</span><span class="first-info"><span class="main-title">${esc(first.title)}</span><span class="metas"><span>${bmixIc("heart", 11)} ${first.likes}</span><span>${bmixIc("comments", 11)} ${first.comments}</span><span>${bmixIc("eye", 11)} ${first.views}</span></span></span><img class="place place-gold" src="${esc(GOLD)}" alt=""></a></div>`
-    : "";
-  const others = rest
-    .map((p: RankPost, g: number) => `<div class="place-wrapper"><a href="${esc(p.url)}" class="other-place"><img class="place" src="${esc(g === 0 ? SILVER : BRONZE)}" alt=""><span class="other-title">${esc(p.title)}</span><span class="other-meta">${bmixIc(bmRankIcon(order[0]), 11)} ${order[0] === "most_likes" ? p.likes : order[0] === "most_reads" ? p.views : p.comments}</span></a></div>`)
+  const tabsHtml = order
+    .map((k) => `<div class="tab${k === order[0] ? " active" : ""}" data-tab="${k}">${bmixIc(bmRankIcon(k), 14)}${esc(labels[k] || DEF[k] || k)}</div>`)
+    .join("");
+  const panes = order
+    .map((k) => `<div class="rankings-pane${k === order[0] ? " active" : ""}" data-tab="${k}">${bmRankPane(boards, k, labels, GOLD, SILVER, BRONZE)}</div>`)
     .join("");
   return `<div class="widget-rankings mb-20"><div class="cat-title flex items-center extra-large justify-center"><div class="custom-icon mr-5">${bmixIc("ranking-star", 15)}</div><div class="content text-primary-gray text-bulge-primary-gray">排行榜</div></div>` +
     `<div class="rankings-wrapper relative"><div class="rankings-tabs"><div class="rankings-tab-row"><div class="tab-anchor" style="transform:translate(0%)"></div>${tabsHtml}</div></div>` +
-    `<div class="card-container"><div class="rankings">${firstCard}${others}</div></div></div></div>`;
+    `<div class="card-container"><div class="rankings-panes">${panes}</div></div></div></div>`;
 }
 
 function bmixHomeArticleRow(p: PostView): string {

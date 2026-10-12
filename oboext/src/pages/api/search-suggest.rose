@@ -1,0 +1,36 @@
+<script>
+  // /api/search-suggest?q=KEYWORD
+  // Public, unauthenticated live search suggestions for the bluemix nav
+  // search popover. Returns { items: [{id,title,url,thumbnail}], total }.
+  import { listPosts } from "@server/queries";
+
+  function json(data, status = 200) {
+    return new Response(JSON.stringify(data), {
+      status,
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    });
+  }
+
+  export async function GET(request) {
+    const q = (new URL(request.url).searchParams.get("q") || "").trim();
+    if (!q) return json({ items: [], total: 0 });
+    try {
+      const { items, total } = await listPosts({
+        status: "published",
+        search: q,
+        limit: 5,
+      });
+      return json({
+        items: (items || []).map((p) => ({
+          id: p.id,
+          title: p.title,
+          url: p.url,
+          thumbnail: p.featuredImage || null,
+        })),
+        total: total || 0,
+      });
+    } catch (e) {
+      return json({ items: [], total: 0 }, 500);
+    }
+  }
+</script>

@@ -149,6 +149,21 @@ function themeCssHref(slug: string): string {
   return `/theme-style/${slug}?v=${v}`;
 }
 
+/**
+ * /public/<file> with an mtime cache-buster. The theme JS files are served
+ * straight off disk, so during development an edit + reload can silently keep
+ * running the previous copy (the browser has no reason to revalidate). Stamping
+ * the mtime makes every edit take effect immediately.
+ */
+export function publicAssetHref(file: string): string {
+  try {
+    const st = fs.statSync(path.join(process.cwd(), "oboext", "public", file));
+    return `/public/${file}?v=${Math.round(st.mtimeMs)}`;
+  } catch {
+    return `/public/${file}`;
+  }
+}
+
 export function themeCssContent(slug: string): string {
   if (slug === "skyscraper") return "";
   const main = readThemeCss(slug, slug + ".css");

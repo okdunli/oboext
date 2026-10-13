@@ -39,13 +39,8 @@ import type { SessionUser } from "./auth.js";
 import { hashPassword } from "./auth.js";
 import { HOOKS, applyAsyncFilters, doAction } from "./hooks.js";
 
-export class ServiceError extends Error {
-  status: number;
-  constructor(message: string, status = 400) {
-    super(message);
-    this.status = status;
-  }
-}
+export { ServiceError } from "./errors.js";
+import { ServiceError } from "./errors.js";
 
 type Capability =
   | "content:read"

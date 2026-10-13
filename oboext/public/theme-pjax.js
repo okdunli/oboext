@@ -24,30 +24,54 @@
   const LEAVE_MS = 300;
   const OVERLAY_MIN_MS = 450;
   const INITIAL_MIN_MS = 420;
-  const isBluemix = !!document.querySelector(".th-bluemix");
 
-  const frame = isBluemix ? document.querySelector("[data-bmx-frame]") : null;
-  const overlay = isBluemix ? document.querySelector(".full-loading") : null;
+  let isBluemix = false;
+  let frame = null;
+  let overlay = null;
+  function resolveRefs() {
+    if (!isBluemix) isBluemix = !!document.querySelector(".th-bluemix");
+    if (!frame) frame = document.querySelector("[data-bmx-frame]");
+    if (!overlay) overlay = document.querySelector(".full-loading");
+  }
+  resolveRefs();
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function frameCls(cls) {
+    resolveRefs();
     if (!frame) return;
     frame.classList.remove("pf-init", "pf-leave", "pf-enter");
     if (cls) frame.classList.add(cls);
   }
   function overlayShow(on) {
+    resolveRefs();
     if (overlay) overlay.classList.toggle("show", !!on);
   }
   function navProgress(state) {
+    resolveRefs();
     if (!isBluemix) return;
     document.body.classList.toggle("bmx-nav-loading", state === "start");
     document.body.classList.toggle("bmx-nav-done", state === "done");
   }
 
-  if (isBluemix) {
+  let initialDone = false;
+  function initialPaint() {
+    if (initialDone) return;
+    resolveRefs();
+    if (!isBluemix || !frame) return false;
+    initialDone = true;
     requestAnimationFrame(() => {
       setTimeout(() => frameCls("pf-enter"), INITIAL_MIN_MS);
     });
+    return true;
+  }
+  if (!initialPaint()) {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", initialPaint);
+    }
+    let tries = 0;
+    const iv = setInterval(() => {
+      if (initialPaint() || ++tries > 40) clearInterval(iv);
+    }, 50);
   }
 
   function eligible(a) {
@@ -85,6 +109,7 @@
   }
 
   async function go(raw, push) {
+    resolveRefs();
     const s = ++seq;
     const want = new URL(raw, location.href);
     const t0 = Date.now();

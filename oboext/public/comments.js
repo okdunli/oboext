@@ -18,6 +18,14 @@
     if (label) label.textContent = parentId ? "回复评论" : "发表评论";
   }
 
+  function bringFormIntoView(form) {
+    var box = form.querySelector(".input") || form;
+    try { box.scrollIntoView({ behavior: "smooth", block: "center" }); }
+    catch (e) { box.scrollIntoView(); }
+    var ta = form.querySelector("textarea");
+    if (ta) ta.focus({ preventScroll: true });
+  }
+
   async function submitForm(form) {
     var ta = form.querySelector('textarea[name="content"]');
     var content = ta ? ta.value.trim() : "";
@@ -268,18 +276,18 @@
   function onClick(e) {
     var reply = e.target.closest && e.target.closest("[data-comment-reply]");
     if (reply) {
-      var formR = reply.closest("form");
+      var formR = reply.closest("form[data-comment-form]") ||
+        document.querySelector("form[data-comment-form]");
       if (formR) {
         setReply(formR, reply.getAttribute("data-comment-reply"));
-        var taR = formR.querySelector("textarea");
-        if (taR) taR.focus();
+        bringFormIntoView(formR);
       }
       return;
     }
     var cancel = e.target.closest && e.target.closest("[data-comment-cancel]");
     if (cancel) {
       var formC = cancel.closest("form");
-      if (formC) { setReply(formC, null); var taC = formC.querySelector("textarea"); if (taC) taC.focus(); }
+      if (formC) { setReply(formC, null); bringFormIntoView(formC); }
       return;
     }
     var emoji = e.target.closest && e.target.closest("[data-emoji]");

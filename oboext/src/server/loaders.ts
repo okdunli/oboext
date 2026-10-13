@@ -148,6 +148,7 @@ async function chromeData(pathname: string) {
     sideMenu,
     themeSlug,
     renderConfig,
+    themeSettings,
   ] = await Promise.all([
     getSettings(),
     listTags(),
@@ -157,6 +158,7 @@ async function chromeData(pathname: string) {
     getMenuByLocation("sidebar"),
     getActiveThemeSlug(),
     getActiveThemeRenderConfig(),
+    getActiveThemeSettings(),
   ]);
   const [sideWidgets, footerWidgets] = await Promise.all([
     getAreaWidgets(themeSlug, "sidebar"),
@@ -195,7 +197,11 @@ async function chromeData(pathname: string) {
 
   const footerMenu = await getMenuByLocation("footer");
   const footerHtml = tc.footer(
-    { ...settings, footerMenu: (footerMenu?.items ?? []) as MenuItem[] },
+    {
+      ...settings,
+      footerContainerAlign: (themeSettings as Record<string, unknown>).footerContainerAlign,
+      footerMenu: (footerMenu?.items ?? []) as MenuItem[],
+    },
     R.widgetAreaHtml(footerWidgets, "sk-footer-widgets"),
   );
   return {

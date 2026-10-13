@@ -113,7 +113,9 @@
     } catch {
       return null;
     }
-    if (!res.ok || (res.headers.get("content-type") || "").indexOf("text/html") < 0) return null;
+    const ctype = res.headers.get("content-type") || "";
+    if (ctype.indexOf("text/html") < 0) return null;
+    if (!res.ok && res.status !== 404) return null;
     const html = await res.text();
     const doc = new DOMParser().parseFromString(html, "text/html");
     const next = doc.getElementById("sk-main");

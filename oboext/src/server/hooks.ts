@@ -142,6 +142,11 @@ export function listHooks(): {
   return { actions: map(registry().actions), filters: map(registry().filters) };
 }
 
+/** Does any registration on `hook` belong to `owner`? (admin sidebar panels) */
+export function hasHookOwner(hook: string, owner: string): boolean {
+  return (registry().filters.get(hook) ?? []).some((r) => r.owner === owner);
+}
+
 /**
  * Well-known core hooks. Documented here so plugin authors have one canonical
  * list, and so renaming one is a compile error rather than a silent no-op.
@@ -205,4 +210,11 @@ export const HOOKS = {
   /** async filter — ({ slug, path, method, request, response }) plugin HTTP
    * gateway at /api/plugin/<slug>/<...path>. */
   apiRequest: "api.request",
+  /** filter — ({ slug, html, scriptSrc }) a plugin's custom admin panel at
+   * /admin/plugins/<slug>: server-rendered body + the URL of an EXTERNAL
+   * script (the admin document's strict CSP allows 'self' scripts only, so
+   * panels ship JS as a file served from /plugin-assets/<slug>/). The host
+   * route guards existence/activation; the first filter whose slug matches
+   * owns the panel (rosezm idiom: plain HTML + delegated JS). */
+  adminPanel: "admin.panel",
 } as const;

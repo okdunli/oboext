@@ -85,6 +85,13 @@ export type ListParts = {
   hrefFor: (p: number) => string;
   showPager?: boolean;
   extra?: string;
+  hero?: PostView[];
+  cats?: TaxRef[];
+  blogIndex?: string;
+  bannerMax?: number;
+  activeHref?: string;
+
+  variant?: "blog" | "category" | "term";
 };
 
 export type PostPageParts = {
@@ -99,6 +106,8 @@ export type PostPageParts = {
   metaHtml: string;
   tagsHtml: string;
   shareHtml: string;
+
+  blogIndex?: string;
 };
 
 export type PagePageParts = {
@@ -240,9 +249,9 @@ const skyscraperChrome: ThemeChrome = {
       extra: parts.extra,
     }),
   postPage: (parts) =>
-    R.postPage(parts.post, parts.related, parts.commentsHtml, []),
+    R.postPage(parts.post, parts.related, parts.commentsHtml, [], parts.bodyHtml, parts.blogIndex),
   pagePage: (parts) =>
-    R.pagePage(parts.page, parts.recent, parts.commentsHtml),
+    R.pagePage(parts.page, parts.recent, parts.commentsHtml, parts.bodyHtml),
 };
 
 const defaultBodyFix = `body{background:var(--bg,#09090b);color:var(--text,#f4f4f5)}`;
@@ -378,7 +387,7 @@ function defaultPostPage(parts: PostPageParts): string {
   const meta = parts.metaHtml || "";
   const tags = parts.tagsHtml || "";
   const crumb = `<nav class="mb-6 flex items-center gap-2 text-xs text-zinc-500">` +
-    `<a href="/" class="hover:text-[var(--accent)]">首页</a><span>›</span><a href="/blog" class="hover:text-[var(--accent)]">文章</a>` +
+    `<a href="/" class="hover:text-[var(--accent)]">首页</a><span>›</span><a href="${esc(parts.blogIndex || "/blog")}" class="hover:text-[var(--accent)]">文章</a>` +
     ((p.categories || [])[0] ? `<span>›</span><a href="${esc((p.categories as any)[0].url || "#")}" class="hover:text-[var(--accent)]">${esc((p.categories as any)[0].name)}</a>` : "") +
     `<span>›</span><span class="text-zinc-300">${esc(p.title)}</span></nav>`;
   return `<article class="mx-auto max-w-3xl">` +
@@ -625,6 +634,24 @@ const codemanChrome: ThemeChrome = {
   pagePage: cmPagePage,
 };
 
+function bmixNavActive(settings: Record<string, any>, url: string): boolean {
+  let path = String(settings.__pathname ?? "/");
+  const base = String(settings.__basePath ?? "").replace(/\/+$/, "");
+  if (base && path.indexOf(base) === 0) path = path.slice(base.length) || "/";
+  if (!path.startsWith("/")) path = "/" + path;
+  path = path.replace(/\/+$/, "") || "/";
+  let href = String(url || "/").trim();
+  if (!href) return false;
+
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("//") || href.startsWith("#")) return false;
+  if (!href.startsWith("/")) href = "/" + href;
+  const q = href.indexOf("?");
+  if (q >= 0) href = href.slice(0, q);
+  href = href.replace(/\/+$/, "") || "/";
+  if (href === "/") return path === "/";
+  return path === href || path.indexOf(href + "/") === 0;
+}
+
 function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
   const logo = settings.logoUrl
@@ -641,8 +668,12 @@ function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
             )
             .join("")}</ul>`
         : "";
-      return `<li data-nav-index="${i}"${kids ? ' class="bm-has-sub"' : ""}>` +
-        `<a href="${esc(it.url)}"${it.target ? ` target="${esc(it.target)}" rel="noopener noreferrer"` : ""} class="bm-nav-link">${esc(it.label)}</a>${kids}</li>`;
+      const kidsActive = (it.children || []).some((c) => bmixNavActive(settings, c.url));
+      const selfActive = bmixNavActive(settings, it.url);
+      const active = selfActive || kidsActive;
+      const cls = [kids ? "bm-has-sub" : "", active ? "is-active" : ""].filter(Boolean).join(" ");
+      return `<li data-nav-index="${i}"${cls ? ` class="${cls}"` : ""}>` +
+        `<a href="${esc(it.url)}"${it.target ? ` target="${esc(it.target)}" rel="noopener noreferrer"` : ""} class="bm-nav-link"${active ? ' aria-current="page"' : ""}>${esc(it.label)}</a>${kids}</li>`;
     })
     .join("");
   return `<div class="nav-top">` +
@@ -977,11 +1008,33 @@ function bmixHome(parts: HomeParts): string {
 function bmixListPage(parts: ListParts): string {
   const cards = parts.items.map((p, i) => bmixPostCard(p, i)).join("");
   const pager = parts.showPager !== false ? bmixPager(parts.page, parts.totalPages, parts.hrefFor) : "";
-  return `<div class="home"><div class="container-np">` +
-    bmixSectionTitle(parts.title) +
+  const isBlog = parts.variant === "blog";
+  const isCategory = parts.variant === "category";
+  const blogIndex = parts.blogIndex || "/blog";
+  const catNav = bmixCatNav(parts.activeHref || (isBlog ? blogIndex : "/"), parts.cats || [], blogIndex);
+
+  const hero = (parts.hero || []).filter((p) => p && p.url);
+  const showBanner = hero.length > 0;
+  const banner = showBanner ? bmixBanner(hero, parts.bannerMax || 5) : "";
+
+  const catTitle =
+    `<div class="cat-title flex items-center large">` +
+    `<div class="icon flex default mr-5 ml-2"></div>` +
+    `<div class="content text-primary-gray text-bulge-primary-gray">${esc(parts.title)}</div>` +
+    `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span></div></div>`;
+
+  const gridCls = isBlog || isCategory ? "blog-grid" : "list-grid";
+  const inner =
+    `<div class="list-switch-anim"><div class="${gridCls}">${cards}</div>${pager}</div>`;
+
+  return `<div class="list">` +
+    banner +
+    `<div class="list-content">` +
+    catNav +
+    catTitle +
     (parts.sub ? `<p class="text-primary-gray" style="padding:0 2px">${esc(parts.sub)}</p>` : "") +
     (parts.extra || "") +
-    `<div class="list-grid">${cards}</div>${pager}` +
+    inner +
     `</div></div>`;
 }
 
@@ -1031,28 +1084,28 @@ function bmixPostToc(toc: { id: string; text: string; level: number }[]): string
 }
 
 /** Sidebar article-section tabs: bookmark (TOC + related) by default, bars
- *  switches to popular/random. Both panes render server-side; theme-bluemix.js
+ *  switches to popular/random. Both panes render server-side; 
  *  toggles visibility with a light slide-in animation. */
 function bmixPostSidebar(toc: { id: string; text: string; level: number }[], post: PostView, related: PostView[], popular: PostView[], randomPool: PostView[]): string {
   const busy = new Set([...related.map((p) => p.id), ...popular.map((p) => p.id)]);
   const random: PostView[] = [];
   for (const p of randomPool) { if (random.length >= 4) break; if (!busy.has(p.id)) random.push(p); }
   for (const p of randomPool) { if (random.length >= 4) break; if (!random.some((r) => r.id === p.id)) random.push(p); }
-  const bookmarkPane = `<div class="bmx-tab-pane bmx-tab-pane--active" data-bmx-tab-pane="bookmark">` +
-    bmixPostToc(toc) + bmixArticleGroup("相关文章", related, "暂无其它文章") + `</div>`;
-  const barsPane = `<div class="bmx-tab-pane" data-bmx-tab-pane="bars" style="display:none">` +
-    bmixArticleGroup("大家喜欢", popular) + bmixArticleGroup("随机文章", random) + `</div>`;
+  const paneBookmark = bmixPostToc(toc) + bmixArticleGroup("相关文章", related, "暂无其它文章");
+  const paneBars = bmixArticleGroup("大家喜欢", popular, "暂无其它文章") + bmixArticleGroup("随机文章", random, "暂无其它文章");
+  const paneJson = JSON.stringify({ bookmark: paneBookmark, bars: paneBars }).replace(/</g, "\\u003c");
   return `<div class="sidebar-titles"><ul class="grid cols-2">` +
-    `<li class="anchor" aria-hidden="true"></li>` +
-    `<li class="title" data-bmx-tab="bars"><a href="#" aria-label="大家喜欢" data-role="tab">${bmixIc("bars-staggered", 12, 0)}</a></li>` +
-    `<li class="title active" data-bmx-tab="bookmark"><a href="#" aria-label="目录·相关" data-role="tab">${bmixIc("bookmark", 12, 0)}</a></li>` +
+    `<li class="anchor" aria-hidden="true" style="transform:translateX(100%)"></li>` +
+    `<li class="title" data-bmx-tab="bars"><a href="#" aria-label="大家喜欢" role="link" data-role="tab">${bmixIc("bars-staggered", 12, 0)}</a></li>` +
+    `<li class="title active" data-bmx-tab="bookmark"><a href="#" aria-label="目录·相关" role="link" data-role="tab">${bmixIc("bookmark", 12, 0)}</a></li>` +
     `</ul></div>` +
     `<div class="panel"><div class="wrapper">` +
-    `<aside class="bmx-blocks bmx-tab-stage">${bookmarkPane}${barsPane}</aside>` +
-    `</div></div>`;
+    `<aside class="bmx-blocks bmx-tab-stage" data-bmx-panes="${esc(paneJson)}" data-bmx-shown="bookmark">` +
+    `<div class="bmx-tab-pane" data-bmx-pane="bookmark">${paneBookmark}</div>` +
+    `</aside></div></div>`;
 }
 
-/** bluemix article page — coverflow hero + two-column (sidebar / main). */
+
 function bmixPostPage(parts: PostPageParts): string {
   const p = parts.post;
   const { html: bodyHtml, toc } = bmixHeadings(parts.bodyHtml, p.slug || "post");
@@ -1156,8 +1209,13 @@ const bluemixChrome: ThemeChrome = {
   bodyFix: () => `body{background:#e5e9ef;color:var(--text-color-2,#324057)}`,
   headExtra: () => `<style id="rv-theme-bluemix-vars">${BLUEMIX_VARS}</style>`,
   nav: (settings, items) => bmixNav(settings, items),
-  bodyOpen: (settings, items) => `<div class="th-bluemix">` + bmixNav(settings, items) + `<main id="sk-main">`,
-  bodyClose: (settings, footerHtml) => `</main>${footerHtml}</div>`,
+  bodyOpen: (settings, items) =>
+    `<div class="th-bluemix">` + bmixNav(settings, items) +
+    `<main id="sk-main"><div class="pf-route-frame pf-init" data-bmx-frame>`,
+  bodyClose: (settings, footerHtml) =>
+    `</div></main>` +
+    `<div class="full-loading"><div class="lines"><div></div><div></div><div></div><div></div><div></div></div></div>` +
+    footerHtml + `</div>`,
   aside: () => "",
   footer: (settings, widgetsHtml) => bmixFooter(settings, widgetsHtml),
   home: bmixHome,

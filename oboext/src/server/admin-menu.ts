@@ -1,11 +1,24 @@
-
-
+/**
+ * Admin sidebar menu model + per-admin navigation preferences.
+ *
+ * Port of lib/admin-menu.ts. The sidebar's single data source is
+ * buildAdminMenuGroups(): the core groups for screens that exist PLUS the
+ * plugin/theme hook entries (admin.menu filter, and an automatic entry for
+ * every enabled plugin that registers an admin.panel). Hook leaves can be
+ * hidden but never chosen as the home page; sections let a plugin promote
+ * its entry to a top-level group.
+ *
+ * Preferences live in the options KV (adminMenuHidden / adminHomePath) and are
+ * read per request - no cross-response cache.
+ */
 import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";
 import { ServiceError } from "./admin.js";
 import { admIcon } from "./icons.js";
-import type { Role } from "./auth.js";
+import type { Role } from "./schema.js";
+import { applyAsyncFilters, HOOKS, hasHookOwner } from "./hooks.js";
+import { ensurePluginsLoaded, listPlugins } from "./plugins.js";
 
 export const ADMIN_HOME_DEFAULT = "/admin";
 const OPTION_HIDDEN = "adminMenuHidden";
@@ -96,10 +109,137 @@ function roleAllows(role: Role, x: { adminOnly?: boolean; superOnly?: boolean })
   return true;
 }
 
-export function buildAdminMenuAll(): MenuGroup[] {
+/** Serializable sidebar entry added via the `admin.menu` hook (port of
+ *  lib/admin-extensions.ts AdminMenuItem; icons are kebab names rendered as
+ *  CSS-mask SVGs, never components). */
+export type AdminMenuItem = {
+  href: string;
+  label: string;
+  glyph?: string;
+  exact?: boolean;
+  external?: boolean;
+  adminOnly?: boolean;
+  superOnly?: boolean;
+};
+
+/** A plugin/theme may promote its entries to a top-level group. */
+export type AdminMenuSection = {
+  section: string;
+  label: string;
+  glyph?: string;
+  adminOnly?: boolean;
+  superOnly?: boolean;
+  items: AdminMenuItem[];
+};
+
+export type AdminMenuEntry = AdminMenuItem | AdminMenuSection;
+
+export function isAdminMenuSection(entry: AdminMenuEntry): entry is AdminMenuSection {
+  return (
+    typeof (entry as AdminMenuSection)?.section === "string" &&
+    Array.isArray((entry as AdminMenuSection).items)
+  );
+}
+
+export type AdminMenuExtras = {
+
+  pluginNav: AdminMenuItem[];
+  /** Enabled plugins shipping an admin panel get an automatic entry. */
+  pluginPanels: { slug: string; name: string }[];
+  /** Hook-claimed top-level groups (same section id merges). */
+  pluginSections: AdminMenuSection[];
+};
+
+/**
+ * Collect plugin/theme menu contributions (original parity:
+ * collectAdminMenuExtras). Runs after ensurePluginsLoaded, so the enabled
+ * set's filters are registered; a plugin "ships a panel" when it registered
+ * an admin.panel filter (owner-scoped, so disabling removes it).
+ */
+export async function collectAdminMenuExtras(): Promise<AdminMenuExtras> {
+  await ensurePluginsLoaded();
+  const [{ items }, pluginList] = await Promise.all([
+    applyAsyncFilters(HOOKS.adminMenu, { items: [] as AdminMenuEntry[] }),
+    listPlugins(),
+  ]);
+  const pluginPanels = pluginList
+    .filter((p) => p.enabled && hasHookOwner(HOOKS.adminPanel, p.slug))
+    .map((p) => ({ slug: p.slug, name: p.name }));
+
+  const pluginNav: AdminMenuItem[] = [];
+  const sectionMap = new Map<string, AdminMenuSection>();
+  for (const entry of items) {
+    if (isAdminMenuSection(entry)) {
+      const existing = sectionMap.get(entry.section);
+      if (existing) existing.items.push(...entry.items);
+      else sectionMap.set(entry.section, { ...entry, items: [...entry.items] });
+    } else {
+      pluginNav.push(entry);
+    }
+  }
+  return { pluginNav, pluginPanels, pluginSections: [...sectionMap.values()] };
+}
+
+const EMPTY_EXTRAS: AdminMenuExtras = { pluginNav: [], pluginPanels: [], pluginSections: [] };
+
+const hookLeaf = (item: AdminMenuItem): MenuLeaf => ({
+  href: item.href,
+  label: item.label,
+  ...(item.glyph ? { glyph: item.glyph } : {}),
+  ...(item.exact ? { exact: true } : {}),
+  external: item.external ?? /^https?:\/\//i.test(item.href),
+  ...(item.adminOnly ? { adminOnly: true } : {}),
+  ...(item.superOnly ? { superOnly: true } : {}),
+  hook: true,
+});
+
+/**
+ * The sidebar's single data source: core groups + plugin panels + hook
+ * entries + hook-claimed sections, in display order (original parity:
+ * buildAdminMenuGroups).
+ */
+export function buildAdminMenuGroups(extras: AdminMenuExtras = EMPTY_EXTRAS): MenuGroup[] {
+  const { pluginNav, pluginPanels, pluginSections } = extras;
+  const panelHrefs = new Set(pluginPanels.map((p) => `/admin/plugins/${p.slug}`));
+  const seen = new Set<string>();
+  const dedupe = (item: AdminMenuItem): MenuLeaf | null => {
+    if (panelHrefs.has(item.href) || seen.has(item.href)) return null;
+    seen.add(item.href);
+    return hookLeaf(item);
+  };
+  const sectionToGroup = (s: AdminMenuSection): MenuGroup => ({
+    id: `sec:${s.section}`,
+    label: s.label,
+    ...(s.glyph ? { glyph: s.glyph } : {}),
+    ...(s.adminOnly ? { adminOnly: true } : {}),
+    ...(s.superOnly ? { superOnly: true } : {}),
+    children: s.items.map(dedupe).filter((l): l is MenuLeaf => l !== null),
+  });
+
+  return [
+    ...CORE_GROUPS.slice(0, 2),
+    {
+      ...CORE_GROUPS[2],
+      children: [
+        ...pluginPanels.map<MenuLeaf>((p) => ({
+          href: `/admin/plugins/${p.slug}`,
+          label: p.name,
+          glyph: "plug",
+          hook: true,
+        })),
+        ...pluginNav.map(dedupe).filter((l): l is MenuLeaf => l !== null),
+        ...CORE_GROUPS[2].children,
+      ],
+    },
+    ...pluginSections.map(sectionToGroup),
+    ...CORE_GROUPS.slice(3),
+  ];
+}
+
+export function buildAdminMenuAll(extras?: AdminMenuExtras): MenuGroup[] {
   return [
     { id: "top", label: "顶部入口", glyph: "layout-dashboard", children: [DASHBOARD_LEAF] },
-    ...CORE_GROUPS,
+    ...buildAdminMenuGroups(extras),
   ];
 }
 
@@ -107,10 +247,11 @@ export function buildAdminMenuAll(): MenuGroup[] {
 export function filterGroupsForShell(
   role: Role,
   hiddenHrefs: string[],
+  extras?: AdminMenuExtras,
 ): MenuGroup[] {
   const hidden = new Set(hiddenHrefs);
   const out: MenuGroup[] = [];
-  for (const g of CORE_GROUPS) {
+  for (const g of buildAdminMenuGroups(extras)) {
     if (!roleAllows(role, g)) continue;
     const children = g.children.filter(
       (l) => roleAllows(role, l) && !hidden.has(l.href),
@@ -150,13 +291,16 @@ export async function getAdminMenuPrefs(): Promise<MenuPrefs> {
   };
 }
 
-export async function saveAdminMenuPrefs(input: {
-  hiddenHrefs: unknown;
-  homePath: unknown;
-}): Promise<MenuPrefs> {
+export async function saveAdminMenuPrefs(
+  input: {
+    hiddenHrefs: unknown;
+    homePath: unknown;
+  },
+  extras?: AdminMenuExtras,
+): Promise<MenuPrefs> {
   const leaves = [
     DASHBOARD_LEAF,
-    ...buildAdminMenuAll().flatMap((g) => g.children),
+    ...buildAdminMenuAll(extras).flatMap((g) => g.children),
   ];
   const byHref = new Map(leaves.map((l) => [l.href, l]));
 
@@ -214,6 +358,7 @@ export function shellNav(
   role: Role,
   pathname: string,
   prefs: MenuPrefs,
+  extras?: AdminMenuExtras,
 ): NavItem[] {
   const hidden = new Set(prefs.hiddenHrefs);
   const out: NavItem[] = [];
@@ -234,7 +379,7 @@ export function shellNav(
     });
   }
 
-  for (const g of filterGroupsForShell(role, prefs.hiddenHrefs)) {
+  for (const g of filterGroupsForShell(role, prefs.hiddenHrefs, extras)) {
     out.push({
       kind: "gstart",
       id: g.id,
@@ -284,8 +429,9 @@ export function shellNavHtml(
   role: Role,
   pathname: string,
   prefs: MenuPrefs,
+  extras?: AdminMenuExtras,
 ): string {
-  const items = shellNav(role, pathname, prefs);
+  const items = shellNav(role, pathname, prefs, extras);
   const caret =
     '<span class="adm-nav-caret adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-down.svg)"></span>';
   let html = "";

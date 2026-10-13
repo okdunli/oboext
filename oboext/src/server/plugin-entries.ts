@@ -3,6 +3,7 @@ export const PLUGIN_ENTRIES: Record<string, () => Promise<any>> = {
   "code-copy": () => import("../../../plugins/code-copy/index"),
   "comment-captcha": () => import("../../../plugins/comment-captcha/index"),
   "comment-guard": () => import("../../../plugins/comment-guard/index"),
+  "comment-mail-notify": () => import("../../../plugins/comment-mail-notify/index"),
   "copy-copyright": () => import("../../../plugins/copy-copyright/index"),
   "external-links": () => import("../../../plugins/external-links/index"),
   "friend-links": () => import("../../../plugins/friend-links/index"),

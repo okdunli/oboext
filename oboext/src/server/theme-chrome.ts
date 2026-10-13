@@ -85,6 +85,7 @@ export type ListParts = {
   hrefFor: (p: number) => string;
   showPager?: boolean;
   extra?: string;
+  /** bluemix list page extras (ignored by the other themes) */
   hero?: PostView[];
   cats?: TaxRef[];
   blogIndex?: string;
@@ -1084,8 +1085,30 @@ function bmixPostToc(toc: { id: string; text: string; level: number }[]): string
 }
 
 /** Sidebar article-section tabs: bookmark (TOC + related) by default, bars
- *  switches to popular/random. Both panes render server-side; 
+ *  switches to popular/random. Both panes render server-side; theme-bluemix.js
  *  toggles visibility with a light slide-in animation. */
+function bmixCommentHead(count: number): string {
+  return `<div class="cat-title flex items-center large"><div class="custom-icon mr-5">${bmixIc("comments", 14)}</div>` +
+    `<div class="content text-primary-gray text-bulge-primary-gray">${count} 条回应</div>` +
+    `<div class="line flex-grow ml-8 flex items-center justify-end"></div></div>`;
+}
+
+function bmixThemeComments(html: string): string {
+  if (!html) return "";
+  let out = html;
+  out = out.replace(/<section class="sk-section sk-comments">/g, `<section class="bmx-blocks bmx-comments">`);
+  out = out.replace(/<section class="sk-section">/g, `<section class="bmx-blocks">`);
+  out = out.replace(
+    /<h2 class="title_style_01">评论<\/h2>/g,
+    `<div class="cat-title flex items-center large"><div class="custom-icon mr-5">${bmixIc("comments", 14)}</div>` +
+      `<div class="content text-primary-gray text-bulge-primary-gray">评论</div>` +
+      `<div class="line flex-grow ml-8 flex items-center justify-end"></div></div>`,
+  );
+  out = out.replace(/<h2 class="title_style_01">([^<]*)<\/h2>/g, (_, t) => `<div class="cat-title flex items-center large"><div class="content text-primary-gray text-bulge-primary-gray">${t}</div></div>`);
+  out = out.replace(/var\(--sk-primary\)/g, "var(--primary-color)");
+  return out;
+}
+
 function bmixPostSidebar(toc: { id: string; text: string; level: number }[], post: PostView, related: PostView[], popular: PostView[], randomPool: PostView[]): string {
   const busy = new Set([...related.map((p) => p.id), ...popular.map((p) => p.id)]);
   const random: PostView[] = [];
@@ -1105,7 +1128,7 @@ function bmixPostSidebar(toc: { id: string; text: string; level: number }[], pos
     `</aside></div></div>`;
 }
 
-
+/** bluemix article page — coverflow hero + two-column (sidebar / main). */
 function bmixPostPage(parts: PostPageParts): string {
   const p = parts.post;
   const { html: bodyHtml, toc } = bmixHeadings(parts.bodyHtml, p.slug || "post");
@@ -1140,7 +1163,7 @@ function bmixPostPage(parts: PostPageParts): string {
   const sidebar = bmixPostSidebar(toc, p, parts.related || [], parts.popular || [], parts.random || []);
   return `<div class="single"><div data-post-type="article">` +
     `<div class="coverflow-swiper"><div class="container-np"><div class="slider mx-10">` +
-    `<div class="stage"><div class="scene current">${heroCard}</div></div>` +
+    heroCard +
     `</div></div></div>` +
     `<div class="content-wrapper flex container-np line reverse">` +
     `<div class="sidebar"><div class="pf_scroller sidebar-sticky"><div class="sidebar-content">${sidebar}</div></div></div>` +
@@ -1151,10 +1174,8 @@ function bmixPostPage(parts: PostPageParts): string {
     `</div></div>` +
     (parts.commentsHtml
       ? `<div class="model-wrapper"><div class="model">` +
-        `<div class="cat-title flex items-center large"><div class="custom-icon mr-5">${bmixIc("comments", 14)}</div>` +
-        `<div class="content text-primary-gray text-bulge-primary-gray">${p.commentsCount} 条回应</div>` +
-        `<div class="line flex-grow ml-8 flex items-center justify-end"></div></div>` +
-        parts.commentsHtml +
+        bmixCommentHead(p.commentsCount) +
+        bmixThemeComments(parts.commentsHtml) +
         `</div></div>`
       : "") +
     `</div></div></div></div>`;
@@ -1164,7 +1185,7 @@ function bmixPagePage(parts: PagePageParts): string {
   const p = parts.page;
   return `<article class="container-np" style="padding:24px 40px;max-width:860px">` +
     `<h1 style="font-size:28px;font-weight:700;margin:0 0 24px">${esc(p.title)}</h1>` +
-    `<div class="prose-cms">${parts.bodyHtml}</div>${parts.commentsHtml}</article>`;
+    `<div class="prose-cms">${parts.bodyHtml}</div>${bmixThemeComments(parts.commentsHtml)}</article>`;
 }
 
 const BLUEMIX_VARS = `

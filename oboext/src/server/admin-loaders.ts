@@ -37,6 +37,7 @@ import {
 } from "./admin-menu.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
 import { listPlugins, getPlugin, ensurePluginsLoaded } from "./plugins.js";
+import { getNotifySettings } from "./notify.js";
 import { applyFilters, HOOKS } from "./hooks.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
@@ -187,6 +188,21 @@ export async function adminPluginPanel(p: any, ctx: Ctx) {
     scriptSrc: "",
   });
   return { plugin, html: out.html, scriptSrc: out.scriptSrc };
+}
+
+export async function adminNotify(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  const s = await getNotifySettings();
+  return {
+    ...s,
+    smtp: { ...s.smtp, pass: "" },
+    sms: {
+      ...s.sms,
+      aliyun: { ...s.sms.aliyun, accessKeySecret: "" },
+      tencent: { ...s.sms.tencent, secretKey: "" },
+    },
+  };
 }
 
 /** Widget manager: areas, registered types and the selected theme's instances. */

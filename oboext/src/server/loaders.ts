@@ -961,6 +961,7 @@ export const loaders = {
   "admin.taxonomies": admin.adminTaxonomies,
   "admin.users": admin.adminUsers,
   "admin.settings": admin.adminSettings,
+  "admin.notify": admin.adminNotify,
   "notFoundConfig": admin.notFoundConfig,
 };
 export type LoaderKey = keyof typeof loaders;

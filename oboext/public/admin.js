@@ -615,6 +615,11 @@
     if (btn) btn.disabled = true;
     try {
       if (kind === "login") {
+        if (form.__loginSubmit) {
+          if (btn) btn.disabled = false;
+          form.__loginSubmit();
+          return;
+        }
         var r = await api("POST", "/api/auth/login", {
           account: form.account.value,
           password: form.password.value,
@@ -2348,6 +2353,221 @@
     }
   }
 
+  function initLogin() {
+    var root = document.querySelector("[data-login-root]");
+    if (!root || root.__loginBound) return;
+    root.__loginBound = true;
+    var form = root.querySelector("form[data-adm-form=login]");
+    if (!form) return;
+    var msg = root.querySelector("[data-adm-msg]");
+    var submitBtn = root.querySelector("[data-login-submit]");
+    var st = {
+      mode: "login",
+      channels: { email: false, sms: false },
+      channel: "email",
+      ticket: "",
+      resetSent: false,
+      cd: 0,
+      cdTimer: null,
+    };
+
+    var TITLES = {
+      login: ["欢迎回来", "登录以管理你的站点内容"],
+      codelogin: ["验证码登录", "使用邮箱或手机验证码免密登录"],
+      forgot: ["找回密码", "输入邮箱或昵称，向绑定邮箱发送重置码"],
+      twofa: ["两步验证", "输入动态码或恢复码完成登录"],
+    };
+    var SUBMIT = {
+      login: "登 录",
+      codelogin: "验证码登录",
+      forgot: "发送重置码",
+      twofa: "验证并登录",
+    };
+
+    function say(text, ok) {
+      if (!msg) return;
+      msg.textContent = text || "";
+      msg.style.color = ok ? "#4ade80" : ok === false ? "#fca5a5" : "";
+    }
+
+    function applyMode() {
+      var m = st.mode;
+      form.setAttribute("data-login-mode", m);
+      root.querySelectorAll("[data-login-show]").forEach(function (el) {
+        var list = " " + (el.getAttribute("data-login-show") || "") + " ";
+        el.hidden = list.indexOf(" " + m + " ") < 0;
+      });
+      var t = TITLES[m] || TITLES.login;
+      root.querySelector("[data-login-title]").textContent = t[0];
+      root.querySelector("[data-login-sub]").textContent = t[1];
+      submitBtn.textContent =
+        m === "forgot" && st.resetSent ? "重置密码" : SUBMIT[m] || SUBMIT.login;
+      var label = root.querySelector("[data-login-target-label]");
+      if (label) label.textContent = st.channel === "sms" ? "登录手机号" : "登录邮箱";
+      var target = form.target;
+      if (target) {
+        target.type = st.channel === "sms" ? "tel" : "email";
+        target.placeholder = st.channel === "sms" ? "账号绑定的手机号" : "账号绑定的邮箱";
+      }
+    }
+
+    function setMode(m) {
+      st.mode = m;
+      if (m !== "forgot") st.resetSent = false;
+      if (m !== "twofa") st.ticket = "";
+      say("");
+      applyMode();
+      var first = root.querySelector(
+        '[data-login-show~="' + m + '"]:not([hidden]) input',
+      );
+      if (first) first.focus();
+    }
+
+    function startCountdown() {
+      st.cd = 60;
+      var btn = root.querySelector('[data-adm-act="login-send-code"]');
+      if (st.cdTimer) clearInterval(st.cdTimer);
+      st.cdTimer = setInterval(function () {
+        st.cd -= 1;
+        if (!btn) return;
+        if (st.cd <= 0) {
+          clearInterval(st.cdTimer);
+          btn.disabled = false;
+          btn.textContent = "发送验证码";
+        } else {
+          btn.disabled = true;
+          btn.textContent = st.cd + "s 后重发";
+        }
+      }, 1000);
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "60s 后重发";
+      }
+    }
+
+    async function sendCode() {
+      var target = String(form.target.value || "").trim();
+      if (!target) {
+        say(st.channel === "sms" ? "请先填写手机号" : "请先填写邮箱", false);
+        return;
+      }
+      var btn = root.querySelector('[data-adm-act="login-send-code"]');
+      btn.disabled = true;
+      try {
+        await api("POST", "/api/auth/send-code", {
+          channel: st.channel,
+          target: target,
+          purpose: "login",
+        });
+        startCountdown();
+        say(
+          st.channel === "sms"
+            ? "若该手机号已注册，登录码已发送，10 分钟内有效。"
+            : "若该邮箱已注册，登录码已发送，10 分钟内有效。",
+          true,
+        );
+      } catch (err) {
+        btn.disabled = false;
+        say(err.message, false);
+      }
+    }
+
+    function enterTwoFa(data) {
+      st.ticket = data.ticket || "";
+      st.mode = "twofa";
+      say("");
+      applyMode();
+      var input = form.twoFaCode;
+      if (input) {
+        input.value = "";
+        input.focus();
+      }
+    }
+
+    async function submit() {
+      var m = st.mode;
+      var account = String(form.account.value || "").trim();
+      submitBtn.disabled = true;
+      try {
+        if (m === "twofa") {
+          await api("POST", "/api/auth/login-2fa", {
+            ticket: st.ticket,
+            code: String(form.twoFaCode.value || "").replace(/\s/g, ""),
+          });
+        } else if (m === "codelogin") {
+          var r = await api("POST", "/api/auth/login-code", {
+            channel: st.channel,
+            target: String(form.target.value || "").trim(),
+            code: String(form.code.value || "").trim(),
+          });
+          if (r.twoFactorRequired) {
+            submitBtn.disabled = false;
+            enterTwoFa(r);
+            return;
+          }
+        } else if (m === "forgot") {
+          if (!st.resetSent) {
+            await api("POST", "/api/auth/forgot", { account: account });
+            st.resetSent = true;
+            say("若该账号存在且绑定了邮箱，重置码已发送，10 分钟内有效。", true);
+            submitBtn.disabled = false;
+            applyMode();
+            return;
+          }
+          await api("POST", "/api/auth/reset", {
+            account: account,
+            code: String(form.resetCode.value || "").trim(),
+            password: String(form.resetPassword.value || ""),
+          });
+          say("密码已重置，请使用新密码登录。", true);
+          setMode("login");
+          form.password.value = "";
+          submitBtn.disabled = false;
+          return;
+        } else {
+          var r2 = await api("POST", "/api/auth/login", {
+            account: account,
+            password: String(form.password.value || ""),
+          });
+          if (r2.twoFactorRequired) {
+            submitBtn.disabled = false;
+            enterTwoFa(r2);
+            return;
+          }
+        }
+        say("", true);
+        window.location.href = "/admin";
+      } catch (err) {
+        say(err.message, false);
+        submitBtn.disabled = false;
+      }
+    }
+    form.__loginSubmit = submit;
+
+    root.addEventListener("click", function (e) {
+      var btn = e.target.closest ? e.target.closest("[data-adm-act]") : null;
+      if (!btn || !root.contains(btn)) return;
+      var act = btn.getAttribute("data-adm-act");
+      if (act === "login-forgot") setMode("forgot");
+      else if (act === "login-codelogin") setMode("codelogin");
+      else if (act === "login-back") setMode("login");
+      else if (act === "login-2fa-back") setMode("login");
+      else if (act === "login-send-code") sendCode();
+    });
+
+    api("GET", "/api/auth/login-config")
+      .then(function (d) {
+        st.channels = { email: !!d.email, sms: !!d.sms };
+        if (!st.channels.email && st.channels.sms) st.channel = "sms";
+        var entry = root.querySelector('[data-adm-act="login-codelogin"]');
+        if (entry) entry.hidden = !(st.channels.email || st.channels.sms);
+        applyMode();
+      })
+      .catch(function () {});
+
+    applyMode();
+  }
+
   function initTaxonomy() {
     if (window.__taxBound) return;
     window.__taxBound = true;
@@ -2463,6 +2683,7 @@
     initThemeManager();
     initThemePanel();
     initPluginSettings();
+    initLogin();
     initTaxonomy();
   }
 

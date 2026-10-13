@@ -666,6 +666,23 @@
         await api("PATCH", "/api/notify", nested);
         toast("通知设置已保存", "ok");
         setTimeout(admRefresh, 600);
+      } else if (kind === "members") {
+
+        var flat = formObject(form);
+        var body = {};
+        Object.keys(flat).forEach(function (k) {
+          if (k !== "inviteCodes") body[k] = flat[k];
+        });
+        var codesTa = form.querySelector("[name=inviteCodes]");
+        if (codesTa) {
+          body.inviteCodes = codesTa.value
+            .split("\n")
+            .map(function (c) { return c.trim(); })
+            .filter(Boolean);
+        }
+        await api("PUT", "/api/members", body);
+        toast("会员注册设置已保存并立即生效", "ok");
+        setTimeout(admRefresh, 600);
       } else if (kind === "notfound") {
         var payload = formObject(form);
         payload.showSearch = !!form.showSearch.checked;
@@ -1405,11 +1422,14 @@
     document.querySelectorAll("[data-show-if]").forEach(function (el) {
       var pair = (el.getAttribute("data-show-if") || "").split("=");
       var ctrl = document.getElementsByName(pair[0])[0];
-      el.classList.toggle("is-shown", !!ctrl && ctrl.value === pair[1]);
+      var cur =
+        ctrl && ctrl.type === "checkbox" ? (ctrl.checked ? "1" : "0") : ctrl ? ctrl.value : "";
+      el.classList.toggle("is-shown", !!ctrl && cur === pair[1]);
     });
   }
   document.addEventListener("change", function (e) {
-    if (e.target && e.target.tagName === "SELECT") applyShowIf();
+    if (e.target && (e.target.tagName === "SELECT" || e.target.type === "checkbox"))
+      applyShowIf();
   });
 
   function initMenus() {

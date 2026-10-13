@@ -2,6 +2,8 @@
   let d = $data(() => __rvLoad("notFound", {}));
   function settings() { return d().settings; }
   function recent() { return d().recent || []; }
+  function siteTitle() { return d().siteTitle || ""; }
+  function skin() { return d().skin || ""; }
   function messageLines() {
     const s = settings();
     if (!s?.message) return [];
@@ -10,10 +12,17 @@
 </script>
 
 <head>
-  <title>404 - 页面未找到</title>
+
+  <title>页面不存在 - {siteTitle()}</title>
   <meta name="robots" content="noindex, nofollow">
+  <meta property="og:site_name" content={siteTitle()}>
+  <meta property="og:locale" content="zh_CN">
 </head>
 
+{#if skin()}
+{@html skin()}
+{/if}
+{#if !skin()}
 <div class="nf-wrap">
   <div class="nf-box">
     <span class="nf-icon">
@@ -66,6 +75,7 @@
     {/if}
   </div>
 </div>
+{/if}
 
 <style>
   .nf-wrap {

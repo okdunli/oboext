@@ -31,6 +31,7 @@
     if (p.indexOf("/admin/menus") === 0) return "菜单";
     if (p.indexOf("/admin/menu-settings") === 0) return "菜单与首页";
     if (p.indexOf("/admin/settings") === 0) return "站点设置";
+    if (p.indexOf("/admin/notify") === 0) return "通知设置";
     if (p.indexOf("/admin/notfound") === 0) return "404 页面";
     if (p.indexOf("/admin/plugins") === 0) return "插件";
     return "管理后台";

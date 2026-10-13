@@ -1,0 +1,22 @@
+<script>
+
+  import { apiGate, readBody, requireCap, ServiceError } from "@server/admin";
+  import { getNotifySettings, sendTestMessage } from "@server/notify";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const body = await readBody(request);
+      const channel = body?.channel === "sms" ? "sms" : "email";
+      const target = String(body?.target ?? "").trim();
+      if (target.length < 3 || target.length > 160) {
+        throw new ServiceError("测试目标格式不正确", 422);
+      }
+      const settings = await getNotifySettings();
+      const enabled = channel === "email" ? settings.email.enabled : settings.sms.enabled;
+      if (!enabled) throw new ServiceError("该通道尚未开启，请先开启并保存", 400);
+      await sendTestMessage(channel, target);
+      return { sent: true };
+    });
+  }
+</script>

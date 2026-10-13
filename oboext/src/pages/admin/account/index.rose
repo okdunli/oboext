@@ -79,8 +79,8 @@
 
   <div class="adm-card">
     <div class="adm-card-hd"><strong style="font-size:14px;">第三方账号</strong></div>
-    <div class="adm-card-bd">
-      <p class="adm-hint" style="margin:0;">第三方登录（OAuth 绑定/解绑）将在后续版本提供；当前可使用邮箱或密码登录。</p>
+    <div class="adm-card-bd" data-oauth-bindings>
+      <p class="adm-hint" style="margin:0;">加载中…</p>
     </div>
   </div>
 </div>

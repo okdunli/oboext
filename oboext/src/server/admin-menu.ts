@@ -99,6 +99,7 @@ const CORE_GROUPS: MenuGroup[] = [
       { href: "/admin/security", label: "后台安全", glyph: "shield", superOnly: true },
       { href: "/admin/notify", label: "通知设置", glyph: "bell", superOnly: true },
       { href: "/admin/members", label: "会员注册", glyph: "user-plus", superOnly: true },
+      { href: "/admin/oauth", label: "第三方登录", glyph: "share-2", superOnly: true },
       { href: "/admin/notfound", label: "404 页面", glyph: "file-question" },
       { href: "/admin/menu-settings", label: "菜单与首页", glyph: "panel-left", locked: true },
       { href: "/admin/users", label: "用户", glyph: "users" },

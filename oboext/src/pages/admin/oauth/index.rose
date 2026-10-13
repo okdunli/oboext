@@ -1,0 +1,201 @@
+<script>
+
+  let d = $data(() => __rvLoad("admin.oauth", {}));
+  function list() { return d().providers || []; }
+  function cfg(p, k, dflt) {
+    const v = p.config ? p.config[k] : undefined;
+    return v == null || v === "" ? (dflt == null ? "" : dflt) : v;
+  }
+  function on(p, k) {
+    return p.config && p.config[k] ? "1" : "0";
+  }
+  function statusStyle(p) {
+    if (!p.config.enabled) return "background:rgba(120,120,130,.18);color:#d4d4d8;";
+    return p.complete
+      ? "background:rgba(22,163,74,.14);color:#4ade80;"
+      : "background:rgba(217,119,6,.15);color:#fbbf24;";
+  }
+  function statusText(p) {
+    if (!p.config.enabled) return "未启用";
+    return p.complete ? "已启用" : "配置不完整";
+  }
+  function secretPh(p) {
+    return p.hasSecret ? "已配置，留空保持不变" : "未配置";
+  }
+</script>
+
+<head>
+  <title>第三方登录 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="adm-ic" style="--i:url(/public/icons/share-2.svg);width:20px;height:20px;color:#818cf8;"></span>
+    <strong style="font-size:16px">第三方登录</strong>
+  </div>
+</div>
+
+<div class="adm-card" style="margin-bottom:16px;">
+  <div class="adm-card-bd">
+    <p class="adm-hint" style="margin:0;">
+      在各开放平台创建应用后，把对应提供商卡片中的「回调地址」填入平台的授权回调域；再填写客户端 ID / 密钥并启用。
+      一个账号可绑定多种登录方式；仅当提供商返回<b style="color:var(--adm-text);">已验证邮箱</b>时才会按邮箱合并到已有账号。
+    </p>
+  </div>
+</div>
+
+{#each list() as p}
+<form data-adm-form="oauth" data-key={p.key}>
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-hd" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span style="width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;background:{p.color};">{p.label.slice(0, 1)}</span>
+      <strong style="font-size:14px;">{p.label}</strong>
+      <code style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;color:var(--adm-faint);background:var(--adm-hover);border-radius:4px;padding:2px 6px;">{p.key}</code>
+      {#if p.custom}<span class="adm-tag" style="background:rgba(120,120,130,.18);color:#d4d4d8;">自定义</span>{/if}
+      <span class="adm-tag" style="{statusStyle(p)}">{statusText(p)}</span>
+      <span style="flex:1"></span>
+      {#if p.custom}
+      <button type="button" class="adm-iconbtn" data-adm-act="oauth-delete" title="删除该自定义提供商（绑定关系一并清除）" style="color:#f87171;">
+        <span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span>删除
+      </button>
+      {/if}
+      <label class="adm-switch" style="margin:0;"><span class="adm-hint" style="margin:0;">启用</span><input type="checkbox" name="enabled" data-on={on(p, 'enabled')} data-bool></label>
+    </div>
+    <div class="adm-card-bd">
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>客户端 ID（AppID / Client ID）</label>
+          <input class="adm-input" name="clientId" value={cfg(p, 'clientId')} autocomplete="off">
+        </div>
+        <div class="adm-field">
+          <label>客户端密钥（AppSecret）</label>
+          <input class="adm-input" type="password" name="clientSecret" autocomplete="new-password" placeholder={secretPh(p)}>
+        </div>
+      </div>
+
+      {#if p.custom}
+      <div class="adm-field" style="margin-top:12px;">
+        <label>显示名称</label>
+        <input class="adm-input" name="label" value={cfg(p, 'label')} maxlength="32">
+      </div>
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>授权地址 Authorize URL</label>
+          <input class="adm-input" name="authorizeUrl" value={cfg(p, 'authorizeUrl')} placeholder="https://provider/oauth/authorize" spellcheck="false">
+        </div>
+        <div class="adm-field">
+          <label>令牌地址 Token URL</label>
+          <input class="adm-input" name="tokenUrl" value={cfg(p, 'tokenUrl')} placeholder="https://provider/oauth/token" spellcheck="false">
+        </div>
+        <div class="adm-field">
+          <label>用户信息地址 UserInfo URL</label>
+          <input class="adm-input" name="userInfoUrl" value={cfg(p, 'userInfoUrl')} placeholder="https://provider/api/user" spellcheck="false">
+        </div>
+      </div>
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>授权范围 Scope</label>
+          <input class="adm-input" name="scope" value={cfg(p, 'scope')}>
+        </div>
+        <div class="adm-field">
+          <label>令牌请求方式</label>
+          <select class="adm-select" name="tokenMethod" data-val={cfg(p, 'tokenMethod', 'POST')}>
+            <option value="POST">POST 表单</option>
+            <option value="GET">GET</option>
+          </select>
+        </div>
+        <div class="adm-field">
+          <label>客户端凭证传递</label>
+          <select class="adm-select" name="tokenAuth" data-val={cfg(p, 'tokenAuth', 'body')}>
+            <option value="body">请求体字段</option>
+            <option value="basic">HTTP Basic</option>
+          </select>
+        </div>
+        <div class="adm-field">
+          <label>用户信息令牌传递</label>
+          <select class="adm-select" name="userInfoAuth" data-val={cfg(p, 'userInfoAuth', 'bearer')}>
+            <option value="bearer">Bearer 头</option>
+            <option value="query">Query 参数</option>
+          </select>
+        </div>
+      </div>
+      <p class="adm-hint" style="margin:10px 0 6px;">用户信息响应字段映射（支持点路径，如 <code>data.id</code>；邮箱相关留空表示不获取）</p>
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>唯一 ID 字段 *</label>
+          <input class="adm-input" name="openIdField" value={cfg(p, 'openIdField')} placeholder="id / openid / data.id" spellcheck="false">
+        </div>
+        <div class="adm-field">
+          <label>昵称字段</label>
+          <input class="adm-input" name="nicknameField" value={cfg(p, 'nicknameField', 'name')} spellcheck="false">
+        </div>
+        <div class="adm-field">
+          <label>头像字段</label>
+          <input class="adm-input" name="avatarField" value={cfg(p, 'avatarField', 'avatar')} spellcheck="false">
+        </div>
+        <div class="adm-field">
+          <label>邮箱字段</label>
+          <input class="adm-input" name="emailField" value={cfg(p, 'emailField')} placeholder="留空=不获取邮箱" spellcheck="false">
+        </div>
+        <div class="adm-field">
+          <label>邮箱已验证字段</label>
+          <input class="adm-input" name="emailVerifiedField" value={cfg(p, 'emailVerifiedField')} placeholder="如 email_verified" spellcheck="false">
+        </div>
+      </div>
+      {/if}
+
+      <div style="margin-top:12px;display:grid;gap:10px;">
+        <label class="adm-switch"><span><span class="t">允许新用户登录</span><span class="d">关闭后，未注册的第三方身份必须先登录本站账号并手动绑定</span></span><input type="checkbox" name="allowCreate" data-on={on(p, 'allowCreate')} data-bool></label>
+        <label class="adm-switch"><span><span class="t">按已验证邮箱合并账号</span><span class="d">仅当提供商明确返回邮箱已验证时，才匹配并合并到同邮箱的本站账号</span></span><input type="checkbox" name="mergeByEmail" data-on={on(p, 'mergeByEmail')} data-bool></label>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:8px;margin-top:14px;">
+        <code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--adm-faint);background:var(--adm-panel-2);border:1px solid var(--adm-border);border-radius:8px;padding:8px 10px;">回调地址：{p.callbackUrl}</code>
+        <button class="adm-btn" type="submit">保存</button>
+      </div>
+    </div>
+  </div>
+</form>
+{/each}
+
+<details class="adm-card" style="margin-bottom:16px;">
+  <summary class="adm-card-hd" style="cursor:pointer;list-style:none;">
+    <span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/plus.svg)"></span>
+    <strong style="font-size:14px;">添加自定义 OAuth2 登录方式</strong>
+    <span class="adm-hint" style="margin:0;">标识创建后不可修改（小写字母、数字、短横线）</span>
+  </summary>
+  <div class="adm-card-bd">
+    <form data-adm-form="oauth-add">
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>标识 slug *</label>
+          <input class="adm-input" name="slug" placeholder="如 gitlab" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="adm-field">
+          <label>显示名称 *</label>
+          <input class="adm-input" name="label" placeholder="如 GitLab" maxlength="32">
+        </div>
+        <div class="adm-field">
+          <label>授权地址 *</label>
+          <input class="adm-input" name="authorizeUrl" placeholder="https://provider/oauth/authorize" spellcheck="false">
+        </div>
+        <div class="adm-field">
+          <label>令牌地址 *</label>
+          <input class="adm-input" name="tokenUrl" placeholder="https://provider/oauth/token" spellcheck="false">
+        </div>
+        <div class="adm-field">
+          <label>用户信息地址 *</label>
+          <input class="adm-input" name="userInfoUrl" placeholder="https://provider/api/user" spellcheck="false">
+        </div>
+        <div class="adm-field">
+          <label>唯一 ID 字段 *</label>
+          <input class="adm-input" name="openIdField" placeholder="id / sub / data.id" spellcheck="false">
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <button class="adm-btn" type="submit">创建</button>
+      </div>
+      <p class="adm-hint" style="margin:10px 0 0;">创建后可在上方卡片补全客户端 ID / 密钥、字段映射并启用。</p>
+    </form>
+  </div>
+</details>

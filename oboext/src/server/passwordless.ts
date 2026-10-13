@@ -4,7 +4,7 @@ import { getOption, setOption } from "./options.js";
 
 const NOPASSWORD_KEY = "oauth.nopassword";
 
-async function getPasswordlessSet(): Promise<Set<number>> {
+export async function getPasswordlessSet(): Promise<Set<number>> {
   const arr = await getOption<number[]>(NOPASSWORD_KEY, []);
   return new Set(Array.isArray(arr) ? arr : []);
 }

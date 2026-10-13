@@ -1,0 +1,50 @@
+<script>
+
+  let d = $data(() => __rvLoad("admin.icons", {}));
+  function names() { return d().names || []; }
+  function pascal(k) {
+    return k.split("-").map((s) => (s ? s.slice(0, 1).toUpperCase() + s.slice(1) : "")).join("");
+  }
+  function searchKey(k) {
+    return (k + " " + pascal(k) + " " + k.split("-").join(" ")).toLowerCase();
+  }
+  function count() { return names().length; }
+</script>
+
+<head>
+  <title>图标库 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="adm-ic" style="--i:url(/public/icons/shapes.svg);width:20px;height:20px;color:#818cf8;"></span>
+    <strong style="font-size:16px">图标库</strong>
+    <span class="adm-hint" style="margin:0;">共 {count()} 个</span>
+  </div>
+  <span style="flex:1"></span>
+  <input class="adm-input" data-ic-search placeholder="搜索标识符或名称…" style="max-width:260px;" spellcheck="false" autocomplete="off">
+</div>
+
+<div class="adm-card adm-table-wrap">
+  <table class="adm-table" data-ic-table>
+    <thead>
+      <tr>
+        <th style="width:64px">图标</th>
+        <th>标识符</th>
+        <th>组件名</th>
+        <th style="width:80px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each names() as k}
+      <tr data-ic-row data-search={searchKey(k)}>
+        <td><span class="adm-ic" style="--i:url(/public/icons/{k}.svg);width:18px;height:18px;"></span></td>
+        <td style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#818cf8;">{k}</td>
+        <td class="adm-hint">{pascal(k)}</td>
+        <td><button type="button" class="adm-iconbtn" data-ic-copy={k} title="复制标识符">复制</button></td>
+      </tr>
+      {/each}
+    </tbody>
+  </table>
+  <div class="adm-card-bd adm-empty" data-ic-empty hidden>没有匹配的图标。</div>
+</div>

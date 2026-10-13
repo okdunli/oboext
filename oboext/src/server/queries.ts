@@ -341,6 +341,7 @@ export async function listComments(opts: {
   parentId?: number;
   status?: string;
   limit?: number;
+  offset?: number;
   order?: "asc" | "desc";
 }): Promise<{ items: Awaited<ReturnType<typeof listPostComments>>; total: number }> {
   const conds = [];
@@ -350,6 +351,7 @@ export async function listComments(opts: {
   if (opts.parentId != null) conds.push(eq(comments.parentId, opts.parentId));
   const where = conds.length ? and(...conds) : undefined;
   const limit = Math.min(opts.limit ?? 200, 200);
+  const offset = Math.max(0, opts.offset ?? 0);
   const [rows, totalRows] = await Promise.all([
     db
       .select({
@@ -364,7 +366,8 @@ export async function listComments(opts: {
       .from(comments)
       .where(where)
       .orderBy(opts.order === "desc" ? desc(comments.id) : asc(comments.id))
-      .limit(limit),
+      .limit(limit)
+      .offset(offset),
     db.select({ n: sql<number>`count(*)` }).from(comments).where(where),
   ]);
   return { items: rows, total: Number(totalRows[0]?.n ?? 0) };

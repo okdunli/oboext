@@ -74,12 +74,14 @@ export function pluginHasEntry(slug: string): boolean {
 }
 
 /**
- * Does the plugin ship a custom admin page? Convention:
- * `plugins/<slug>/admin.tsx`, hosted at /admin/plugins/<slug>.
+ * Does the plugin ship a custom admin panel? rosezm idiom: the plugin's
+ * index.ts fills the admin.panel filter and declares it in plugin.json's
+ * `hooks`. The original's on-disk admin.tsx convention is NOT used by this
+ * port (those files were removed once ported) — declarative settings live in
+ * the manifest schema the generic settings modal renders; only a plugin with
+ * a real custom panel declares admin.panel.
  */
 export function pluginHasAdmin(slug: string): boolean {
-  const dir = path.join(PLUGINS_DIR, slug);
-  return ["admin.tsx", "admin.jsx", "admin.js"].some((f) =>
-    fs.existsSync(path.join(dir, f)),
-  );
+  const manifest = getPluginManifest(slug);
+  return !!manifest?.hooks?.includes("admin.panel");
 }

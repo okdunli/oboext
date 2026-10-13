@@ -47,6 +47,416 @@
     return '<span class="adm-ic" aria-hidden="true" style="' + st + '"></span>';
   }
 
+  function sfEsc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function sfFieldVisible(f, draft) {
+    if (!f.showIf) return true;
+    var cur = String(draft[f.showIf.key] == null ? "" : draft[f.showIf.key]);
+    var eq = [].concat(f.showIf.equals).map(String);
+    return eq.indexOf(cur) >= 0;
+  }
+
+  var sfCatsPromise = null;
+  function sfCats() {
+    if (sfCatsPromise) return sfCatsPromise;
+    sfCatsPromise = fetch("/api/categories")
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .catch(function () { return []; });
+    return sfCatsPromise;
+  }
+
+  function sfLinkRowHtml(it) {
+    it = it || {};
+    return '<div class="adm-wg-link-row" data-repeat-row>' +
+      '<input class="adm-input" data-rk="label" placeholder="名称" value="' + sfEsc(it.label || "") + '">' +
+      '<input class="adm-input" data-rk="url" placeholder="https://" value="' + sfEsc(it.url || "") + '">' +
+      '<input class="adm-input" data-rk="icon" placeholder="图标" value="' + sfEsc(it.icon || "") + '">' +
+      '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
+  }
+
+  function sfCatRowHtml(it, catOptions) {
+    it = it || {};
+    var have = {};
+    (catOptions || []).forEach(function (c) { have[c.slug] = 1; });
+    var missing = it.slug && !have[it.slug];
+    return '<div class="adm-thp-cat-row" data-repeat-row>' +
+      '<select class="adm-select" data-rk="slug">' +
+      '<option value="">— 选择分类 —</option>' +
+      (catOptions || []).map(function (c) {
+        return '<option value="' + sfEsc(c.slug) + '"' + (it.slug === c.slug ? " selected" : "") + ">" +
+          sfEsc(c.name) + "</option>";
+      }).join("") +
+      (missing ? '<option value="' + sfEsc(it.slug) + '" selected>' + sfEsc(it.slug) + "（已删除）</option>" : "") +
+      "</select>" +
+      '<input class="adm-input" data-rk="title" placeholder="标题留空则用分类名" value="' + sfEsc(it.title || "") + '">' +
+      '<button type="button" class="adm-iconbtn" data-repeat-up title="上移" aria-label="上移">' + admIc("chevron-up", 14) + "</button>" +
+      '<button type="button" class="adm-iconbtn" data-repeat-down title="下移" aria-label="下移">' + admIc("chevron-down", 14) + "</button>" +
+      '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
+  }
+
+  function sfReadRepeat(holder) {
+    var rows = holder.querySelectorAll("[data-repeat-row]");
+    return [].slice.call(rows).map(function (r) {
+      var out = {};
+      r.querySelectorAll("[data-rk]").forEach(function (inp) {
+        out[inp.getAttribute("data-rk")] = inp.value;
+      });
+      return out;
+    });
+  }
+
+  function sfFieldHtml(f, draft, catOptions) {
+    var v = draft[f.key];
+    var show = sfFieldVisible(f, draft) ? "" : " hidden";
+    var half = f.half ? " half" : "";
+    var html = '<div class="adm-thp-fld' + half + '" data-fld="' + sfEsc(f.key) + '"' + show + ">";
+    if (f.type === "group") {
+      return '<div class="adm-thp-group" data-fld="' + sfEsc(f.key) + '">' +
+        "<p>" + sfEsc(f.label) + "</p>" +
+        (f.help ? '<p class="adm-thp-help">' + sfEsc(f.help) + "</p>" : "") + "</div>";
+    }
+    if (f.type === "switch") {
+      html += '<button type="button" class="adm-wg-switch" data-k="' + sfEsc(f.key) + '" data-t="switch">' +
+        "<span>" + sfEsc(f.label) + "</span>" +
+        '<span class="track' + (v ? " is-on" : "") + '"><i></i></span></button>';
+      if (f.help) html += '<p class="adm-thp-help">' + sfEsc(f.help) + "</p>";
+      return html + "</div>";
+    }
+    html += '<label class="adm-thp-label">' + sfEsc(f.label) + "</label>";
+    if (f.type === "color") {
+      var hex = /^#[0-9a-f]{6}$/i.test(String(v || "")) ? String(v) : "#000000";
+      html += '<div class="adm-thp-color"><input type="color" class="adm-thp-colorpick" data-k="' +
+        sfEsc(f.key) + '" data-t="color" value="' + hex + '">' +
+        '<input class="adm-input adm-thp-monospace" data-k="' + sfEsc(f.key) +
+        '" data-t="text" value="' + sfEsc(v == null ? "" : v) +
+        '" placeholder="' + sfEsc(f.placeholder || "#000000 / rgba() / gradient") + '"></div>';
+    } else if (f.type === "select") {
+      html += '<select class="adm-select" data-k="' + sfEsc(f.key) + '" data-t="select">' +
+        (f.options || []).map(function (o) {
+          return '<option value="' + sfEsc(o.value) + '"' +
+            (String(o.value) === String(v == null ? "" : v) ? " selected" : "") + ">" +
+            sfEsc(o.label) + "</option>";
+        }).join("") + "</select>";
+    } else if (f.type === "range") {
+      var num = Number(v == null ? f.default || 0 : v) || 0;
+      html += '<div class="adm-thp-range"><input type="range" data-k="' + sfEsc(f.key) +
+        '" data-t="range" min="' + (f.min != null ? f.min : 0) + '" max="' +
+        (f.max != null ? f.max : 100) + '" step="' + (f.step != null ? f.step : 1) +
+        '" value="' + num + '"><span class="adm-thp-range-val" data-range-val="' +
+        sfEsc(f.key) + '">' + sfEsc(String(v == null ? f.default || 0 : v)) + sfEsc(f.unit || "") +
+        "</span></div>";
+    } else if (f.type === "number") {
+      html += '<input class="adm-input" type="number" data-k="' + sfEsc(f.key) +
+        '" data-t="number"' + (f.min != null ? ' min="' + f.min + '"' : "") +
+        (f.max != null ? ' max="' + f.max + '"' : "") +
+        ' value="' + sfEsc(Number(v == null ? f.default || 0 : v) || 0) + '">';
+    } else if (f.type === "textarea" || f.type === "code") {
+      html += '<textarea class="adm-textarea' + (f.type === "code" ? " adm-thp-code" : "") +
+        '" rows="' + (f.type === "code" ? 9 : 3) + '" data-k="' + sfEsc(f.key) +
+        '" data-t="text" placeholder="' + sfEsc(f.placeholder || "") + '">' +
+        sfEsc(v == null ? "" : v) + "</textarea>";
+    } else if (f.type === "image") {
+      var u = String(v || "");
+      html += '<div class="adm-wg-img"><img class="adm-wg-img-prev" alt="" src="' + sfEsc(u) + '">' +
+        '<div class="adm-wg-img-row"><input class="adm-input" data-k="' + sfEsc(f.key) +
+        '" data-t="text" placeholder="/uploads/media/... 或 https://..." value="' + sfEsc(u) + '">' +
+        '<label class="adm-imgfield-btn">' + admIc("upload", 14) + ' 上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-key="' +
+        sfEsc(f.key) + '"></label></div></div>';
+    } else if (f.type === "links") {
+      var items = Array.isArray(v) ? v : [];
+      html += '<div class="adm-wg-links" data-repeat="links" data-k="' + sfEsc(f.key) + '">' +
+        items.map(sfLinkRowHtml).join("") +
+        '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>' + admIc("plus", 14) + " 添加一项</button></div>";
+    } else if (f.type === "footerLinks") {
+      var fl = Array.isArray(v) ? v : [];
+      html += '<div class="adm-wg-links" data-repeat="footerLinks" data-k="' + sfEsc(f.key) + '">' +
+        fl.map(function (it) {
+          it = it || {};
+          return '<div class="adm-wg-link-row" data-repeat-row>' +
+            '<input class="adm-input" data-rk="text" placeholder="文字（支持 HTML）" value="' + sfEsc(it.text || "") + '" style="width:180px;flex-shrink:0">' +
+            '<input class="adm-input" data-rk="url" placeholder="https://" value="' + sfEsc(it.url || "") + '">' +
+            '<input class="adm-input" data-rk="image" placeholder="图标 URL（可选）" value="' + sfEsc(it.image || "") + '" style="width:180px;flex-shrink:0">' +
+            '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
+        }).join("") +
+        '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>' + admIc("plus", 14) + " 添加一项</button></div>";
+    } else if (f.type === "categoryRows") {
+      var cats = Array.isArray(v) ? v : [];
+      html += '<div class="adm-thp-cats" data-repeat="cats" data-k="' + sfEsc(f.key) + '">' +
+        cats.map(function (it) { return sfCatRowHtml(it, catOptions); }).join("") +
+        '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>' + admIc("plus", 14) + " 添加分类区块</button>" +
+        '<p class="adm-thp-cats-state">正在加载分类…</p></div>';
+    } else if (f.type === "verifications") {
+      var map = v && typeof v === "object" ? v : {};
+      var providers = [
+        { key: "google", label: "Google", placeholder: "google-site-verification 内容" },
+        { key: "yandex", label: "Yandex", placeholder: "yandex-verification 内容" },
+        { key: "bing", label: "Bing", placeholder: "msvalidate.01 内容" },
+        { key: "yahoo", label: "Yahoo", placeholder: "y_key 内容" },
+      ];
+      html += '<div class="adm-thp-verifs" data-verif="' + sfEsc(f.key) + '">' +
+        providers.map(function (p) {
+          return '<input class="adm-input" data-vk="' + sfEsc(p.key) + '" placeholder="' +
+            sfEsc(p.label + "：" + p.placeholder) + '" value="' + sfEsc(map[p.key] || "") + '">';
+        }).join("") + "</div>";
+    } else {
+      var isFont = f.type === "font";
+      html += '<input class="adm-input' + (isFont ? " adm-thp-monospace" : "") +
+        '" data-k="' + sfEsc(f.key) + '" data-t="text" value="' +
+        sfEsc(v == null ? "" : v) + '" placeholder="' + sfEsc(f.placeholder || "") + '"' +
+        (isFont ? ' style="font-family:' + sfEsc(v || "inherit") + '"' : "") + ">";
+    }
+    if (f.help) html += '<p class="adm-thp-help">' + sfEsc(f.help) + "</p>";
+    return html + "</div>";
+  }
+
+  /**
+   * Bind one schema form. Returns handles the caller needs for save/reset.
+   * `onChange(draft)` fires after every edit (the theme panel live-previews).
+   */
+  function sfForm(root, opts) {
+    var sections = (opts.sections || []).slice();
+    var draft = opts.draft || {};
+    var activeKey = (sections[0] && sections[0].key) || "";
+    var catOptions = [];
+    var fields = [];
+
+    function refreshFields() {
+      fields = [];
+      sections.forEach(function (s) {
+        (s.fields || []).forEach(function (f) { fields.push(f); });
+      });
+    }
+    refreshFields();
+
+    function findField(key) {
+      for (var i = 0; i < fields.length; i++) if (fields[i].key === key) return fields[i];
+      return null;
+    }
+
+    function applyShowIf() {
+      root.querySelectorAll("[data-fld]").forEach(function (box) {
+        var f = findField(box.getAttribute("data-fld"));
+        if (!f || !f.showIf) return;
+        box.hidden = !sfFieldVisible(f, draft);
+      });
+    }
+
+    function renderNav(groupEl, list) {
+      if (!groupEl) return;
+      if (!list.length) {
+        groupEl.hidden = true;
+        return;
+      }
+      var ul = groupEl.querySelector(".adm-thp-navlist");
+      if (!ul) return;
+      ul.innerHTML = list.map(function (s) {
+        return '<button type="button" class="adm-thp-navbtn' +
+          (s.key === activeKey ? " is-active" : "") + '" data-sec="' +
+          sfEsc(s.key) + '">' + sfEsc(s.label) + "</button>";
+      }).join("");
+    }
+
+    function renderSection() {
+      var body = opts.bodyEl;
+      if (!body) return;
+      var sec = null;
+      for (var i = 0; i < sections.length; i++) {
+        if (sections[i].key === activeKey) { sec = sections[i]; break; }
+      }
+      if (!sec) {
+        body.innerHTML = '<p class="adm-hint">没有可配置项。</p>';
+        return;
+      }
+      var html = "<h2 class='adm-thp-sec-title'>" + sfEsc(sec.label) + "</h2>";
+      if (sec.description) html += '<p class="adm-thp-sec-desc">' + sfEsc(sec.description) + "</p>";
+      html += '<div class="adm-thp-form">' +
+        sec.fields
+          .filter(function (f) { return f.type !== "hidden"; })
+          .map(function (f) { return sfFieldHtml(f, draft, catOptions); })
+          .join("") +
+        "</div>";
+      body.innerHTML = html;
+    }
+
+    function setActiveNav() {
+      root.querySelectorAll("[data-sec]").forEach(function (b) {
+        b.classList.toggle("is-active", b.getAttribute("data-sec") === activeKey);
+      });
+    }
+
+    function rebindCats() {
+      var needs = fields.some(function (f) { return f.type === "categoryRows"; });
+      if (!needs) return;
+      sfCats().then(function (cats) {
+        cats = Array.isArray(cats) ? cats : [];
+        catOptions = cats.map(function (c) { return { slug: c.slug, name: c.name }; });
+        root.querySelectorAll('[data-repeat="cats"]').forEach(function (holder) {
+          var key = holder.getAttribute("data-k");
+          var vals = Array.isArray(draft[key]) ? draft[key] : [];
+          var state = holder.querySelector(".adm-thp-cats-state");
+          if (state) state.remove();
+          holder.querySelectorAll("[data-repeat-row]").forEach(function (r) { r.remove(); });
+          var addBtn = holder.querySelector("[data-repeat-add]");
+          vals.forEach(function (it) {
+            addBtn.insertAdjacentHTML("beforebegin", sfCatRowHtml(it, catOptions));
+          });
+        });
+      });
+    }
+
+    function readValue(t, f) {
+      if (f && (f.type === "number" || f.type === "range")) return Number(t.value);
+      return t.value;
+    }
+
+    root.addEventListener("click", function (e) {
+      var secBtn = e.target.closest && e.target.closest("[data-sec]");
+      if (secBtn && root.contains(secBtn)) {
+        activeKey = secBtn.getAttribute("data-sec");
+        renderSection();
+        setActiveNav();
+        rebindCats();
+        return;
+      }
+      var sw = e.target.closest && e.target.closest('[data-t="switch"]');
+      if (sw && root.contains(sw)) {
+        var skey = sw.getAttribute("data-k");
+        draft[skey] = !draft[skey];
+        var track = sw.querySelector(".track");
+        if (track) track.classList.toggle("is-on", !!draft[skey]);
+        applyShowIf();
+        if (opts.onChange) opts.onChange(draft);
+        return;
+      }
+      var addBtn = e.target.closest && e.target.closest("[data-repeat-add]");
+      if (addBtn && root.contains(addBtn)) {
+        var holder = addBtn.closest("[data-repeat]");
+        var kind = holder.getAttribute("data-repeat");
+        if (kind === "links" || kind === "footerLinks") {
+          addBtn.insertAdjacentHTML("beforebegin", sfLinkRowHtml({}));
+        } else {
+          addBtn.insertAdjacentHTML("beforebegin", sfCatRowHtml({}, catOptions));
+        }
+        return;
+      }
+      var del = e.target.closest && e.target.closest("[data-repeat-del]");
+      if (del && root.contains(del)) {
+        var row0 = del.closest("[data-repeat-row]");
+        if (row0) row0.remove();
+        return;
+      }
+      var up = e.target.closest && e.target.closest("[data-repeat-up]");
+      var down = e.target.closest && e.target.closest("[data-repeat-down]");
+      if ((up || down) && root.contains(up || down)) {
+        var row = (up || down).closest("[data-repeat-row]");
+        if (up && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
+        if (down && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
+      }
+    });
+
+    root.addEventListener("input", function (e) {
+      var t = e.target;
+      if (!t.hasAttribute || !t.hasAttribute("data-k")) return;
+      var key = t.getAttribute("data-k");
+      var f = findField(key);
+      draft[key] = readValue(t, f);
+      if (f && f.type === "font") t.style.fontFamily = t.value || "inherit";
+      var cbox = t.closest("[data-fld]");
+      if (cbox) {
+        if (t.type === "color") {
+          var txt = cbox.querySelector('input[type="text"][data-k]');
+          if (txt) txt.value = t.value;
+        } else {
+          var pick = cbox.querySelector("input[type=color]");
+          if (pick && /^#[0-9a-f]{6}$/i.test(t.value)) pick.value = t.value;
+        }
+      }
+      var rv = f && f.type === "range" && root.querySelector('[data-range-val="' + key + '"]');
+      if (rv) rv.textContent = t.value + (f.unit || "");
+      applyShowIf();
+      if (opts.onChange) opts.onChange(draft);
+    });
+
+    root.addEventListener("change", function (e) {
+      var t = e.target;
+      if (t.hasAttribute && t.hasAttribute("data-img-key")) {
+        var f0 = t.files && t.files[0];
+        t.value = "";
+        if (!f0) return;
+        var btn = t.parentElement;
+        btn.classList.add("is-busy");
+        var fd = new FormData();
+        fd.append("file", f0);
+        fetch("/api/media", { method: "POST", body: fd })
+          .then(async function (res) {
+            var data = {};
+            try { data = await res.json(); } catch (err) {}
+            if (!res.ok) throw new Error(data.error || "上传失败 (" + res.status + ")");
+            var url = data.url || data.path || data.src || "";
+            var ik = t.getAttribute("data-img-key");
+            draft[ik] = url;
+            var box = t.closest("[data-fld]");
+            box.querySelector("[data-k]").value = url;
+            box.querySelector(".adm-wg-img-prev").src = url;
+          })
+          .catch(function (err) { toast(err.message, "err"); })
+          .finally(function () { btn.classList.remove("is-busy"); });
+        return;
+      }
+      if (!t.hasAttribute || !t.hasAttribute("data-k")) return;
+      var fld = findField(t.getAttribute("data-k"));
+      draft[t.getAttribute("data-k")] = readValue(t, fld);
+      applyShowIf();
+      if (opts.onChange) opts.onChange(draft);
+    });
+
+    function collect() {
+      root.querySelectorAll("[data-repeat]").forEach(function (holder) {
+        draft[holder.getAttribute("data-k")] = sfReadRepeat(holder);
+      });
+      root.querySelectorAll("[data-verif]").forEach(function (box) {
+        var out = {};
+        box.querySelectorAll("[data-vk]").forEach(function (inp) {
+          if (inp.value.trim()) out[inp.getAttribute("data-vk")] = inp.value.trim();
+        });
+        draft[box.getAttribute("data-verif")] = out;
+      });
+      return draft;
+    }
+
+    function renderAll() {
+      (opts.navTargets || []).forEach(function (t) {
+        renderNav(t.el, t.all ? sections : t.sections);
+      });
+      renderSection();
+      rebindCats();
+    }
+
+    return {
+      draft: draft,
+      renderAll: renderAll,
+      renderSection: renderSection,
+      collect: collect,
+      setSections: function (list) {
+        sections = (list || []).slice();
+        refreshFields();
+        activeKey = (sections[0] && sections[0].key) || "";
+      },
+      setDraft: function (obj) {
+        Object.keys(draft).forEach(function (k) { delete draft[k]; });
+        Object.assign(draft, obj || {});
+      },
+      setActive: function (k) { activeKey = k; },
+    };
+  }
+
   function formObject(form) {
     var out = {};
     new FormData(form).forEach(function (v, k) {
@@ -1746,224 +2156,24 @@
 
     var appearance = panel.appearanceSchema || [];
     var own = panel.settingsSchema || [];
-    var allSections = appearance.concat(own);
-    var fields = allSections.reduce(function (a, s) { return a.concat(s.fields || []); }, []);
-    var draft = Object.assign({}, panel.config || {}, panel.settings || {});
-    var activeKey = (appearance[0] && appearance[0].key) || (own[0] && own[0].key) || "";
-    var catsCache = null;
-    var catOptions = [];
-
-    function esc(s) {
-      return String(s == null ? "" : s)
-        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-    }
-
-    function fieldVisible(f) {
-      if (!f.showIf) return true;
-      var cur = String(draft[f.showIf.key] == null ? "" : draft[f.showIf.key]);
-      var eq = [].concat(f.showIf.equals).map(String);
-      return eq.indexOf(cur) >= 0;
-    }
-
-    function switchTrack(on) {
-      return '<span class="track' + (on ? " is-on" : "") + '"><i></i></span>';
-    }
-
-    function fieldHtml(f) {
-      var v = draft[f.key];
-      var show = fieldVisible(f) ? "" : " hidden";
-      var half = f.half ? " half" : "";
-      var html = '<div class="adm-thp-fld' + half + '" data-fld="' + esc(f.key) + '"' + show + ">";
-      if (f.type === "group") {
-        return '<div class="adm-thp-group" data-fld="' + esc(f.key) + '">' +
-          '<p>' + esc(f.label) + "</p>" +
-          (f.help ? '<p class="adm-thp-help">' + esc(f.help) + "</p>" : "") + "</div>";
-      }
-      if (f.type === "switch") {
-        html += '<button type="button" class="adm-wg-switch" data-k="' + esc(f.key) + '" data-t="switch">' +
-          "<span>" + esc(f.label) + "</span>" + switchTrack(!!v) + "</button>";
-        if (f.help) html += '<p class="adm-thp-help">' + esc(f.help) + "</p>";
-        return html + "</div>";
-      }
-      html += '<label class="adm-thp-label">' + esc(f.label) + "</label>";
-      if (f.type === "color") {
-        var hex = /^#[0-9a-f]{6}$/i.test(String(v || "")) ? String(v) : "#000000";
-        html += '<div class="adm-thp-color"><input type="color" class="adm-thp-colorpick" data-k="' +
-          esc(f.key) + '" data-t="color" value="' + hex + '">' +
-          '<input class="adm-input adm-thp-monospace" data-k="' + esc(f.key) +
-          '" data-t="text" value="' + esc(v == null ? "" : v) +
-          '" placeholder="' + esc(f.placeholder || "#000000 / rgba() / gradient") + '"></div>';
-      } else if (f.type === "select") {
-        html += '<select class="adm-select" data-k="' + esc(f.key) + '" data-t="select">' +
-          (f.options || []).map(function (o) {
-            return '<option value="' + esc(o.value) + '"' +
-              (String(o.value) === String(v == null ? "" : v) ? " selected" : "") + ">" +
-              esc(o.label) + "</option>";
-          }).join("") + "</select>";
-      } else if (f.type === "range") {
-        var num = Number(v == null ? f.default || 0 : v) || 0;
-        html += '<div class="adm-thp-range"><input type="range" data-k="' + esc(f.key) +
-          '" data-t="range" min="' + (f.min != null ? f.min : 0) + '" max="' +
-          (f.max != null ? f.max : 100) + '" step="' + (f.step != null ? f.step : 1) +
-          '" value="' + num + '"><span class="adm-thp-range-val" data-range-val="' +
-          esc(f.key) + '">' + esc(String(v == null ? f.default || 0 : v)) + esc(f.unit || "") +
-          "</span></div>";
-      } else if (f.type === "number") {
-        html += '<input class="adm-input" type="number" data-k="' + esc(f.key) +
-          '" data-t="number"' + (f.min != null ? ' min="' + f.min + '"' : "") +
-          (f.max != null ? ' max="' + f.max + '"' : "") +
-          ' value="' + esc(Number(v == null ? f.default || 0 : v) || 0) + '">';
-      } else if (f.type === "textarea" || f.type === "code") {
-        html += '<textarea class="adm-textarea' + (f.type === "code" ? " adm-thp-code" : "") +
-          '" rows="' + (f.type === "code" ? 9 : 3) + '" data-k="' + esc(f.key) +
-          '" data-t="text" placeholder="' + esc(f.placeholder || "") + '">' +
-          esc(v == null ? "" : v) + "</textarea>";
-      } else if (f.type === "image") {
-        var u = String(v || "");
-        html += '<div class="adm-wg-img"><img class="adm-wg-img-prev" alt="" src="' + esc(u) + '">' +
-          '<div class="adm-wg-img-row"><input class="adm-input" data-k="' + esc(f.key) +
-          '" data-t="text" placeholder="/uploads/media/... 或 https://..." value="' + esc(u) + '">' +
-          '<label class="adm-imgfield-btn">' + admIc("upload", 14) + ' 上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-key="' +
-          esc(f.key) + '"></label></div></div>';
-      } else if (f.type === "links") {
-        var items = Array.isArray(v) ? v : [];
-        html += '<div class="adm-wg-links" data-repeat="links" data-k="' + esc(f.key) + '">' +
-          items.map(linkRowHtml).join("") +
-          '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>' + admIc("plus", 14) + " 添加一项</button></div>";
-      } else if (f.type === "categoryRows") {
-        var cats = Array.isArray(v) ? v : [];
-        html += '<div class="adm-thp-cats" data-repeat="cats" data-k="' + esc(f.key) + '">' +
-          cats.map(function (it) { return catRowHtml(it, ""); }).join("") +
-          '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-repeat-add>' + admIc("plus", 14) + " 添加分类区块</button>" +
-          '<p class="adm-thp-cats-state">正在加载分类…</p></div>';
-        loadCats();
-      } else {
-        var isFont = f.type === "font";
-        html += '<input class="adm-input' + (isFont ? " adm-thp-monospace" : "") +
-          '" data-k="' + esc(f.key) + '" data-t="text" value="' +
-          esc(v == null ? "" : v) + '" placeholder="' + esc(f.placeholder || "") + '"' +
-          (isFont ? ' style="font-family:' + esc(v || "inherit") + '"' : "") + ">";
-      }
-      if (f.help) html += '<p class="adm-thp-help">' + esc(f.help) + "</p>";
-      return html + "</div>";
-    }
-
-    function linkRowHtml(it) {
-      it = it || {};
-      return '<div class="adm-wg-link-row" data-repeat-row>' +
-        '<input class="adm-input" data-rk="label" placeholder="名称" value="' + esc(it.label || "") + '">' +
-        '<input class="adm-input" data-rk="url" placeholder="https://" value="' + esc(it.url || "") + '">' +
-        '<input class="adm-input" data-rk="icon" placeholder="图标" value="' + esc(it.icon || "") + '">' +
-        '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
-    }
-
-    function catRowHtml(it, opts) {
-      it = it || {};
-      var have = {};
-      (opts || []).forEach(function (c) { have[c.slug] = 1; });
-      var missing = it.slug && !have[it.slug];
-      return '<div class="adm-thp-cat-row" data-repeat-row>' +
-        '<select class="adm-select" data-rk="slug">' +
-        '<option value="">— 选择分类 —</option>' +
-        (opts || []).map(function (c) {
-          return '<option value="' + esc(c.slug) + '"' + (it.slug === c.slug ? " selected" : "") + ">" +
-            esc(c.name) + "</option>";
-        }).join("") +
-        (missing ? '<option value="' + esc(it.slug) + '" selected>' + esc(it.slug) + "（已删除）</option>" : "") +
-        "</select>" +
-        '<input class="adm-input" data-rk="title" placeholder="标题留空则用分类名" value="' + esc(it.title || "") + '">' +
-        '<button type="button" class="adm-iconbtn" data-repeat-up" title="上移" aria-label="上移">' + admIc("chevron-up", 14) + "</button>" +
-        '<button type="button" class="adm-iconbtn" data-repeat-down" title="下移" aria-label="下移">' + admIc("chevron-down", 14) + "</button>" +
-        '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
-    }
-
-    function loadCats() {
-      if (catsCache) return catsCache;
-      catsCache = fetch("/api/categories")
-        .then(function (r) { return r.ok ? r.json() : []; })
-        .catch(function () { return []; });
-      return catsCache;
-    }
-
-    loadCats().then(function (cats) {
-      cats = Array.isArray(cats) ? cats : [];
-      catOptions = cats.map(function (c) { return { slug: c.slug, name: c.name }; });
-      root.querySelectorAll('[data-repeat="cats"]').forEach(function (holder) {
-        var key = holder.getAttribute("data-k");
-        var vals = Array.isArray(draft[key]) ? draft[key] : [];
-        var state = holder.querySelector(".adm-thp-cats-state");
-        if (state) state.remove();
-        holder.querySelectorAll("[data-repeat-row]").forEach(function (r) { r.remove(); });
-        var addBtn = holder.querySelector("[data-repeat-add]");
-        vals.forEach(function (it) {
-          addBtn.insertAdjacentHTML("beforebegin", catRowHtml(it, catOptions));
-        });
-      });
-    });
-
-    function renderNav(groupEl, sections) {
-      if (!sections.length) {
-        groupEl.hidden = true;
-        return;
-      }
-      var list = groupEl.querySelector(".adm-thp-navlist");
-      list.innerHTML = sections.map(function (s) {
-        return '<button type="button" class="adm-thp-navbtn' +
-          (s.key === activeKey ? " is-active" : "") + '" data-sec="' +
-          esc(s.key) + '">' + esc(s.label) + "</button>";
-      }).join("");
-    }
-
-    function renderSection() {
-      var sec = null;
-      for (var i = 0; i < allSections.length; i++) {
-        if (allSections[i].key === activeKey) { sec = allSections[i]; break; }
-      }
-      var body = root.querySelector("[data-thp-body]");
-      if (!sec) {
-        body.innerHTML = '<p class="adm-hint">该主题没有声明可配置项。</p>';
-        return;
-      }
-      var html = "<h2 class='adm-thp-sec-title'>" + esc(sec.label) + "</h2>";
-      if (sec.description) html += '<p class="adm-thp-sec-desc">' + esc(sec.description) + "</p>";
-      html += '<div class="adm-thp-form">' +
-        sec.fields.filter(function (f) { return f.type !== "hidden"; }).map(fieldHtml).join("") +
-        "</div>";
-      body.innerHTML = html;
-    }
-
-    function setActiveNav() {
-      root.querySelectorAll("[data-sec]").forEach(function (b) {
-        b.classList.toggle("is-active", b.getAttribute("data-sec") === activeKey);
-      });
-    }
-
-    function applyShowIf() {
-      root.querySelectorAll("[data-fld]").forEach(function (box) {
-        var key = box.getAttribute("data-fld");
-        var f = fields.filter(function (x) { return x.key === key; })[0];
-        if (!f || !f.showIf) return;
-        box.hidden = !fieldVisible(f);
-      });
-    }
 
     function kebab(k) {
       return "--" + k.replace(/[A-Z]/g, function (m) { return "-" + m.toLowerCase(); });
     }
+
     function updatePreview() {
       var base = panel.baselineConfig || {};
       var real = {};
       appearance.forEach(function (s) {
         (s.fields || []).forEach(function (f) {
-          var v = draft[f.key];
+          var v = form.draft[f.key];
           var s0 = typeof v === "string" ? v.trim() : "";
           if (!s0) return;
           if (typeof base[f.key] === "string" && String(base[f.key]).trim() === s0) return;
           real[f.key] = s0;
         });
       });
-      var preset = (panel.palettes || {})[draft.palette] || {};
+      var preset = (panel.palettes || {})[form.draft.palette] || {};
       var merged = Object.assign({}, base, preset, real);
       var decls = [];
       Object.keys(merged).forEach(function (k) {
@@ -1974,7 +2184,8 @@
       });
       decls.push("--bg:" + (merged.background || "#09090b"));
       decls.push("color-scheme:" + (merged.colorScheme || "dark"));
-      root.querySelector("[data-thp-preview]").style.cssText = decls.join(";");
+      var prev = root.querySelector("[data-thp-preview]");
+      if (prev) prev.style.cssText = decls.join(";");
     }
 
     function setMsg(kind, text) {
@@ -1984,120 +2195,23 @@
       if (text) setTimeout(function () { if (el.textContent === text) el.textContent = ""; }, 4000);
     }
 
-    root.addEventListener("click", function (e) {
-      var secBtn = e.target.closest && e.target.closest("[data-sec]");
-      if (secBtn) {
-        activeKey = secBtn.getAttribute("data-sec");
-        renderSection();
-        setActiveNav();
-        return;
-      }
-      var sw = e.target.closest && e.target.closest('[data-t="switch"]');
-      if (sw && root.contains(sw)) {
-        var skey = sw.getAttribute("data-k");
-        draft[skey] = !draft[skey];
-        sw.querySelector(".track").classList.toggle("is-on", !!draft[skey]);
-        applyShowIf();
-        return;
-      }
-      var addBtn = e.target.closest && e.target.closest("[data-repeat-add]");
-      if (addBtn) {
-        var holder = addBtn.closest("[data-repeat]");
-        var kind = holder.getAttribute("data-repeat");
-        if (kind === "links") {
-          addBtn.insertAdjacentHTML("beforebegin", linkRowHtml({}));
-        } else {
-          addBtn.insertAdjacentHTML("beforebegin", catRowHtml({}, catOptions));
-        }
-        return;
-      }
-      var del = e.target.closest && e.target.closest("[data-repeat-del]");
-      if (del) { del.closest("[data-repeat-row]").remove(); return; }
-      var up = e.target.closest && e.target.closest("[data-repeat-up]");
-      var down = e.target.closest && e.target.closest("[data-repeat-down]");
-      if (up || down) {
-        var row = (up || down).closest("[data-repeat-row]");
-        if (up && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
-        if (down && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
-      }
+    var form = sfForm(root, {
+      sections: appearance.concat(own),
+      draft: Object.assign({}, panel.config || {}, panel.settings || {}),
+      navTargets: [
+        { el: root.querySelector('[data-thp-nav-group="appearance"]'), sections: appearance },
+        { el: root.querySelector('[data-thp-nav-group="settings"]'), sections: own },
+      ],
+      bodyEl: root.querySelector("[data-thp-body]"),
+      onChange: updatePreview,
     });
 
-    function readRepeat(holder) {
-      var rows = holder.querySelectorAll("[data-repeat-row]");
-      return [].slice.call(rows).map(function (r) {
-        var out = {};
-        r.querySelectorAll("[data-rk]").forEach(function (inp) {
-          out[inp.getAttribute("data-rk")] = inp.value;
-        });
-        return out;
-      });
-    }
-
-    root.addEventListener("input", function (e) {
-      var t = e.target;
-      if (!t.hasAttribute || !t.hasAttribute("data-k")) return;
-      var key = t.getAttribute("data-k");
-      var f = fields.filter(function (x) { return x.key === key; })[0];
-      if (f && f.type === "number") draft[key] = Number(t.value);
-      else if (f && f.type === "range") draft[key] = Number(t.value);
-      else draft[key] = t.value;
-      if (f && f.type === "font") t.style.fontFamily = t.value || "inherit";
-      var cbox = t.closest("[data-fld]");
-      if (cbox) {
-        if (t.type === "color") {
-          var txt = cbox.querySelector('input[type="text"][data-k]');
-          if (txt) txt.value = t.value;
-        } else {
-          var pick = cbox.querySelector("input[type=color]");
-          if (pick && /^#[0-9a-f]{6}$/i.test(t.value)) pick.value = t.value;
-        }
-      }
-      var rv = f && f.type === "range" && root.querySelector('[data-range-val="' + key + '"]');
-      if (rv) rv.textContent = t.value + (f.unit || "");
-      applyShowIf();
-      updatePreview();
-    });
-    root.addEventListener("change", function (e) {
-      var t = e.target;
-      if (t.hasAttribute && t.hasAttribute("data-img-key")) {
-        var f0 = t.files && t.files[0];
-        t.value = "";
-        if (!f0) return;
-        var btn = t.parentElement;
-        btn.classList.add("is-busy");
-        var fd = new FormData();
-        fd.append("file", f0);
-        fetch("/api/media", { method: "POST", body: fd })
-          .then(async function (res) {
-            var data = {};
-            try { data = await res.json(); } catch (err) {}
-            if (!res.ok) throw new Error(data.error || "上传失败 (" + res.status + ")");
-            var url = data.url || data.path || data.src || "";
-            var ik = t.getAttribute("data-img-key");
-            draft[ik] = url;
-            var box = t.closest("[data-fld]");
-            box.querySelector("[data-k]").value = url;
-            box.querySelector(".adm-wg-img-prev").src = url;
-          })
-          .catch(function (err) { toast(err.message, "err"); })
-          .finally(function () { btn.classList.remove("is-busy"); });
-        return;
-      }
-      if (!t.hasAttribute || !t.hasAttribute("data-k")) return;
-      var key = t.getAttribute("data-k");
-      var fld = fields.filter(function (x) { return x.key === key; })[0];
-      if (fld && fld.type === "number") draft[key] = Number(t.value);
-      else if (fld && fld.type === "range") draft[key] = Number(t.value);
-      else draft[key] = t.value;
-      applyShowIf();
-      updatePreview();
-    });
-
-    function collectDraft() {
-      root.querySelectorAll("[data-repeat]").forEach(function (holder) {
-        draft[holder.getAttribute("data-k")] = readRepeat(holder);
-      });
-      return draft;
+    var areaUl = root.querySelector("[data-thp-areas]");
+    if (areaUl) {
+      areaUl.innerHTML = (panel.widgetAreas || []).map(function (a) {
+        return "<li><span>" + sfEsc(a.label) + "</span><code>" + sfEsc(a.key) + "</code>" +
+          (a.description ? "<em>" + sfEsc(a.description) + "</em>" : "") + "</li>";
+      }).join("");
     }
 
     root.querySelector("[data-thp-save]").addEventListener("click", async function () {
@@ -2106,7 +2220,7 @@
       btn.disabled = true;
       label.textContent = "保存中…";
       try {
-        await api("PUT", "/api/themes/" + encodeURIComponent(panel.theme.slug) + "/settings", collectDraft());
+        await api("PUT", "/api/themes/" + encodeURIComponent(panel.theme.slug) + "/settings", form.collect());
         setMsg("ok", "已保存，刷新前台即可看到效果");
         toast("已保存", "ok");
       } catch (err) {
@@ -2124,10 +2238,8 @@
       try {
         var fresh = await api("DELETE", "/api/themes/" + encodeURIComponent(panel.theme.slug) + "/settings");
         panel = fresh;
-        draft = Object.assign({}, panel.config || {}, panel.settings || {});
-        renderNav(root.querySelector('[data-thp-nav-group="appearance"]'), panel.appearanceSchema || []);
-        renderNav(root.querySelector('[data-thp-nav-group="settings"]'), panel.settingsSchema || []);
-        renderSection();
+        form.setDraft(Object.assign({}, panel.config || {}, panel.settings || {}));
+        form.renderAll();
         updatePreview();
         setMsg("ok", "已恢复主题默认值");
       } catch (err) {
@@ -2137,15 +2249,103 @@
       }
     });
 
-    renderNav(root.querySelector('[data-thp-nav-group="appearance"]'), appearance);
-    renderNav(root.querySelector('[data-thp-nav-group="settings"]'), own);
-    var areaUl = root.querySelector("[data-thp-areas]");
-    areaUl.innerHTML = (panel.widgetAreas || []).map(function (a) {
-      return "<li><span>" + esc(a.label) + "</span><code>" + esc(a.key) + "</code>" +
-        (a.description ? '<em>' + esc(a.description) + "</em>" : "") + "</li>";
-    }).join("");
-    renderSection();
+    form.renderAll();
     updatePreview();
+  }
+
+  function initPluginSettings() {
+    if (window.__plgSetBound) return;
+    window.__plgSetBound = true;
+
+    function modalEl() {
+      return document.querySelector("[data-plg-modal]");
+    }
+
+    function close() {
+      var m = modalEl();
+      if (m) m.hidden = true;
+    }
+
+    function flash(m, text, ok) {
+      var el = m.querySelector("[data-plg-msg]");
+      el.textContent = text || "";
+      el.className = "adm-thp-msg" + (text ? (ok ? " is-ok" : " is-err") : "");
+    }
+
+    document.addEventListener("click", function (e) {
+      var openBtn = e.target.closest && e.target.closest("[data-plg-settings]");
+      if (openBtn) {
+        e.preventDefault();
+        open(openBtn.getAttribute("data-slug"));
+        return;
+      }
+      var closer = e.target.closest && e.target.closest("[data-plg-close]");
+      if (closer) {
+        close();
+        return;
+      }
+      if (e.target.hasAttribute && e.target.hasAttribute("data-plg-modal")) close();
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") close();
+    });
+
+    async function open(slug) {
+      var m = modalEl();
+      if (!m || !slug) return;
+      var body = m.querySelector("[data-plg-body]");
+      m.querySelector("[data-plg-title]").textContent = "插件设置";
+      m.querySelector("[data-plg-sub]").textContent = "plugins/" + slug;
+      body.innerHTML = '<p class="adm-hint">正在加载…</p>';
+      m.querySelector("[data-plg-nav]").innerHTML = "";
+      flash(m, "", true);
+      m.hidden = false;
+
+      var view;
+      try {
+        view = await api("GET", "/api/plugins/" + encodeURIComponent(slug));
+      } catch (err) {
+        body.innerHTML = '<p class="adm-thp-msg is-err">' + sfEsc(err.message) + "</p>";
+        return;
+      }
+      var schema = (view.manifest && view.manifest.settings) || [];
+      m.querySelector("[data-plg-title]").textContent = (view.name || slug) + " · 设置";
+      if (!schema.length) {
+        body.innerHTML = '<p class="adm-hint">该插件没有声明可配置项。</p>';
+        return;
+      }
+
+      var form = m.__plgForm;
+      if (!form) {
+        form = sfForm(m, {
+          sections: schema,
+          draft: {},
+          navTargets: [{ el: m.querySelector("[data-plg-navgroup]"), all: true }],
+          bodyEl: body,
+        });
+        m.__plgForm = form;
+      } else {
+        form.setSections(schema);
+      }
+      form.setDraft(Object.assign({}, view.resolvedSettings || {}));
+      form.renderAll();
+
+      var saveBtn = m.querySelector("[data-plg-save]");
+      saveBtn.onclick = async function () {
+        saveBtn.disabled = true;
+        try {
+          await api("PATCH", "/api/plugins/" + encodeURIComponent(slug), { settings: form.collect() });
+          flash(m, "已保存", true);
+          toast("设置已保存", "ok");
+          setTimeout(close, 350);
+        } catch (err) {
+          flash(m, err.message, false);
+        } finally {
+          saveBtn.disabled = false;
+        }
+      };
+    }
   }
 
   function initTaxonomy() {
@@ -2262,6 +2462,7 @@
     initMenuSettings();
     initThemeManager();
     initThemePanel();
+    initPluginSettings();
     initTaxonomy();
   }
 

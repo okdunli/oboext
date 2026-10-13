@@ -1,5 +1,6 @@
 export const PLUGIN_ENTRIES: Record<string, () => Promise<any>> = {
   "announcement-bar": () => import("../../../plugins/announcement-bar/index"),
+  "checkin": () => import("../../../plugins/checkin/index"),
   "code-copy": () => import("../../../plugins/code-copy/index"),
   "comment-captcha": () => import("../../../plugins/comment-captcha/index"),
   "comment-guard": () => import("../../../plugins/comment-guard/index"),

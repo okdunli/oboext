@@ -14,6 +14,7 @@ import {
   ServiceError,
 } from "./admin.js";
 import { adminListPages, adminGetPage } from "./pages.js";
+import { POST_FORMATS } from "./post-formats.js";
 import { listMedia } from "./media.js";
 import { listMenus } from "./menus.js";
 import {
@@ -122,9 +123,11 @@ export async function adminPost(p: any, ctx: Ctx) {
   const authors = can(user.role, "content:update:any")
     ? await db.select({ id: users.id, name: users.name }).from(users).orderBy(users.name)
     : [];
-  if (p?.id === "new" || p?.id == null) return { post: null, categories, tags, authors };
+
+  if (p?.id === "new" || p?.id == null)
+    return { post: null, categories, tags, authors, formats: POST_FORMATS };
   const post = await adminGetPost(user, Number(p.id));
-  return { post, categories, tags, authors };
+  return { post, categories, tags, authors, formats: POST_FORMATS };
 }
 
 export async function adminPages(p: any, ctx: Ctx) {

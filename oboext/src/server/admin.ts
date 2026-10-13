@@ -315,6 +315,8 @@ type PostInput = {
   commentStatus?: "open" | "closed";
   pinned?: boolean;
   format?: string;
+
+  formatMeta?: Record<string, string>;
   template?: string | null;
   publishedAt?: string | null;
   authorId?: number;
@@ -328,6 +330,18 @@ type PostInput = {
 function normMetas(v: unknown): { key: string; value: string }[] {
   if (!Array.isArray(v)) throw new ServiceError("自定义字段格式不正确", 422);
   return v.map((m: any) => ({ key: String(m?.key ?? ""), value: String(m?.value ?? "") }));
+}
+
+function normFormatMeta(v: unknown): Record<string, string> {
+  if (v == null) return {};
+  if (typeof v !== "object" || Array.isArray(v))
+    throw new ServiceError("文章形式字段格式不正确", 422);
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    const key = k.trim();
+    if (key) out[key.slice(0, 100)] = String(val ?? "");
+  }
+  return out;
 }
 
 function clean(v: string | null | undefined): string | null {
@@ -377,6 +391,7 @@ export async function createPost(user: SessionUser, input: PostInput) {
           ? new Date()
           : null,
       format: (input.format as any) ?? "standard",
+      formatMeta: normFormatMeta(input.formatMeta),
       pinned: input.pinned ?? false,
       template: clean(input.template),
     })
@@ -428,6 +443,9 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
       commentStatus: input.commentStatus ?? existing.commentStatus,
       publishedAt,
       format: (input.format as any) ?? existing.format,
+
+      formatMeta:
+        input.formatMeta !== undefined ? normFormatMeta(input.formatMeta) : existing.formatMeta,
       pinned: input.pinned !== undefined ? input.pinned : existing.pinned,
       template: input.template !== undefined ? clean(input.template) : existing.template,
       updatedAt: new Date(),

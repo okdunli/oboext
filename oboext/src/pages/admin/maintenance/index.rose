@@ -1,0 +1,50 @@
+<script>
+
+  let c = $data(() => __rvLoad("admin.maintenance", {}));
+  function v(k, dflt) {
+    const x = c()[k];
+    return x == null || x === "" ? (dflt == null ? "" : dflt) : x;
+  }
+  function on(k) {
+    return c()[k] ? "1" : "0";
+  }
+</script>
+
+<head>
+  <title>维护模式 - 管理后台</title>
+</head>
+
+<form data-adm-form="maintenance">
+  <div class="adm-toolbar">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="adm-ic" style="--i:url(/public/icons/construction.svg);width:20px;height:20px;color:#818cf8;"></span>
+      <strong style="font-size:16px">维护模式</strong>
+    </div>
+    <span style="flex:1"></span>
+    <button class="adm-btn" type="submit">保存更改</button>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-bd">
+      <label class="adm-switch"><span><span class="t">关闭前台访问</span><span class="d">开启后，所有访客（含普通会员）打开前台任意内容页都会看到维护提示；管理员与编辑角色不受影响</span></span><input type="checkbox" name="enabled" data-on={on('enabled')} data-bool></label>
+      <div class="adm-field" data-show-if="enabled=1" hidden style="margin-top:14px;">
+        <p class="adm-hint" style="margin:0;color:#fbbf24;">维护期间伪装登录入口、会员注册与找回密码接口仍然可用；站点地图、Feed 等机器可读接口不受影响。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-hd"><strong style="font-size:14px;">维护页内容</strong></div>
+    <div class="adm-card-bd">
+      <div class="adm-field">
+        <label>标题</label>
+        <input class="adm-input" name="title" value={v('title', '网站维护中')} maxlength="120" placeholder="网站维护中">
+      </div>
+      <div class="adm-field" style="margin-top:12px;">
+        <label>说明正文</label>
+        <textarea class="adm-textarea" name="message" rows="5" maxlength="1000" data-dv={v('message')} placeholder="站点正在进行例行维护，很快就会回来，请稍后再访问。"></textarea>
+        <p class="adm-hint" style="margin:6px 0 0;">纯文本，按空行分段，最多 1000 字。</p>
+      </div>
+    </div>
+  </div>
+</form>

@@ -1,0 +1,19 @@
+<script>
+
+  import { apiGate, readBody, requireCap } from "@server/admin";
+  import { getMaintenanceSettings, saveMaintenanceSettings } from "@server/maintenance";
+
+  export async function GET() {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return getMaintenanceSettings();
+    });
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return saveMaintenanceSettings(await readBody(request));
+    });
+  }
+</script>

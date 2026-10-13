@@ -744,6 +744,16 @@
         await api("POST", "/api/oauth-config", formObject(form));
         toast("自定义登录方式已创建", "ok");
         setTimeout(admRefresh, 600);
+      } else if (kind === "permalinks") {
+
+        await api("PUT", "/api/permalinks", formObject(form));
+        toast("固定链接已保存，全站链接立即生效", "ok");
+        setTimeout(admRefresh, 600);
+      } else if (kind === "maintenance") {
+
+        await api("PUT", "/api/maintenance", formObject(form));
+        toast("维护设置已保存并立即生效", "ok");
+        setTimeout(admRefresh, 600);
       } else if (kind === "account-profile") {
 
         await api("POST", "/api/account/profile", {

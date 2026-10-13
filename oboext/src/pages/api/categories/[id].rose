@@ -1,9 +1,20 @@
 <script>
-  // /api/categories/:id — PUT update, DELETE remove (children promoted up).
-  import { apiGate, readBody, updateCategory, deleteCategory } from "@server/admin";
+  // /api/categories/:id — GET one (public, mirrors the original), PUT update,
+  // DELETE remove (children promoted up).
+  import { apiGate, readBody, jsonFail, updateCategory, deleteCategory } from "@server/admin";
+  import { getCategory } from "@server/queries";
 
   function pathId(request) {
-    return Number(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+    const n = Number(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+    return Number.isInteger(n) && n > 0 ? n : 0;
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const id = pathId(request);
+      if (!id) return jsonFail("分类不存在", 404);
+      return getCategory(id);
+    });
   }
 
   export async function PUT(request) {

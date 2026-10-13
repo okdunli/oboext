@@ -1,6 +1,7 @@
 <script>
   // /api/themes
-  //   GET  list rows + read-only manifest meta + active slug (settings:manage)
+  //   GET  public list: rows + read-only manifest meta + active slug (the
+  //       original serves this unauthenticated; only writes need settings:manage)
   //   POST create a real themes/<slug> folder from the default template
   import { apiGate, readBody, jsonFail, requireCap } from "@server/admin";
   import {
@@ -13,7 +14,6 @@
 
   export async function GET() {
     return apiGate(async () => {
-      requireCap(getContext().user, "settings:manage");
       const [rows, activeSlug] = await Promise.all([listThemes(), getActiveThemeSlug()]);
       return {
         activeThemeSlug: activeSlug,

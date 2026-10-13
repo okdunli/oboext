@@ -29,6 +29,7 @@ import {
 } from "./links.js";
 import { attachPostMetas, getPostMetas } from "./metas.js";
 import { HOOKS, applyFilters } from "./hooks.js";
+import { ServiceError } from "./errors.js";
 
 export type TaxRef = { id: number; name: string; slug: string; url: string; icon?: string | null };
 
@@ -44,6 +45,8 @@ export type PostView = Post & {
 export type PostQuery = {
   status?: string;
   authorId?: number;
+  categoryId?: number;
+  tagId?: number;
   categorySlug?: string;
   tagSlug?: string;
   search?: string;
@@ -119,6 +122,20 @@ export async function getTagBySlug(slug: string) {
   return rows[0] ?? null;
 }
 
+/** Public by-id reads for /api/categories/:id and /api/tags/:id (the original
+ *  serves both to guests; a missing row is a 404 ServiceError). */
+export async function getCategory(id: number): Promise<Category> {
+  const [row] = await db.select().from(categories).where(eq(categories.id, id));
+  if (!row) throw new ServiceError("分类不存在", 404);
+  return row;
+}
+
+export async function getTag(id: number): Promise<Tag> {
+  const [row] = await db.select().from(tags).where(eq(tags.id, id));
+  if (!row) throw new ServiceError("标签不存在", 404);
+  return row;
+}
+
 export async function listPosts(
   opts: PostQuery = {},
 ): Promise<{ items: PostView[]; total: number }> {
@@ -128,6 +145,14 @@ export async function listPosts(
 
   if (opts.status) conditions.push(eq(posts.status, opts.status as any));
   if (opts.authorId) conditions.push(eq(posts.authorId, opts.authorId));
+  if (opts.categoryId)
+    conditions.push(
+      sql`EXISTS (SELECT 1 FROM ${postCategories} pc WHERE pc.post_id = ${posts.id} AND pc.category_id = ${opts.categoryId})`,
+    );
+  if (opts.tagId)
+    conditions.push(
+      sql`EXISTS (SELECT 1 FROM ${postTags} pt WHERE pt.post_id = ${posts.id} AND pt.tag_id = ${opts.tagId})`,
+    );
   if (opts.categorySlug)
     conditions.push(
       sql`EXISTS (SELECT 1 FROM ${postCategories} pc JOIN ${categories} c ON c.id = pc.category_id WHERE pc.post_id = ${posts.id} AND c.slug = ${opts.categorySlug})`,
@@ -297,6 +322,20 @@ export async function getPost(tail: string): Promise<PostView | null> {
     if (!row) row = await fetchOne(eq(posts.initialSlug, tail));
   }
   return row ? hydrate(row) : null;
+}
+
+/** Public single-post read by numeric id (published only); null when absent
+ *  or the id is not a positive integer. Mirrors the original /api/posts/:id
+ *  guest branch. */
+export async function getPublishedPostById(id: number): Promise<PostView | null> {
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const rows = await db
+    .select({ post: posts, authorName: users.name, authorEmail: users.email, authorId: users.id })
+    .from(posts)
+    .leftJoin(users, eq(posts.authorId, users.id))
+    .where(and(eq(posts.status, "published"), eq(posts.id, id)))
+    .limit(1);
+  return rows[0] ? hydrate(rows[0]) : null;
 }
 
 export async function relatedPosts(post: PostView, n = 4): Promise<PostView[]> {

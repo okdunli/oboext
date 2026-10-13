@@ -46,6 +46,8 @@ import { listAdminProviders, type AdminProvider } from "./oauth.js";
 import { getPermalinkConfig } from "./links.js";
 import { getMaintenanceSettings } from "./maintenance.js";
 import { listSecurityEvents } from "./security-events.js";
+import { readdirSync } from "node:fs";
+import path from "node:path";
 import { applyFilters, HOOKS } from "./hooks.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
@@ -276,6 +278,21 @@ export async function adminSecurityLogs(p: unknown, ctx: Ctx) {
     eventType: type || undefined,
   });
   return { ...out, page, pages: Math.max(1, Math.ceil(out.total / limit)), type };
+}
+
+export async function adminIcons(_p: unknown, ctx: Ctx) {
+  requireUser(ctx);
+  const dir = path.resolve(process.cwd(), "oboext/public/icons");
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir)
+      .filter((f) => f.endsWith(".svg"))
+      .map((f) => f.slice(0, -4))
+      .sort();
+  } catch {
+    names = [];
+  }
+  return { names };
 }
 
 /** Widget manager: areas, registered types and the selected theme's instances. */

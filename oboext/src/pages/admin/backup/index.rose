@@ -1,0 +1,43 @@
+<script>
+
+  let d = $data(() => __rvLoad("admin.session", {}));
+</script>
+
+<head>
+  <title>备份恢复 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="adm-ic" style="--i:url(/public/icons/database-backup.svg);width:20px;height:20px;color:#818cf8;"></span>
+    <strong style="font-size:16px">备份恢复</strong>
+  </div>
+</div>
+
+<div class="adm-card" style="margin-bottom:16px;">
+  <div class="adm-card-hd"><strong style="font-size:14px;">下载整库备份</strong></div>
+  <div class="adm-card-bd">
+    <p class="adm-hint" style="margin:0 0 12px;">备份包含全部业务表（用户、设置、插件、会员、安全日志等）的原始行，JSON 格式；不含 content/uploads 下的媒体文件（请单独保管）。恢复时在「恢复」卡片上传该文件即可。</p>
+    <a class="adm-btn" href="/api/admin/backup" download><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/download.svg)"></span>下载备份</a>
+  </div>
+</div>
+
+<div class="adm-card" style="margin-bottom:16px;">
+  <div class="adm-card-hd"><strong style="font-size:14px;">从备份恢复</strong></div>
+  <div class="adm-card-bd">
+    <p class="adm-hint" style="margin:0 0 12px;color:#f87171;">破坏性操作：恢复会清空当前全部业务数据，整库替换为备份时刻的状态。恢复前系统会自动把当前库快照保存到服务器 .data/backups 目录（保留最近 10 份）。</p>
+    <form data-adm-form="backup-restore">
+      <div class="adm-field">
+        <label>备份文件（oboext-db-backup-*.json）</label>
+        <input class="adm-input" type="file" name="file" accept=".json,application/json" required>
+      </div>
+      <div class="adm-field" style="margin-top:12px;">
+        <label>确认词（输入 RESTORE）</label>
+        <input class="adm-input" name="confirm" placeholder="RESTORE" autocomplete="off" spellcheck="false" style="max-width:220px;" required>
+      </div>
+      <p class="adm-hint" style="margin:12px 0 12px;color:#f87171;" data-adm-msg></p>
+      <button class="adm-btn" type="submit" style="background:#dc2626;">执行恢复</button>
+    </form>
+    <p class="adm-hint" style="margin:12px 0 0;">恢复完成后全部缓存即已失效、插件按新数据重载；若当前登录失效，请用备份中的管理员账号重新登录。</p>
+  </div>
+</div>

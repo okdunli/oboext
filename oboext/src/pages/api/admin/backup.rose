@@ -1,0 +1,50 @@
+<script>
+
+  import { apiGate, jsonFail, requireCap } from "@server/admin";
+  import { buildDatabaseBackup, restoreDatabaseBackup } from "@server/backup";
+
+  function compactStamp() {
+
+    return new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14).replace(/^(\d{8})(\d{6})$/, "$1-$2");
+  }
+
+  export async function GET() {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const backup = await buildDatabaseBackup();
+      return new Response(JSON.stringify(backup), {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "content-disposition": `attachment; filename="oboext-db-backup-${compactStamp()}.json"`,
+        },
+      });
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      let form;
+      try {
+        form = await request.formData();
+      } catch {
+        return jsonFail("恢复请求必须是 multipart 表单上传", 400);
+      }
+      if (form.get("confirm") !== "RESTORE") {
+        return jsonFail("请输入确认词 RESTORE 后再执行恢复", 400);
+      }
+      const file = form.get("file");
+      if (!(file instanceof File) || file.size === 0) {
+        return jsonFail("请选择有效的备份文件", 400);
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        return jsonFail("备份文件不是合法 JSON", 400);
+      }
+      return restoreDatabaseBackup(parsed);
+    });
+  }
+</script>

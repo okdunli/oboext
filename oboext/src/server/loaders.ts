@@ -1130,6 +1130,7 @@ export const loaders = {
   "admin.permalinks": admin.adminPermalinks,
   "admin.maintenance": admin.adminMaintenance,
   "admin.security-logs": admin.adminSecurityLogs,
+  "admin.icons": admin.adminIcons,
   "notFoundConfig": admin.notFoundConfig,
 };
 export type LoaderKey = keyof typeof loaders;

@@ -677,6 +677,20 @@ export function commentsBare(m: CommentModel): string {
   return commentsInner(m);
 }
 
+/** Cover + first inline images — the flickering collage backdrop of the
+ *  gallery header. Empty array = plain article header.
+ *  mirror themes/skyscraper/PostPage.tsx collectGalleryImages。 */
+function collectGalleryImages(html: string, featured?: string | null): string[] {
+  const out: string[] = [];
+  if (featured) out.push(featured);
+  const re = /<img[^>]+src=["']([^"']+)["'][^>]*>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) && out.length < 9) {
+    if (out.indexOf(m[1]) === -1) out.push(m[1]);
+  }
+  return out;
+}
+
 export function postPage(
   p: PostView,
   related: PostView[],
@@ -709,13 +723,32 @@ export function postPage(
   const tags = p.tags.length
     ? '<div class="tags">' + p.tags.map((t) => `<a href="${esc(t.url)}"># ${esc(t.name)}</a>`).join("") + "</div>"
     : "";
+  
+  const isGallery = (p as { format?: string }).format === "gallery";
+  const galleryImgs = isGallery ? collectGalleryImages(renderedBody, p.featuredImage) : [];
+  const showBanner = isGallery && galleryImgs.length > 0;
+  const banner = showBanner
+    ? '<div class="gallery_slider">' +
+      '<div class="background" aria-hidden="true">' +
+      galleryImgs.map((src) => `<img src="${esc(src)}" alt="">`).join("") +
+      "</div>" +
+      `<h1>${esc(p.title)}</h1>` +
+      '<div class="info">' +
+      (cat ? `<span>${esc(cat.name)}</span>` : "") +
+      `<span>${fmtDate(p.publishedAt)}</span>` +
+      `<span>${p.views ?? 0} 阅读</span>` +
+      "</div>" +
+      '<a class="play" href="#post-body"><i class="sk-i-play"></i>浏览相册</a>' +
+      "</div>"
+    : "";
   return (
-    '<div class="sk-postpage">' +
+    `<div class="sk-postpage${showBanner ? " is-gallery" : ""}">` +
     `<div class="sk-crumbs"><a href="/">首页</a> / <a href="${esc(blogIndex)}">全部文章</a> / <span>${esc(p.title)}</span></div>` +
+    banner +
     '<article class="post-wrapper" id="post-body">' +
-    meta +
-    `<h1>${esc(p.title)}</h1>` +
-    (p.excerpt ? `<p class="sk-muted">${esc(p.excerpt)}</p>` : "") +
+    (showBanner ? "" : meta) +
+    (showBanner ? "" : `<h1>${esc(p.title)}</h1>`) +
+    (showBanner || !p.excerpt ? "" : `<p class="sk-muted">${esc(p.excerpt)}</p>`) +
     toc +
     `<div class="post-content prose-cms">${renderedBody}</div>` +
     tags +

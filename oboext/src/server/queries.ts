@@ -38,6 +38,7 @@ export type PostView = Post & {
 
 export type PostQuery = {
   status?: string;
+  authorId?: number;
   categorySlug?: string;
   tagSlug?: string;
   search?: string;
@@ -66,7 +67,7 @@ export function invalidateSettings(): void {
   settingsCache = { at: 0, value: null };
 }
 
-async function attachTaxonomies(ids: number[]) {
+export async function attachTaxonomies(ids: number[]) {
   const cats: Record<number, { id: number; name: string; slug: string }[]> = {};
   const tg: Record<number, { id: number; name: string; slug: string }[]> = {};
   if (!ids.length) return { categories: cats, tags: tg };
@@ -121,6 +122,7 @@ export async function listPosts(
   const conditions: any[] = [];
 
   if (opts.status) conditions.push(eq(posts.status, opts.status as any));
+  if (opts.authorId) conditions.push(eq(posts.authorId, opts.authorId));
   if (opts.categorySlug)
     conditions.push(
       sql`EXISTS (SELECT 1 FROM ${postCategories} pc JOIN ${categories} c ON c.id = pc.category_id WHERE pc.post_id = ${posts.id} AND c.slug = ${opts.categorySlug})`,

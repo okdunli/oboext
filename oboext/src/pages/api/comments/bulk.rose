@@ -1,0 +1,31 @@
+<script>
+
+  //   POST { action: "status" | "delete", ids: number[], status?: published|pending|spam }
+  import { apiGate, readBody, setCommentsStatus, deleteComments } from "@server/admin";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const ids = Array.isArray(body.ids)
+        ? body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+        : [];
+      if (body.action === "delete") {
+        return { ids: await deleteComments(getContext().user, ids) };
+      }
+      if (body.action === "status") {
+        const status = String(body.status || "");
+        if (status !== "published" && status !== "pending" && status !== "spam") {
+          return new Response(JSON.stringify({ error: "非法的评论状态" }), {
+            status: 422,
+            headers: { "content-type": "application/json; charset=utf-8" },
+          });
+        }
+        return { ids: await setCommentsStatus(getContext().user, ids, status) };
+      }
+      return new Response(JSON.stringify({ error: "未知的批量操作" }), {
+        status: 422,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+</script>

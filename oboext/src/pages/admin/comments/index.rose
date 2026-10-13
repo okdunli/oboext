@@ -64,10 +64,17 @@
   <span class="adm-hint">共 {d().total} 条</span>
 </div>
 
+<div class="adm-toolbar" style="gap:8px;">
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/comments/bulk" data-op="published">批量通过</button>
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/comments/bulk" data-op="spam">标为垃圾</button>
+  <button class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-url="/api/comments/bulk" data-op="delete">批量删除</button>
+</div>
+
 <div class="adm-card adm-table-wrap">
   <table class="adm-table">
     <thead>
       <tr>
+        <th style="width:34px"><input type="checkbox" data-adm-act="check-all"></th>
         <th style="width:150px">作者</th>
         <th>评论</th>
         <th style="width:170px">所属文章</th>
@@ -79,6 +86,7 @@
     <tbody>
       {#each rows() as c}
       <tr>
+        <td><input type="checkbox" class="adm-check" value={c.id}></td>
         <td>
           <div class="title">{c.authorName || "匿名"}</div>
           <div class="sub">{c.authorEmail || ""}</div>

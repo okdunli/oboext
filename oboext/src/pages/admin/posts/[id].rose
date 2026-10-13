@@ -45,7 +45,7 @@
   }
   function postUrl() {
     const x = d().post;
-    return x ? "/blog/" + x.slug : "#";
+    return x ? x.url || "/blog/" + x.slug : "#";
   }
   function deleteUrl() {
     const x = d().post;
@@ -214,6 +214,15 @@
             data-dv={val('seoDescription')}
           ></textarea>
           <input class="adm-input" name="seoKeywords" placeholder="SEO 关键词，逗号分隔" value={val('seoKeywords')} style="margin-top:10px">
+        </div>
+      </div>
+
+      <div class="adm-card">
+        <div class="adm-card-hd"><strong>自定义字段</strong></div>
+        <div class="adm-card-bd">
+          <div class="adm-metas" data-adm-metas></div>
+          <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-meta" style="margin-top:8px"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/plus.svg)"></span>添加字段</button>
+          <div class="adm-hint" style="margin-top:8px">主题可读取的键值对，如 bluemix 的卡片主色 <code>bluemix_card_theme</code>（#rrggbb）。</div>
         </div>
       </div>
     </div>

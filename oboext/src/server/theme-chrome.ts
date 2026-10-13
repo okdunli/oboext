@@ -1993,6 +1993,40 @@ function bmixPagePage(parts: PagePageParts): string {
     `</div></div></div></div>`;
 }
 
+export function bluemixNotFoundPage(parts: {
+  settings: { title: string; message: string; showSearch: boolean; showRecent: boolean };
+  recent: { url: string; title: string }[];
+}): string {
+  const { settings, recent } = parts;
+  const lines = String(settings.message || "")
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const msg = lines.length
+    ? `<div class="bmx-404-msg">${lines.map((l) => `<p>${esc(l)}</p>`).join("")}</div>`
+    : "";
+  const search = settings.showSearch
+    ? `<form class="bmx-404-search" role="search" action="/search" method="get">` +
+      `<input type="search" name="q" placeholder="搜索文章…" aria-label="搜索文章">` +
+      `<button type="submit">${lucideSvg("search", 15)}搜索</button></form>`
+    : "";
+  const recentHtml = recent.length
+    ? `<div class="bmx-404-recent"><h2 class="bmx-404-recent-title">最近文章</h2><ul>` +
+      recent.map((p) => `<li><a href="${esc(p.url)}">${esc(p.title)}</a></li>`).join("") +
+      `</ul></div>`
+    : "";
+  return `<div class="bmx-404"><div class="model-wrapper"><div class="model bmx-404-card">` +
+    `<div class="bmx-404-num" aria-hidden="true">404</div>` +
+    `<h1 class="bmx-404-title">${esc(settings.title)}</h1>` +
+    msg +
+    `<div class="bmx-404-actions"><a href="/" class="bmx-404-home">` +
+    `<span class="bmx-404-home-icon">${lucideSvg("arrow-left", 15)}</span>` +
+    `<span class="bmx-404-home-text">带我回家</span></a></div>` +
+    search +
+    recentHtml +
+    `</div></div></div>`;
+}
+
 const BLUEMIX_VARS = `
 :root{
 --primary-color:#1f8bff;--primary-dark:#32465e;--primary-gray:#5578a1;

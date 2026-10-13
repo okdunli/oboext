@@ -165,6 +165,24 @@
       return;
     }
 
+    if (act === "notify-test") {
+      e.preventDefault();
+      var ch = t.getAttribute("data-channel");
+      var input = document.querySelector('[data-notify-test-input="' + ch + '"]');
+      var target = input ? (input.value || "").trim() : "";
+      if (!target) return toast("请先填写测试目标");
+      t.disabled = true;
+      try {
+        await api("POST", "/api/notify/test", { channel: ch, target: target });
+        toast("测试已发送，请查收", "ok");
+      } catch (err) {
+        toast(err.message, "err");
+      } finally {
+        t.disabled = false;
+      }
+      return;
+    }
+
     if (act === "plugin-toggle") {
       e.preventDefault();
       var slug = t.getAttribute("data-slug");
@@ -217,6 +235,21 @@
       } else if (kind === "settings") {
         await api("PATCH", "/api/settings", formObject(form));
         toast("设置已保存", "ok");
+        setTimeout(admRefresh, 600);
+      } else if (kind === "notify") {
+
+        var flat = formObject(form);
+        var nested = {};
+        Object.keys(flat).forEach(function (k) {
+          var parts = k.split(".");
+          var o = nested;
+          for (var i = 0; i < parts.length - 1; i++) {
+            o = o[parts[i]] = o[parts[i]] || {};
+          }
+          o[parts[parts.length - 1]] = flat[k];
+        });
+        await api("PATCH", "/api/notify", nested);
+        toast("通知设置已保存", "ok");
         setTimeout(admRefresh, 600);
       } else if (kind === "notfound") {
         var payload = formObject(form);

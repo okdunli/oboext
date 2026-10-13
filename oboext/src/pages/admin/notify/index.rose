@@ -1,0 +1,246 @@
+<script>
+
+  let s = $data(() => __rvLoad("admin.notify", {}));
+  function g(path, dflt) {
+    let x = s();
+    const parts = path.split(".");
+    for (const p of parts) x = x == null ? undefined : x[p];
+    return x == null || x === "" ? (dflt == null ? "" : dflt) : x;
+  }
+  function sw(path) {
+    let x = s();
+    const parts = path.split(".");
+    for (const p of parts) x = x == null ? undefined : x[p];
+    return x ? "1" : "0";
+  }
+</script>
+
+<head>
+  <title>通知设置 - 管理后台</title>
+</head>
+
+<form data-adm-form="notify">
+  <div class="adm-toolbar">
+    <strong style="font-size:16px">通知与验证码</strong>
+    <span style="flex:1"></span>
+    <button class="adm-btn" type="submit">保存设置</button>
+  </div>
+  <p class="adm-hint" style="margin:0 0 16px;">
+    验证码邮件/短信由此处配置的通道投递；SMTP 密码与短信密钥保存时留空表示不修改。
+  </p>
+
+  <div class="adm-section-title">SMTP 发信</div>
+  <div class="adm-card">
+    <div class="adm-card-bd">
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>SMTP 主机</label>
+          <input class="adm-input" name="smtp.host" value={g('smtp.host')} placeholder="smtp.example.com">
+        </div>
+        <div class="adm-field">
+          <label>端口</label>
+          <input class="adm-input" type="number" name="smtp.port" data-num value={g('smtp.port', 465)} min="1" max="65535">
+        </div>
+        <div class="adm-field">
+          <label>加密方式</label>
+          <select class="adm-select" name="smtp.security" data-val={g('smtp.security', 'TLS')}>
+            <option value="TLS">TLS（465 隐式）</option>
+            <option value="STARTTLS">STARTTLS（587/25 升级）</option>
+            <option value="NONE">NONE（明文，仅内网自测）</option>
+          </select>
+        </div>
+        <div class="adm-field">
+          <label>用户名</label>
+          <input class="adm-input" name="smtp.user" value={g('smtp.user')}>
+        </div>
+        <div class="adm-field">
+          <label>密码（留空不修改）</label>
+          <input class="adm-input" type="password" name="smtp.pass" value="" autocomplete="new-password">
+        </div>
+        <div class="adm-field">
+          <label>发件人（留空同用户名）</label>
+          <input class="adm-input" name="smtp.from" value={g('smtp.from')} placeholder="名字 &lt;noreply@example.com&gt;">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-section-title">邮件通道</div>
+  <div class="adm-card">
+    <div class="adm-card-bd">
+      <label class="adm-switch"><span><span class="t">启用邮件通道</span><span class="d">验证码邮件与评论通知的总开关</span></span><input type="checkbox" name="email.enabled" data-on={sw('email.enabled')} data-bool></label>
+      <div class="adm-field">
+        <label>投递方式</label>
+        <select class="adm-select" name="email.via" data-val={g('email.via', 'smtp')}>
+          <option value="smtp">SMTP 直发</option>
+          <option value="webhook">自定义 Webhook</option>
+        </select>
+      </div>
+      <div data-show-if="email.via=webhook">
+        <div class="adm-field">
+          <label>Webhook 地址</label>
+          <input class="adm-input" name="email.webhook.url" value={g('email.webhook.url')} placeholder="https://…">
+        </div>
+        <div class="adm-form-grid">
+          <div class="adm-field">
+            <label>方法</label>
+            <select class="adm-select" name="email.webhook.method" data-val={g('email.webhook.method', 'POST')}>
+              <option value="POST">POST</option>
+              <option value="GET">GET</option>
+              <option value="PUT">PUT</option>
+            </select>
+          </div>
+          <div class="adm-field">
+            <label>请求体模板</label>
+            <input class="adm-input" name="email.webhook.body" value={g('email.webhook.body')}>
+            <p class="adm-hint" style="margin:4px 0 0;">{"支持 {{target}} {{code}} {{purpose}} 占位符。"}</p>
+          </div>
+        </div>
+        <div class="adm-field">
+          <label>请求头（一行一个 Key: Value，或 JSON）</label>
+          <textarea class="adm-textarea" name="email.webhook.headers" rows="2" data-dv={g('email.webhook.headers')}></textarea>
+        </div>
+      </div>
+      <div class="adm-toolbar" style="margin:12px 0 0;">
+        <input class="adm-input" style="max-width:280px;" data-notify-test-input="email" placeholder="测试收件邮箱">
+        <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="notify-test" data-channel="email"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/send.svg)"></span>发送测试邮件</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-section-title">短信通道</div>
+  <div class="adm-card">
+    <div class="adm-card-bd">
+      <label class="adm-switch"><span><span class="t">启用短信通道</span><span class="d">手机验证码投递</span></span><input type="checkbox" name="sms.enabled" data-on={sw('sms.enabled')} data-bool></label>
+      <div class="adm-field">
+        <label>投递提供方</label>
+        <select class="adm-select" name="sms.provider" data-val={g('sms.provider', 'webhook')}>
+          <option value="webhook">自定义 Webhook</option>
+          <option value="aliyun">阿里云短信</option>
+          <option value="tencent">腾讯云短信</option>
+        </select>
+      </div>
+      <div class="adm-field">
+        <label>短信签名</label>
+        <input class="adm-input" name="sms.signature" value={g('sms.signature', 'oboext')}>
+        <p class="adm-hint" style="margin:4px 0 0;">{"Webhook 模板中可用 {{sign}} 占位符引用此签名。"}</p>
+      </div>
+
+      <div data-show-if="sms.provider=webhook">
+        <div class="adm-field">
+          <label>Webhook 地址</label>
+          <input class="adm-input" name="sms.webhook.url" value={g('sms.webhook.url')} placeholder="https://…">
+        </div>
+        <div class="adm-form-grid">
+          <div class="adm-field">
+            <label>方法</label>
+            <select class="adm-select" name="sms.webhook.method" data-val={g('sms.webhook.method', 'POST')}>
+              <option value="POST">POST</option>
+              <option value="GET">GET</option>
+              <option value="PUT">PUT</option>
+            </select>
+          </div>
+          <div class="adm-field">
+            <label>请求体模板</label>
+            <input class="adm-input" name="sms.webhook.body" value={g('sms.webhook.body')}>
+            <p class="adm-hint" style="margin:4px 0 0;">{"支持 {{target}} {{code}} {{sign}} 占位符。"}</p>
+          </div>
+        </div>
+        <div class="adm-field">
+          <label>请求头（一行一个 Key: Value，或 JSON）</label>
+          <textarea class="adm-textarea" name="sms.webhook.headers" rows="2" data-dv={g('sms.webhook.headers')}></textarea>
+        </div>
+      </div>
+
+      <div data-show-if="sms.provider=aliyun">
+        <div class="adm-form-grid">
+          <div class="adm-field">
+            <label>AccessKeyId</label>
+            <input class="adm-input" name="sms.aliyun.accessKeyId" value={g('sms.aliyun.accessKeyId')}>
+          </div>
+          <div class="adm-field">
+            <label>AccessKeySecret（留空不修改）</label>
+            <input class="adm-input" type="password" name="sms.aliyun.accessKeySecret" value="" autocomplete="new-password">
+          </div>
+          <div class="adm-field">
+            <label>短信签名名称</label>
+            <input class="adm-input" name="sms.aliyun.signName" value={g('sms.aliyun.signName')}>
+          </div>
+          <div class="adm-field">
+            <label>模板 CODE</label>
+            <input class="adm-input" name="sms.aliyun.templateCode" value={g('sms.aliyun.templateCode')} placeholder="SMS_123456789">
+          </div>
+          <div class="adm-field">
+            <label>模板变量名</label>
+            <input class="adm-input" name="sms.aliyun.codeParam" value={g('sms.aliyun.codeParam', 'code')}>
+          </div>
+          <div class="adm-field">
+            <label>接入点（留空默认）</label>
+            <input class="adm-input" name="sms.aliyun.endpoint" value={g('sms.aliyun.endpoint')} placeholder="https://dysmsapi.aliyuncs.com">
+          </div>
+        </div>
+      </div>
+
+      <div data-show-if="sms.provider=tencent">
+        <div class="adm-form-grid">
+          <div class="adm-field">
+            <label>SecretId</label>
+            <input class="adm-input" name="sms.tencent.secretId" value={g('sms.tencent.secretId')}>
+          </div>
+          <div class="adm-field">
+            <label>SecretKey（留空不修改）</label>
+            <input class="adm-input" type="password" name="sms.tencent.secretKey" value="" autocomplete="new-password">
+          </div>
+          <div class="adm-field">
+            <label>SmsSdkAppId</label>
+            <input class="adm-input" name="sms.tencent.sdkAppId" value={g('sms.tencent.sdkAppId')}>
+          </div>
+          <div class="adm-field">
+            <label>短信签名名称</label>
+            <input class="adm-input" name="sms.tencent.signName" value={g('sms.tencent.signName')}>
+          </div>
+          <div class="adm-field">
+            <label>模板 ID</label>
+            <input class="adm-input" name="sms.tencent.templateId" value={g('sms.tencent.templateId')}>
+          </div>
+          <div class="adm-field">
+            <label>地域</label>
+            <input class="adm-input" name="sms.tencent.region" value={g('sms.tencent.region', 'ap-guangzhou')}>
+          </div>
+          <div class="adm-field">
+            <label>接入点（留空按地域推导）</label>
+            <input class="adm-input" name="sms.tencent.endpoint" value={g('sms.tencent.endpoint')} placeholder="https://sms.ap-guangzhou.tencentcloudapi.com">
+          </div>
+        </div>
+      </div>
+
+      <div class="adm-toolbar" style="margin:12px 0 0;">
+        <input class="adm-input" style="max-width:280px;" data-notify-test-input="sms" placeholder="测试手机号">
+        <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="notify-test" data-channel="sms"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/send.svg)"></span>发送测试短信</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-section-title">验证码开关</div>
+  <div class="adm-card">
+    <div class="adm-card-bd">
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label class="adm-switch"><span><span class="t">注册强制邮箱验证</span></span><input type="checkbox" name="register.emailVerify" data-on={sw('register.emailVerify')} data-bool></label>
+        </div>
+        <div class="adm-field">
+          <label class="adm-switch"><span><span class="t">注册强制手机验证</span></span><input type="checkbox" name="register.phoneVerify" data-on={sw('register.phoneVerify')} data-bool></label>
+        </div>
+        <div class="adm-field">
+          <label class="adm-switch"><span><span class="t">允许邮箱验证码登录</span></span><input type="checkbox" name="login.emailVerify" data-on={sw('login.emailVerify')} data-bool></label>
+        </div>
+        <div class="adm-field">
+          <label class="adm-switch"><span><span class="t">允许手机验证码登录</span></span><input type="checkbox" name="login.phoneVerify" data-on={sw('login.phoneVerify')} data-bool></label>
+        </div>
+      </div>
+      <p class="adm-hint" style="margin:10px 0 0;">
+        邮箱验证码登录需邮件通道已启用；手机验证码登录需短信通道已启用。会员注册服务在写库前消费对应验证码。
+      </p>
+    </div>
+  </div>
+</form>

@@ -1,0 +1,36 @@
+<script>
+
+  import { apiGate, readBody, requireCap } from "@server/admin";
+  import { getNotifySettings, saveNotifySettings } from "@server/notify";
+
+  function masked(s) {
+    return {
+      ...s,
+      smtp: { ...s.smtp, pass: "" },
+      sms: {
+        ...s.sms,
+        aliyun: { ...s.sms.aliyun, accessKeySecret: "" },
+        tencent: { ...s.sms.tencent, secretKey: "" },
+      },
+    };
+  }
+
+  export async function GET() {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return masked(await getNotifySettings());
+    });
+  }
+  export async function PATCH(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return masked(await saveNotifySettings(await readBody(request)));
+    });
+  }
+  export async function PUT(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return masked(await saveNotifySettings(await readBody(request)));
+    });
+  }
+</script>

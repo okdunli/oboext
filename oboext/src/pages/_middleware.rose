@@ -139,6 +139,16 @@
       return reg.themeAssets.serve(rel, request.method);
     }
 
+    // -------------------------------------------- plugin static assets
+    // /plugin-assets/<slug>/<path> serves plugins/<slug>/<path> from disk —
+    // a plugin's admin-panel script and friends (the admin document's strict
+    // CSP allows 'self' scripts only, so panel JS ships as an external file).
+    // GET/HEAD only, traversal-protected.
+    if (rp.indexOf("/plugin-assets/") === 0) {
+      const rel = rp.slice("/plugin-assets/".length);
+      return reg.pluginAssets.serve(rel, request.method);
+    }
+
     // ------------------------------------------- plugin HTTP gateway
     // /api/plugin/<slug>/<...path>: the first ENABLED plugin that sets
     // response on the api.request filter wins; otherwise real 404. Any

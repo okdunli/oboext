@@ -13,6 +13,7 @@
   import { dispatch, documents, searchRedirect } from "@server/loaders";
   import { buildSitemapDocument } from "@server/sitemap";
   import { themeCssContent, serveThemeAsset } from "@server/theme-chrome";
+  import { servePluginAsset } from "@server/plugin-assets";
   import { serveUpload } from "@server/storage";
   import { ensureMigrations } from "@server/db";
   import { getSessionFromRequest, hasAnyUser } from "@server/auth";
@@ -74,6 +75,9 @@
     },
     themeAssets: {
       serve: (rel, method) => serveThemeAsset(rel, method),
+    },
+    pluginAssets: {
+      serve: (rel, method) => servePluginAsset(rel, method),
     },
   };
 

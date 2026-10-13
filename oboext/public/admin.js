@@ -604,6 +604,37 @@
       } catch (err) { toast(err.message, "err"); }
       return;
     }
+
+    if (act === "account-send") {
+      e.preventDefault();
+      var channel = t.getAttribute("data-channel");
+      var form = t.closest("form");
+      var target = ((channel === "email" ? form.email.value : form.phone.value) || "").trim();
+      if (!target) {
+        return toast(channel === "email" ? "请先填写新邮箱" : "请先填写新手机号", "err");
+      }
+      t.disabled = true;
+      try {
+        await api("POST", "/api/auth/send-code", { channel: channel, target: target, purpose: "bind" });
+        var left = 60;
+        t.textContent = left + "s 后重发";
+        var timer = setInterval(function () {
+          left -= 1;
+          if (left <= 0) {
+            clearInterval(timer);
+            t.disabled = false;
+            t.textContent = "发送验证码";
+          } else {
+            t.textContent = left + "s 后重发";
+          }
+        }, 1000);
+        toast("验证码已发送，10 分钟内有效", "ok");
+      } catch (err) {
+        t.disabled = false;
+        toast(err.message, "err");
+      }
+      return;
+    }
   });
 
   document.addEventListener("submit", async function (e) {
@@ -683,6 +714,28 @@
         await api("PUT", "/api/members", body);
         toast("会员注册设置已保存并立即生效", "ok");
         setTimeout(admRefresh, 600);
+      } else if (kind === "account-profile") {
+
+        await api("POST", "/api/account/profile", {
+          name: form.name.value,
+          email: form.email.value,
+          phone: form.phone.value,
+          emailCode: form.emailCode.value,
+          phoneCode: form.phoneCode.value,
+        });
+        toast("个人信息已更新", "ok");
+
+        setTimeout(admRefresh, 500);
+      } else if (kind === "account-password") {
+        if (form.newPassword.value !== form.confirmPassword.value) {
+          throw new Error("两次输入的新密码不一致");
+        }
+        await api("POST", "/api/account/password", {
+          currentPassword: form.currentPassword ? form.currentPassword.value : "",
+          newPassword: form.newPassword.value,
+        });
+        toast("密码已更新", "ok");
+        form.reset();
       } else if (kind === "notfound") {
         var payload = formObject(form);
         payload.showSearch = !!form.showSearch.checked;

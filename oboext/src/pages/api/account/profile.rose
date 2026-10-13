@@ -1,0 +1,52 @@
+<script>
+
+  import { jsonFail, readBody, apiGate } from "@server/admin";
+  import { sessionCookieValue } from "@server/auth";
+  import { getOwnProfile, changeOwnProfile } from "@server/account";
+  import { normalizeContactTarget } from "@server/auth";
+  import { verifyCode } from "@server/verify-codes";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const me = getContext().user;
+      if (!me) return jsonFail("未认证", 401);
+      const body = await readBody(request);
+      const name = String(body.name || "").trim();
+      const email = normalizeContactTarget("email", String(body.email || ""));
+      const phone = String(body.phone || "").trim()
+        ? normalizeContactTarget("sms", String(body.phone || ""))
+        : null;
+      const emailCode = String(body.emailCode || "").trim();
+      const phoneCode = String(body.phoneCode || "").trim();
+      if (!name) return jsonFail("昵称不能为空", 422);
+
+      const cur = await getOwnProfile(me);
+
+      if (email !== (cur.email ?? "")) {
+        if (!emailCode) return jsonFail("请完成新邮箱的验证码校验", 422);
+        await verifyCode({ channel: "email", target: email, purpose: "bind", code: emailCode });
+      }
+      if (phone && phone !== cur.phone) {
+        if (!phoneCode) return jsonFail("请完成新手机号的验证码校验", 422);
+        await verifyCode({ channel: "sms", target: phone, purpose: "bind", code: phoneCode });
+      }
+
+      const user = await changeOwnProfile(me, { name, email, phone });
+      return new Response(
+        JSON.stringify({ id: user.id, name: user.name, email: user.email, phone: user.phone }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            "set-cookie": await sessionCookieValue({
+              id: user.id,
+              email: user.email,
+              name: user.name,
+              role: user.role,
+            }),
+          },
+        },
+      );
+    });
+  }
+</script>

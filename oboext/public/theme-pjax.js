@@ -15,8 +15,6 @@
  */
 (function () {
   "use strict";
-  if (!document.getElementById("sk-main")) return;
-
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   let seq = 0;
   let key = location.pathname + location.search;
@@ -55,7 +53,7 @@
 
   let initialDone = false;
   function initialPaint() {
-    if (initialDone) return;
+    if (initialDone) return true;
     resolveRefs();
     if (!isBluemix || !frame) return false;
     initialDone = true;
@@ -137,7 +135,17 @@
     }
 
     const main = document.getElementById("sk-main");
-    main.innerHTML = got.next.innerHTML;
+    if (isBluemix) {
+      resolveRefs();
+      const incoming = got.next.querySelector("[data-bmx-frame]");
+      if (frame && incoming) {
+        frame.innerHTML = incoming.innerHTML;
+      } else {
+        main.innerHTML = got.next.innerHTML;
+      }
+    } else {
+      main.innerHTML = got.next.innerHTML;
+    }
     const t = got.doc.querySelector("title");
     if (t) document.title = t.textContent;
     const final = got.url;

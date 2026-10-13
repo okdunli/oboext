@@ -694,90 +694,122 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
   };
 }
 
+const CALENDAR_DAYS_SVG =
+  `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-calendar-days" style="color:var(--accent)">` +
+  `<path d="M8 2v4"></path><path d="M16 2v4"></path><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M3 10h18"></path>` +
+  `<path d="M8 14h.01"></path><path d="M12 14h.01"></path><path d="M16 14h.01"></path>` +
+  `<path d="M8 18h.01"></path><path d="M12 18h.01"></path><path d="M16 18h.01"></path></svg>`;
+const EYE_SVG =
+  `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-eye">` +
+  `<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"></path>` +
+  `<circle cx="12" cy="12" r="3"></circle></svg>`;
+
+const POST_FORMAT_LABELS: Record<string, string> = {
+  standard: "标准",
+  aside: "日志",
+  quote: "引语",
+  link: "链接",
+  image: "图片",
+  gallery: "相册",
+  video: "视频",
+  audio: "音频",
+  status: "状态",
+};
+
 async function archives(payload: { year?: number; month?: number }) {
   const year = Number(payload.year) || 0;
   const month = Number(payload.month) || 0;
   const esc = R.esc;
-  const [settings, themeSlug] = await Promise.all([getSettings(), getActiveThemeSlug()]);
-  const siteTitle = settings.siteTitle ?? "";
-  const tc = getThemeChrome(themeSlug);
-  if (year && month >= 1 && month <= 12) {
-    const { items } = await listPosts({
-      status: "published",
-      year,
-      month,
-      limit: 1000,
-      pinned: false,
-    });
-    return {
-      headTitle: `${year} 年 ${month} 月 - ${siteTitle}`,
-      main: tc.listPage({
-        title: `${year} 年 ${month} 月`,
-        sub: `共 ${items.length} 篇`,
-        items,
-        page: 1,
-        totalPages: 1,
-        hrefFor: () => "#",
-        showPager: false,
-        extra: `<div style="margin-bottom:24px"><a href="/archives?year=${year}">← ${year} 年</a> &nbsp; <a href="/archives">全部归档</a></div>`,
-      }),
-    };
+  const [settings, index] = await Promise.all([getSettings(), archiveGroups()]);
+  const { total } = await listPosts({ status: "published", limit: 1, pinned: false });
+  const filtered = !!(year || month);
+
+  const { items } = await listPosts({
+    status: "published",
+    year: year || undefined,
+    month: month && month >= 1 && month <= 12 ? month : undefined,
+    limit: 1000,
+    pinned: false,
+  });
+
+  const buckets = new Map<string, typeof items>();
+  for (const e of items) {
+    const d = e.publishedAt ? new Date(e.publishedAt) : null;
+    const key = d ? `${d.getFullYear()}-${d.getMonth() + 1}` : "未发布";
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(e);
   }
-  if (year) {
-    const { items } = await listPosts({
-      status: "published",
-      year,
-      limit: 1000,
-      pinned: false,
-    });
-    const groups = new Map<number, PostView[]>();
-    for (const it of items) {
-      const m = it.publishedAt ? new Date(it.publishedAt).getMonth() + 1 : 0;
-      const list = groups.get(m) ?? [];
-      list.push(it);
-      groups.set(m, list);
-    }
-    const sections = [...groups.entries()]
-      .sort((a, b) => b[0] - a[0])
-      .map(([m, list]) => {
-        const lis = list
-          .map(
-            (p) =>
-              `<li style="padding:4px 0"><a href="${R.esc(p.url)}">${R.esc(p.title)}</a> <em style="color:var(--muted,#9aa3b2);font-size:12px">${
-                p.publishedAt ? new Date(p.publishedAt).getDate() : ""
-              } 日</em></li>`,
-          )
-          .join("");
-        return `<section style="margin-bottom:24px"><h2 style="font-size:18px;font-weight:600;margin-bottom:8px">${year} 年 ${m} 月 <span style="color:var(--muted,#9aa3b2);font-size:14px">${list.length}</span></h2><ul style="list-style:none;padding:0;margin:0">${lis}</ul></section>`;
-      })
-      .join("");
-    return {
-      headTitle: `${year} 年 - ${siteTitle}`,
-      main:
-        `<div><h1 style="font-size:28px;font-weight:700;margin:0 0 8px">${year} 年</h1>` +
-        `<p style="color:var(--muted,#9aa3b2);margin:0 0 24px;font-size:14px">共 ${items.length} 篇</p>` +
-        `<div style="margin-bottom:24px"><a href="/archives">← 返回归档</a></div>${sections}</div>`,
-    };
-  }
-  const groups = await archiveGroups();
-  const items = groups
-    .map(
-      (y) =>
-        `<section style="margin-bottom:24px"><h2 style="font-size:20px;font-weight:600;margin-bottom:8px">${y.year} <span style="color:var(--muted,#9aa3b2);font-size:14px">${y.total}</span></h2><ul style="list-style:none;padding:0;margin:0">` +
-        y.months
-          .map(
-            (m) =>
-              `<li style="padding:4px 0"><a href="/archives?year=${y.year}&month=${m.month}">${y.year} 年 ${m.month} 月</a> <em style="color:var(--muted,#9aa3b2);font-size:12px">${m.count}</em></li>`,
-          )
-          .join("") +
-        `</ul></section>`,
-    )
+
+  const sections = [...buckets.entries()]
+    .map(([key, list]) => {
+      const lis = list
+        .map((p) => {
+          const fmt = POST_FORMAT_LABELS[p.format ?? "standard"];
+          const badge =
+            fmt && p.format !== "standard"
+              ? `<span class="shrink-0 rounded px-1.5 py-0.5 text-[10px]" style="background:var(--accent-soft);color:var(--accent)">${esc(fmt)}</span>`
+              : "";
+          return (
+            `<li><a class="group flex items-baseline gap-3 rounded-md px-2 py-1.5 transition" style="color:var(--text)" href="${esc(p.url)}">` +
+            `<span class="w-20 shrink-0 font-mono text-xs tabular-nums" style="color:var(--muted)">${esc(R.formatSiteDate(p.publishedAt, settings as any))}</span>` +
+            `<span class="flex-1 group-hover:underline">${esc(p.title)}</span>${badge}` +
+            `<span class="hidden shrink-0 items-center gap-1 text-[11px] sm:flex" style="color:var(--muted)">${EYE_SVG} ${esc(p.views)}</span>` +
+            `</a></li>`
+          );
+        })
+        .join("");
+      const label = key === "未发布" ? key : key.replace("-", " 年 ") + " 月";
+      return (
+        `<section><h2 class="mb-3 border-b pb-1.5 text-sm font-semibold" style="border-color:var(--border);color:var(--muted)">` +
+        `${esc(label)}<span class="ml-2 text-xs opacity-60">${list.length} 篇</span></h2>` +
+        `<ul class="space-y-1">${lis}</ul></section>`
+      );
+    })
     .join("");
+
+  const filterHint = filtered
+    ? ` · 当前筛选 ${year ?? "全部"} 年${month ? ` ${month} 月` : ""}` +
+      ` · <a href="/archives" class="underline" style="color:var(--link)">清除</a>`
+    : "";
+
+  const aside =
+    `<aside class="space-y-4 lg:sticky lg:top-24 lg:self-start">` +
+    index
+      .map((y) => {
+        const yColor = year === y.year ? "var(--accent)" : "var(--text)";
+        const months = y.months
+          .map((m) => {
+            const mColor = year === y.year && month === m.month ? "var(--accent)" : "var(--muted)";
+            return (
+              `<li><a href="/archives?year=${y.year}&month=${m.month}" class="flex items-center justify-between text-xs transition hover:underline" style="color:${mColor}">` +
+              `${m.month} 月<span class="opacity-60">${m.count}</span></a></li>`
+            );
+          })
+          .join("");
+        return (
+          `<div><a href="/archives?year=${y.year}" class="flex items-center justify-between text-sm font-semibold transition hover:underline" style="color:${yColor}">` +
+          `${y.year}<span class="text-xs font-normal" style="color:var(--muted)">${y.total}</span></a>` +
+          `<ul class="mt-1 space-y-0.5 pl-3">${months}</ul></div>`
+        );
+      })
+      .join("") +
+    `</aside>`;
+
+  const main =
+    `<div class="grid gap-8 lg:grid-cols-[1fr_240px]"><div>` +
+    `<header class="mb-8">` +
+    `<h1 class="flex items-center gap-2 text-3xl font-bold text-[var(--text)]">${CALENDAR_DAYS_SVG}文章归档</h1>` +
+    `<p class="mt-2 text-sm" style="color:var(--muted)">共 <span style="color:var(--accent)">${total}</span> 篇文章${filterHint}</p>` +
+    `</header>` +
+    (items.length
+      ? `<div class="space-y-8">${sections}</div>`
+      : `<p class="rounded-2xl border p-10 text-center text-sm" style="border-color:var(--border);background:var(--surface);color:var(--muted)">这个时间段还没有文章。</p>`) +
+    `</div>${aside}</div>`;
+
+  const siteTitle = settings.siteTitle ?? "";
   return {
     headTitle: `文章归档 - ${siteTitle}`,
-    main:
-      `<div><h1 style="font-size:28px;font-weight:700;margin:0 0 8px">文章归档</h1>` +
-      `<p style="color:var(--muted,#9aa3b2);margin:0 0 24px;font-size:14px">${esc("按年月浏览全部文章")}</p>${items}</div>`,
+    main,
   };
 }
 
@@ -892,7 +924,6 @@ function virtualRouteView(route: VirtualSiteRoute, ctx: Ctx) {
   const main =
     `<div class="container-np" style="padding:40px 16px 64px;max-width:1200px;margin-inline:auto">` +
     `<h1 style="font-size:28px;font-weight:700;margin-bottom:8px;color:var(--text-color,var(--foreground,#18181b))">${R.esc(route.title)}</h1>` +
-
     `<div>${route.html}</div>` +
     `</div>`;
   return { head, main };
@@ -924,7 +955,6 @@ function registerView(config: {
     `<input class="oboe-reg-input" name="${name}" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="6 位验证码" required>` +
     `<button type="button" class="oboe-reg-send" ${sendAttr}>发送验证码</button>` +
     `</div></div>`;
-
   const captchaBlock = !config.captcha.enabled
     ? ""
     : config.captcha.mode === "custom"
@@ -1020,7 +1050,6 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
         }
       })
       .filter(Boolean);
-
     const sec = await getAdminSecurity();
     if (sec.entryEnabled && decoded.join("/") === sec.entryPath.replace(/^\//, "")) {
       return {
@@ -1029,7 +1058,6 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
         main: secretEntryPageHtml(),
       };
     }
-
     const registerCfg = await getPublicRegisterConfig();
     if (
       registerCfg.enabled &&
@@ -1037,7 +1065,6 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
     ) {
       return { kind: "register", ...registerView(registerCfg) };
     }
-
     if (decoded.length === 1 && decoded[0] === "me") {
       const me = ctx.user as any;
       const route = me
@@ -1049,7 +1076,6 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
     if (!virtual) return null;
     return { kind: "virtual", ...virtualRouteView(virtual, ctx) };
   }
-
   const maintenance = await maintenanceGate((ctx.user as any) ?? null);
   if (maintenance) {
     return {
@@ -1080,7 +1106,6 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
       out = await tagList({ slug: res.tag.slug, page }, ctx);
       break;
   }
-
   if (out.notFound) return null;
   return { kind: res.kind === "blogIndex" ? "blog" : res.kind, ...out };
 }

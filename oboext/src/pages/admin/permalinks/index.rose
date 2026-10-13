@@ -1,0 +1,133 @@
+<script>
+
+  let c = $data(() => __rvLoad("admin.permalinks", {}));
+  function v(k, dflt) {
+    const x = c()[k];
+    return x == null || x === "" ? (dflt == null ? "" : dflt) : x;
+  }
+  function on(k) {
+    return c()[k] ? "1" : "0";
+  }
+
+  function join(base, tail) {
+    const b = String(base || "").trim().replace(/^\/+|\/+$/g, "");
+    const segs = [b, tail].filter(Boolean).join("/");
+    return segs ? "/" + segs : "/";
+  }
+
+  const SAMPLE_TOKENS = {
+    "{id}": "123",
+    "{slug}": "hello-world",
+    "{pinyin}": "ni-hao-shi-jie",
+    "{initial}": "nhsj",
+    "{year}": "2026",
+    "{month}": "09",
+    "{day}": "18",
+  };
+  function tokenReplace(s) {
+    let out = s;
+    for (const k in SAMPLE_TOKENS) out = out.split(k).join(SAMPLE_TOKENS[k]);
+    return out;
+  }
+  function tailSample() {
+    const m = c().postMode;
+    if (m === "id") return "123";
+    if (m === "pinyin") return "ni-hao-shi-jie";
+    if (m === "initial") return "nhsj";
+    if (m === "custom") {
+      const segs = String(c().postPattern || "{slug}")
+        .trim()
+        .split("/")
+        .map((s) => tokenReplace(s))
+        .filter(Boolean);
+      return segs.join("/") || "hello-world";
+    }
+    return "hello-world";
+  }
+</script>
+
+<head>
+  <title>固定链接 - 管理后台</title>
+</head>
+
+<form data-adm-form="permalinks">
+  <div class="adm-toolbar">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="adm-ic" style="--i:url(/public/icons/link-2.svg);width:20px;height:20px;color:#818cf8;"></span>
+      <strong style="font-size:16px">固定链接</strong>
+    </div>
+    <span style="flex:1"></span>
+    <button class="adm-btn" type="submit">保存更改</button>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-hd"><strong style="font-size:14px;">链接预览</strong></div>
+    <div class="adm-card-bd">
+      <div class="adm-form-grid" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;">
+        <div><span class="adm-hint" style="margin:0;">文章列表页</span><div>{join(v('postBase', 'blog'))}</div></div>
+        <div><span class="adm-hint" style="margin:0;">文章示例</span><div>{join(v('postBase', 'blog'), tailSample())}</div></div>
+        <div><span class="adm-hint" style="margin:0;">独立页面</span><div>{join(v('pageBase', 'pages'), 'about')}</div></div>
+        <div><span class="adm-hint" style="margin:0;">分类</span><div>{join(v('categoryBase', 'blog/category'), 'notes')}</div></div>
+        <div><span class="adm-hint" style="margin:0;">标签</span><div>{join(v('tagBase', 'blog/tag'), 'life')}</div></div>
+      </div>
+      <p class="adm-hint" style="margin:12px 0 0;">前缀留空 = 该类实体直接挂在根级。改动保存后全站链接立即生效（含已生成的地图与 Feed）。</p>
+    </div>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-bd">
+      <div class="adm-field">
+        <label>文章链接形式（前缀之后的部分）</label>
+        <select class="adm-select" name="postMode" data-val={v('postMode', 'slug')} style="max-width:320px;">
+          <option value="slug">存储别名（作者为每篇文章设定的唯一别名，默认）</option>
+          <option value="id">文章 ID（纯数字，最稳定，与标题无关）</option>
+          <option value="pinyin">标题全拼（如「你好」→ ni-hao）</option>
+          <option value="initial">拼音首字母（如「你好世界」→ nhsj）</option>
+          <option value="custom">自定义结构（token 组合，可含日期目录）</option>
+        </select>
+      </div>
+      <div class="adm-field" data-show-if="postMode=custom" hidden style="margin-top:12px;">
+        <label>自定义结构 token</label>
+        <input class="adm-input" name="postPattern" value={v('postPattern', '{slug}')} placeholder={"{year}/{month}/{slug}"} spellcheck="false" style="max-width:320px;">
+        <p class="adm-hint" style="margin:6px 0 0;">{"可用 token：{id} {slug} {pinyin} {initial} {year} {month} {day}，可用 / 分层。例：{year}/{month}/{slug}。切换到全拼 / 首字母时历史文章自动可解析（列已由迁移回填）。"}</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-hd"><strong style="font-size:14px;">路径前缀</strong></div>
+    <div class="adm-card-bd">
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>文章前缀</label>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="adm-hint" style="margin:0;">/</span>
+            <input class="adm-input" name="postBase" value={v('postBase', 'blog')} placeholder="blog" spellcheck="false">
+          </div>
+        </div>
+        <div class="adm-field">
+          <label>独立页面前缀</label>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="adm-hint" style="margin:0;">/</span>
+            <input class="adm-input" name="pageBase" value={v('pageBase', 'pages')} placeholder="pages" spellcheck="false">
+          </div>
+        </div>
+        <div class="adm-field">
+          <label>分类前缀</label>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="adm-hint" style="margin:0;">/</span>
+            <input class="adm-input" name="categoryBase" value={v('categoryBase', 'blog/category')} placeholder="blog/category" spellcheck="false">
+          </div>
+        </div>
+        <div class="adm-field">
+          <label>标签前缀</label>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="adm-hint" style="margin:0;">/</span>
+            <input class="adm-input" name="tagBase" value={v('tagBase', 'blog/tag')} placeholder="blog/tag" spellcheck="false">
+          </div>
+        </div>
+      </div>
+      <p class="adm-hint" style="margin:12px 0 0;">仅允许字母、数字、-、_ 与 /（分层）；保存时自动规范化。文章前缀被清空时，全部文章页使用保留路径 /blog，优先于同名根级实体。</p>
+    </div>
+  </div>
+</form>

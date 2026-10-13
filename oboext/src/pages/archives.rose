@@ -9,9 +9,11 @@
   );
 </script>
 
+{#if result().head || result().headTitle}
 <head>
-  <title>{result().headTitle}</title>
-  <meta name="description" content="按年月浏览全部文章">
+  {#if result().head}{@html result().head}{/if}
+  {#if result().headTitle}<title>{result().headTitle}</title>{/if}
 </head>
+{/if}
 
 {@html result().main}

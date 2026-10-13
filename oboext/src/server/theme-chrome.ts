@@ -1372,9 +1372,32 @@ function _hx(h: number, s: number, l: number): string { const [r, g, b] = _hsl2r
 function _rg(h: number, s: number, l: number, a: number): string { const [r, g, b] = _hsl2rgb(h, s, l); return `rgba(${r},${g},${b},${a})`; }
 function _mix(v: number, range: [number, number]): number { return (v / 100) * (range[1] - range[0]) + range[0]; }
 
+const BMIX_CARD_THEME_META_KEY = "bluemix_card_theme";
+
+function bmixNormalizeHex(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  let h = v.replace(/\s+/g, "");
+  if (!h) return null;
+  if (h[0] !== "#") h = "#" + h;
+  if (/^#[0-9a-fA-F]{3}$/.test(h)) h = "#" + h[1] + h[1] + h[2] + h[2] + h[3] + h[3];
+  if (!/^#[0-9a-fA-F]{6}$/.test(h)) return null;
+  return h.toLowerCase();
+}
+
+/** mirror cardTheme.ts themeColorFromMeta。 */
+function bmixThemeColorFromMeta(value: unknown): string | null {
+  return typeof value === "string" ? bmixNormalizeHex(value) : null;
+}
+
 /** Deterministic per-card glass tone (mirror of cardVars.cardTone + color.toneFromColor). */
-function bmixCardTone(seed: string, fallbackIndex: number, bgAlpha = 1): { vars: Record<string, string>; dark: boolean } {
-  const base = BMIX_PALETTE[_hash(seed || String(fallbackIndex)) % BMIX_PALETTE.length];
+function bmixCardTone(
+  seed: string,
+  fallbackIndex: number,
+  bgAlpha = 1,
+  metas?: Record<string, string> | null,
+): { vars: Record<string, string>; dark: boolean } {
+  const preset = bmixThemeColorFromMeta(metas ? metas[BMIX_CARD_THEME_META_KEY] : null);
+  const base = preset ?? BMIX_PALETTE[_hash(seed || String(fallbackIndex)) % BMIX_PALETTE.length];
   const [pr, pg, pb] = _hex2rgb(base);
   const [cH, cS, cL] = _rgb2hsl(pr, pg, pb);
   const dark = cL < 65;
@@ -1476,7 +1499,8 @@ function bmixIconFile(name: string | null | undefined, size: number, cls = ""): 
 }
 
 function bmixPostCard(p: PostView, idx: number): string {
-  const t = bmixCardTone(p.slug || p.url, idx, 1);
+  const t = bmixCardTone(p.slug || p.url, idx, 1, p.metas);
+  const preset = bmixThemeColorFromMeta(p.metas?.[BMIX_CARD_THEME_META_KEY]) ? ' data-bmx-preset="1"' : "";
   const darkCls = t.dark ? " is-dark" : "";
   const vars = Object.entries(t.vars).map(([k, v]) => `${k}:${v}`).join(";");
   const { title1, title2 } = bmixSplitTitle(p.title);
@@ -1485,7 +1509,7 @@ function bmixPostCard(p: PostView, idx: number): string {
     : "background-image:linear-gradient(135deg,#dce8f7,#c9ddf5 60%,#bcd6f3)";
   const tags = (p.tags || []).slice(0, 3).map((tg) => tg.name).join(" · ") || "&nbsp;";
   return `<article class="post-card"><div class="post-card-wrapper${darkCls}" style="transform:perspective(720px) scale3d(1,1,1);${vars}">` +
-    `<a href="${esc(p.url)}" aria-label="${esc(p.title)}" class="card card-container${darkCls}">` +
+    `<a href="${esc(p.url)}" aria-label="${esc(p.title)}" class="card card-container${darkCls}"${preset}>` +
     `<span class="main-title type-1"><div>${esc(title1)}</div>${title2 ? `<div>${esc(title2)}</div>` : ""}</span>` +
     `<span class="block img" style="${img}"></span><span class="sr-only">${esc(p.title)}</span>` +
     `</a><div class="highlight"></div></div>` +
@@ -1526,7 +1550,8 @@ function bmixPager(page: number, total: number, hrefFor: (p: number) => string):
 
 function bmixHeroScene(p: PostView, i: number): string {
   const { title1, title2 } = bmixSplitTitle(p.title);
-  const t = bmixCardTone(p.slug || p.url, i, 1);
+  const t = bmixCardTone(p.slug || p.url, i, 0.8, p.metas);
+  const preset = bmixThemeColorFromMeta(p.metas?.[BMIX_CARD_THEME_META_KEY]) ? ' data-bmx-preset="1"' : "";
   const vars = Object.entries(t.vars).map(([k, v]) => `${k}:${v}`).join(";");
   const darkCls = t.dark ? " is-dark" : "";
   const role = i === 0 ? "current" : i === 1 ? "future-0" : i === 2 ? "future-1" : i === 3 ? "past-0" : "past-1";
@@ -1538,7 +1563,7 @@ function bmixHeroScene(p: PostView, i: number): string {
     `<span class="ml-8">${bmixIc("eye", 12)} ${p.views ?? 0}</span>` +
     (p.publishedAt ? `<span class="ml-8">${bmixIc("clock", 12)} ${bmixYmd(p.publishedAt)}</span>` : "") +
     `</div>`;
-  return `<div class="scene ${role}"><a href="${esc(p.url)}" class="card-container${darkCls}" style="${vars}" aria-label="${esc(p.title)}">` +
+  return `<div class="scene ${role}"><a href="${esc(p.url)}" class="card-container${darkCls}" style="${vars}" aria-label="${esc(p.title)}"${preset}>` +
     `<div class="bg-wrapper">${img}</div>` +
     `<div class="card-wrapper"><div class="card flex"><div class="info flex flex-col justify-center">` +
     `<div class="main-title ${title2 ? "type-2" : "type-1 truncate"}"><span class="block truncate">${esc(title1)}</span>` +
@@ -1846,7 +1871,7 @@ function bmixPostPage(parts: PostPageParts): string {
   const p = parts.post;
   const { html: bodyHtml, toc } = bmixHeadings(parts.bodyHtml, p.slug || "post");
   const { title1, title2 } = bmixSplitTitle(p.title);
-  const t = bmixCardTone(p.slug || p.url, 0);
+  const t = bmixCardTone(p.slug || p.url, 0, 0.8, p.metas);
   const vars = Object.entries(t.vars).map(([k, v]) => `${k}:${v}`).join(";");
   const darkCls = t.dark ? " is-dark" : "";
   const hasImage = !!p.featuredImage;

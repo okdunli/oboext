@@ -557,7 +557,7 @@
     if (act === "add-meta") {
       e.preventDefault();
       var ed = window.__admEditor;
-      if (ed && ed.kind === "page") {
+      if (ed) {
         ed.metas.push({ key: "", value: "" });
         ed.renderMetas();
         var box = ed.root.querySelector("[data-adm-metas]");
@@ -923,7 +923,8 @@
     this.entity = this.kind === "page" ? this.data.page : this.data.post;
     this.listEl = root.querySelector(".adm-blocks");
     this.blocks = (this.entity && this.entity.content) || [];
-    this.metas = (this.kind === "page" && this.entity && this.entity.metaList) || [];
+
+    this.metas = (this.entity && this.entity.metaList) || [];
     this.render();
     this.renderMetas();
   }
@@ -1038,7 +1039,7 @@
     });
   };
   BlockEditor.prototype.renderMetas = function () {
-    if (this.kind !== "page") return;
+
     var box = this.root.querySelector("[data-adm-metas]");
     if (!box) return;
     box.innerHTML = "";
@@ -1092,8 +1093,9 @@
     } else {
       var pid = form.querySelector('[name=parentId]');
       if (pid && pid.value !== "") body.parentId = Number(pid.value);
-      body.metas = this.collectMetas();
     }
+
+    if (form.querySelector("[data-adm-metas]")) body.metas = this.collectMetas();
     if (status) body.status = status;
     if (body.commentStatus === "on") body.commentStatus = "open";
     return body;
@@ -1116,7 +1118,7 @@
       this.data.post = saved;
       this.root.setAttribute("data-post", JSON.stringify(this.data));
     }
-    this.metas = (this.kind === "page" && saved.metaList) || this.metas;
+    this.metas = saved.metaList || this.metas;
     this.renderMetas();
     var btn = this.root.querySelector("[type=submit]");
     if (btn) btn.disabled = false;

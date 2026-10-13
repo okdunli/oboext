@@ -32,6 +32,8 @@
     if (p.indexOf("/admin/menu-settings") === 0) return "菜单与首页";
     if (p.indexOf("/admin/settings") === 0) return "站点设置";
     if (p.indexOf("/admin/notify") === 0) return "通知设置";
+    if (p.indexOf("/admin/members") === 0) return "会员注册";
+    if (p.indexOf("/admin/account") === 0) return "我的账号";
     if (p.indexOf("/admin/notfound") === 0) return "404 页面";
     if (p.indexOf("/admin/plugins") === 0) return "插件";
     return "管理后台";
@@ -63,7 +65,7 @@
       {@html navRaw()}
     </nav>
     <div class="adm-side-foot">
-      <div class="adm-avatar">{initial()}</div>
+      <a class="adm-avatar" href="/admin/account" title="我的账号" style="text-decoration:none;">{initial()}</a>
       <div class="who"><b>{authed() ? session().user.name : ""}</b><span>{authed() ? session().user.role : ""}</span></div>
       <button class="adm-iconbtn" data-adm-act="logout" title="退出登录" aria-label="退出登录"><span class="adm-ic" style="--i:url(/public/icons/log-out.svg)"></span></button>
     </div>

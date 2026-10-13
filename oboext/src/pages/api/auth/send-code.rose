@@ -14,10 +14,31 @@
       const body = await readBody(request);
       const channel = body.channel === "sms" ? "sms" : "email";
       const purpose = String(body.purpose || "login");
-      if (purpose !== "login" && purpose !== "register") return jsonFail("接口不存在", 404);
+      if (purpose !== "login" && purpose !== "register" && purpose !== "bind") {
+        return jsonFail("接口不存在", 404);
+      }
       if (!(await hasAnyUser())) return jsonFail("接口不存在", 404);
 
       const notify = await getNotifySettings();
+      const ip = clientIp(request);
+
+      if (purpose === "bind") {
+
+        const me = getContext().user;
+        if (!me) return jsonFail("未认证", 401);
+        const channelReady = channel === "email" ? notify.email.enabled : notify.sms.enabled;
+        if (!channelReady) return jsonFail("接口不存在", 404);
+        const target = normalizeContactTarget(channel, String(body.target || ""));
+        const owner = await findUserByContact(channel, target);
+        if (owner && owner.id !== me.id) {
+          return jsonFail(
+            channel === "email" ? "该邮箱已被其他账号绑定" : "该手机号已被其他账号绑定",
+            409,
+          );
+        }
+        const out = await sendVerificationCode({ channel, target, purpose: "bind", ip });
+        return { sent: true, resendAfter: out.resendAfter };
+      }
 
       if (purpose === "register") {
         const member = await getMemberSettings();
@@ -32,7 +53,7 @@
           channel,
           target,
           purpose: "register",
-          ip: clientIp(request),
+          ip,
         });
         return { sent: true, resendAfter: out.resendAfter };
       }
@@ -52,7 +73,7 @@
         channel,
         target,
         purpose: "login",
-        ip: clientIp(request),
+        ip,
       });
       return { sent: true, resendAfter: out.resendAfter };
     });

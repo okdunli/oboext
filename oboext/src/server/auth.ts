@@ -20,6 +20,7 @@ import { and, desc, eq, gt, or, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
 import { users, securityEvents } from "./schema.js";
 import type { Role } from "./schema.js";
+import { ServiceError } from "./errors.js";
 
 export const COOKIE_NAME = "cms_session";
 const SESSION_DAYS = 7;
@@ -108,6 +109,7 @@ export async function verifyToken(token: string): Promise<SessionUser | null> {
     const { payload } = await jwtVerify(token, getSecret());
     await ensureMigrations();
     const id = payload.id as number;
+    if (!Number.isInteger(id)) return null;
     const [row] = await db
       .select({ status: users.status, email: users.email, name: users.name, role: users.role })
       .from(users)
@@ -156,6 +158,8 @@ export const LOGIN_EVENTS = {
   SUCCESS: "login.success",
   FAIL: "login.fail",
   LOCKED: "login.locked",
+  RESET_REQUEST: "password.reset.request",
+  RESET_DONE: "password.reset.done",
 } as const;
 
 export async function recordLoginEvent(input: {
@@ -237,4 +241,106 @@ export function clientIp(req: Request): string | null {
   return (
     (fwd ? fwd.split(",")[0] : req.headers.get("x-real-ip"))?.trim() || null
   );
+}
+
+export function clientUa(req: Request): string | null {
+  return (req.headers.get("user-agent") || "").slice(0, 500) || null;
+}
+
+export async function findUserByAccount(account: string) {
+  const identifier = account.trim();
+  if (!identifier) return null;
+  const [row] = await db
+    .select()
+    .from(users)
+    .where(
+      identifier.includes("@")
+        ? sql`lower(${users.email}) = lower(${identifier})`
+        : sql`lower(${users.name}) = lower(${identifier})`,
+    );
+  return row ?? null;
+}
+
+/** Email is case-insensitive; phone matches exactly (already normalised). */
+export async function findUserByContact(
+  channel: "email" | "sms",
+  target: string,
+) {
+  const [row] = await db
+    .select()
+    .from(users)
+    .where(
+      channel === "email"
+        ? sql`lower(${users.email}) = lower(${target})`
+        : sql`${users.phone} = ${target}`,
+    );
+  return row ?? null;
+}
+
+export async function resetUserPassword(
+  userId: number,
+  newPassword: string,
+): Promise<void> {
+  await db
+    .update(users)
+    .set({ passwordHash: await hashPassword(newPassword), updatedAt: new Date() })
+    .where(eq(users.id, userId));
+}
+
+/** Stamp lastLoginAt (code login / 2FA redemption paths). */
+export async function touchLastLogin(userId: number): Promise<void> {
+  await ensureMigrations();
+  await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, userId));
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_LOCAL_RE = /^1[3-9]\d{9}$/;
+const PHONE_INTL_RE = /^\+\d{6,15}$/;
+
+/**
+ * Validate + normalise a contact target (email or CN mobile / E.164),
+ * shared by send-code / login-code / register so the rules cannot drift.
+ */
+export function normalizeContactTarget(channel: "email" | "sms", raw: string): string {
+  const v = String(raw ?? "").trim();
+  if (channel === "email") {
+    if (!EMAIL_RE.test(v) || v.length > 120) {
+      throw new ServiceError("邮箱格式不正确", 422);
+    }
+    return v;
+  }
+  const p = v.replace(/[\s-]/g, "");
+  if (!PHONE_LOCAL_RE.test(p) && !PHONE_INTL_RE.test(p)) {
+    throw new ServiceError("手机号格式不正确", 422);
+  }
+  return p;
+}
+
+const CHALLENGE_MINUTES = 10;
+
+export async function signChallengeTicket(user: SessionUser): Promise<string> {
+  return new SignJWT({ twofa: true })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(String(user.id))
+    .setIssuedAt()
+    .setExpirationTime(`${CHALLENGE_MINUTES}m`)
+    .sign(getSecret());
+}
+
+/** Returns the ticket's user, or null when invalid/expired/not a 2FA ticket. */
+export async function verifyChallengeTicket(ticket: string): Promise<SessionUser | null> {
+  try {
+    const { payload } = await jwtVerify(ticket, getSecret());
+    if (payload.twofa !== true || !payload.sub) return null;
+    const id = Number(payload.sub);
+    if (!Number.isInteger(id)) return null;
+    const [row] = await db
+      .select({ status: users.status, email: users.email, name: users.name, role: users.role })
+      .from(users)
+      .where(eq(users.id, id));
+    if (!row || row.status !== "active") return null;
+    return { id, email: row.email, name: row.name, role: row.role };
+  } catch {
+    return null;
+  }
 }

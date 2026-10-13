@@ -248,6 +248,11 @@ export async function reconfigureDatabase(driver: Driver, url: string): Promise<
   globalForDb.__oboeReady = undefined;
 }
 
+export async function ping(): Promise<void> {
+  const db = await ensureDb();
+  await db.execute(sql`select 1`);
+}
+
 /** Apply SQL migrations once per process; safe to await every request. */
 export function ensureMigrations(): Promise<void> {
   if (!globalForDb.__oboeMigrated) {

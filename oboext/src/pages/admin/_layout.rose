@@ -39,7 +39,10 @@
     if (p.indexOf("/admin/menus") === 0) return "菜单";
     if (p.indexOf("/admin/menu-settings") === 0) return "菜单与首页";
     if (p.indexOf("/admin/settings") === 0) return "站点设置";
+    if (p.indexOf("/admin/permalinks") === 0) return "固定链接";
     if (p.indexOf("/admin/security") === 0) return "后台安全";
+    if (p.indexOf("/admin/security-logs") === 0) return "安全日志";
+    if (p.indexOf("/admin/maintenance") === 0) return "维护模式";
     if (p.indexOf("/admin/oauth") === 0) return "第三方登录";
     if (p.indexOf("/admin/notify") === 0) return "通知设置";
     if (p.indexOf("/admin/members") === 0) return "会员注册";

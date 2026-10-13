@@ -3,6 +3,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";
+import { setOption } from "./options.js";
 import type { PostView } from "./queries.js";
 import type { PageView } from "./pages.js";
 import type { Category, Tag } from "./schema.js";
@@ -88,6 +89,15 @@ export async function getPermalinkConfig(): Promise<PermalinkConfig> {
 /** Drop the cached config after an admin save (B phase). */
 export function invalidatePermalinkConfig(): void {
   cachedAt = 0;
+}
+
+export async function savePermalinkConfig(
+  input: Partial<PermalinkConfig>,
+): Promise<PermalinkConfig> {
+  const cfg = normalizePermalinkConfig(input);
+  await setOption(OPTION_KEY, cfg);
+  invalidatePermalinkConfig();
+  return cfg;
 }
 
 const baseSegs = (base: string): string[] => (base ? base.split("/").filter(Boolean) : []);

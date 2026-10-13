@@ -1,0 +1,19 @@
+<script>
+
+  import { apiGate, readBody, requireCap } from "@server/admin";
+  import { getPermalinkConfig, savePermalinkConfig } from "@server/links";
+
+  export async function GET() {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return getPermalinkConfig();
+    });
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return savePermalinkConfig(await readBody(request));
+    });
+  }
+</script>

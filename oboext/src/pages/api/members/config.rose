@@ -1,0 +1,9 @@
+<script>
+
+  import { apiGate } from "@server/admin";
+  import { getPublicRegisterConfig } from "@server/members";
+
+  export async function GET() {
+    return apiGate(async () => getPublicRegisterConfig());
+  }
+</script>

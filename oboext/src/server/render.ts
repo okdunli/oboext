@@ -336,18 +336,16 @@ function highlightCodeBlocks(html: string): string {
   });
 }
 
-/** blocks -> heading ids -> highlight -> shortcodes -> content.html filter.
- *  Output is trusted HTML rendered with the template `{@html}` primitive;
- *  braces inside cause no parsing issues. Mirrors the original's
- *  renderContent() pipeline (lib/services/render.ts). */
 export async function buildPostBody(
   p: { content?: Block[] | null; slug: string; title?: string | null },
   kind: "post" | "page" = "post",
+  highlight = false,
 ): Promise<string> {
   await ensurePluginsLoaded();
   ensureShortcodes();
   const blocks = (p.content ?? []) as Block[];
-  let html = highlightCodeBlocks(addHeadingIds(serializeBlocks(blocks), p.slug));
+  let html = addHeadingIds(serializeBlocks(blocks), p.slug);
+  if (highlight) html = highlightCodeBlocks(html);
   html = await renderShortcodes(html, {
     kind,
     slug: p.slug,
@@ -656,24 +654,27 @@ function builtinCommentsHtml(m: CommentModel): string {
   const tree = m.items.length
     ? renderCommentNodes(buildCommentTree(m.items), m, 0)
     : '<div class="sf-comment-close">还没有评论，来抢沙发吧。</div>';
-  return '<div data-comment-notice class="sf-comment-close" style="display:none;color:var(--sk-primary)"></div>' + form + tree;
+  return '<div data-comment-notice class="sf-comment-close" style="display:none;color:var(--primary-color)"></div>' + form + tree;
+}
+
+function commentsInner(m: CommentModel): string {
+  if (!m.enabled || m.provider === "none") {
+    return '<div class="sf-comment-close">评论已关闭。</div>';
+  }
+  if (m.provider !== "builtin") {
+    return '<div class="sf-comment-provider" data-comment-provider="' + esc(m.provider) +
+      '" data-config="' + esc(JSON.stringify(m.config)) + '"></div>';
+  }
+  return builtinCommentsHtml(m);
 }
 
 export function commentsSection(m: CommentModel): string {
-  if (!m.enabled || m.provider === "none") {
-    return '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
-      '<div class="sf-comment-close">评论已关闭。</div></section>';
-  }
-  if (m.provider !== "builtin") {
-    return '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
-      '<div class="sf-comment-provider" data-comment-provider="' + esc(m.provider) +
-      '" data-config="' + esc(JSON.stringify(m.config)) + '"></div></section>';
-  }
-  return (
-    '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
-    builtinCommentsHtml(m) +
-    "</section>"
-  );
+  return '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
+    commentsInner(m) + "</section>";
+}
+
+export function commentsBare(m: CommentModel): string {
+  return commentsInner(m);
 }
 
 export function postPage(
@@ -724,9 +725,10 @@ export function postPage(
     '<section class="sk-section"><h2 class="title_style_01">相关文章</h2>' +
     cardRow(related, false) +
     "</section>" +
-    (commentsHtml ||
-      '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
-        '<div class="sf-comment-close">评论已关闭。</div></section>') +
+
+    '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
+      (commentsHtml || '<div class="sf-comment-close">评论已关闭。</div>') +
+    "</section>" +
     "</div>"
   );
 }
@@ -743,8 +745,6 @@ export function pageHead(p: PageView, siteTitle: string, siteDescription: string
   const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
   const desc = p.seoDescription || p.excerpt || siteDescription;
   const url = `${origin}${p.url}`;
-  const iso = (v: Date | string | null | undefined) =>
-    new Date(v ?? p.publishedAt!).toISOString();
   return [
     `<title>${esc(fullTitle)}</title>`,
     `<meta name="description" content="${esc(desc)}">`,
@@ -755,8 +755,7 @@ export function pageHead(p: PageView, siteTitle: string, siteDescription: string
     `<meta property="og:url" content="${esc(url)}">`,
     p.featuredImage ? `<meta property="og:image" content="${esc(p.featuredImage)}">` : "",
     `<meta property="og:type" content="website">`,
-    p.publishedAt ? `<meta property="article:published_time" content="${iso(p.publishedAt)}">` : "",
-    `<meta property="article:modified_time" content="${iso(p.updatedAt || p.publishedAt)}">`,
+
     `<meta name="twitter:card" content="summary_large_image">`,
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
@@ -798,9 +797,10 @@ export function pagePage(
     `<div class="post-content prose-cms">${renderedBody}</div>` +
     "</article>" +
     recentSection +
-    (commentsHtml ||
-      '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
-        '<div class="sf-comment-close">评论已关闭。</div></section>') +
+
+    '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
+      (commentsHtml || '<div class="sf-comment-close">评论已关闭。</div>') +
+    "</section>" +
     "</div>"
   );
 }
@@ -912,8 +912,11 @@ export function listPage(parts: {
 
 export function topNav(settings: Record<string, any>): string {
   const title = esc(settings.siteTitle ?? "");
+
+  const isHome = String(settings.__pathname ?? "/") === "/";
+  const navCls = `top-nav is-sticky${isHome ? "" : " is-scrolled always-stay"}`;
   return (
-    `<header class="top-nav is-sticky">` +
+    `<header class="${navCls}">` +
     `<div class="sidebar-btn" role="button" tabindex="0" aria-label="打开侧栏"><i class="skyscraper-icons-bread"></i><i class="skyscraper-icons-cross closeBtn"></i></div>` +
     `<div class="toolbox-btn" role="button" tabindex="0" aria-label="打开工具栏"><i class="skyscraper-icons-cog"></i></div>` +
     `<div class="container"><div class="logo"><center><a aria-label="${title}" href="/"><div class="sk-logo">${title}</div></a></center></div>` +
@@ -1027,7 +1030,13 @@ export function popularWidget(posts: PostView[]): string {
 }
 
 export function footerHtml(settings: Record<string, any>, widgetsHtml = ""): string {
-  return `<footer>${widgetsHtml}<div class="pagenav is-empty"></div><div class="copyright">${esc(settings.footerText ?? "")}</div></footer>`;
+
+    const POLICE_ICON = "/theme-assets/skyscraper/police_icon.png";
+  const icp = settings.icpNumber
+    ? `<div class="links"><a href="https://beian.miit.gov.cn" target="_blank" rel="noopener noreferrer">` +
+      `<img src="${POLICE_ICON}" alt=""><span>&nbsp;&nbsp;${esc(settings.icpNumber)} </span></a></div>`
+    : "";
+  return `<footer>${widgetsHtml}<div class="pagenav is-empty"></div><div class="copyright">${esc(settings.footerText ?? "")}</div>${icp}</footer>`;
 }
 
 const waLink = "color:var(--text);text-decoration:none;font-size:.9rem;line-height:1.5;";

@@ -23,7 +23,9 @@ import {
   popularPosts,
   randomPosts,
   relatedPosts,
+  relatedByTaxonomy,
   type PostView,
+  type TaxRef,
 } from "./queries.js";
 import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, resolveSitePath, paginate, type PermalinkConfig } from "./links.js";
 import { resolveVirtualRoute, type VirtualSiteRoute } from "./virtual-routes.js";
@@ -69,11 +71,12 @@ export type HeadContext = {
   breadcrumbs?: { label: string; href: string }[];
 };
 
-/** Collect plugin markup injected before </body> (footer.html filter). */
 async function pluginFooterHtml(): Promise<string> {
   await ensurePluginsLoaded();
   const payload = applyFilters<{ html: string[] }>(HOOKS.footerHtml, { html: [] });
-  return payload.html.join("\n");
+  const joined = payload.html.join("\n");
+  if (!joined) return "";
+  return `<div id="oboe-footer-hooks" aria-hidden="true" style="display:none">${joined}</div>`;
 }
 
 /** Collect plugin <head> nodes for a page (head.tags filter). */
@@ -189,8 +192,10 @@ async function chromeData(pathname: string) {
     `<script src="${publicAssetHref("comments.js")}"></script>`;
   const headerMenu = await getMenuByLocation("header");
   const headerItems: MenuItem[] = (headerMenu?.items ?? []) as MenuItem[];
+
+  const footerMenu = await getMenuByLocation("footer");
   const footerHtml = tc.footer(
-    settings,
+    { ...settings, footerMenu: (footerMenu?.items ?? []) as MenuItem[] },
     R.widgetAreaHtml(footerWidgets, "sk-footer-widgets"),
   );
   return {
@@ -230,6 +235,8 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
   return {
     siteTitle: d.siteTitle,
     siteDescription: d.siteDescription,
+
+    siteUrl: origin,
     themeHead: d.varsHtml + d.headExtra,
     themeSlug: d.themeSlug,
     cssHref: d.cssHref,
@@ -242,6 +249,35 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
     footer: d.footerHtml,
     pluginFooter,
     pluginHead,
+  };
+}
+
+async function sideWidgetsFor(themeSlug: string): Promise<string> {
+
+  if (themeSlug !== "codeman" && themeSlug !== "pseudolinear") return "";
+  const wrap = themeSlug === "pseudolinear" ? "pl-side-stack" : "sk-widget-area";
+  return R.widgetAreaHtml(await getAreaWidgets(themeSlug, "sidebar"), wrap);
+}
+
+async function bmixDrawerPosts(themeSlug: string): Promise<PostView[] | undefined> {
+  if (themeSlug !== "bluemix") return undefined;
+  const { items } = await listPosts({ status: "published", limit: 8 });
+  return items;
+}
+
+async function defaultSidebarData(want: boolean, showCatIcons = false): Promise<{ posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons: boolean } | undefined> {
+  if (!want) return undefined;
+  const [{ items }, tagRows, catRows, cfg] = await Promise.all([
+    listPosts({ status: "published", limit: 5 }),
+    listTags(),
+    listCategories(),
+    getPermalinkConfig(),
+  ]);
+  return {
+    posts: items,
+    tags: tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
+    cats: catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) })),
+    showCatIcons,
   };
 }
 
@@ -279,29 +315,44 @@ function bmToRankPost(p: any): { id: number; url: string; title: string; thumbna
   };
 }
 
-async function home() {
-  const [all, popular, random, catRows, cfg, settings, themeSlug] = await Promise.all([
-    listPosts({ status: "published", limit: 12 }),
+async function home(ctx?: Ctx) {
+  const [settings, themeSlug, cfg] = await Promise.all([
+    getSettings(),
+    getActiveThemeSlug(),
+    getPermalinkConfig(),
+  ]);
+
+  const homeLimit = themeSlug === "pseudolinear" ? 30 : 12;
+  const [all, popular, random, catRows] = await Promise.all([
+    listPosts({ status: "published", limit: homeLimit }),
     listPosts({ status: "published", limit: 4, orderBy: "views" }),
     randomPosts(20),
     listCategories(),
-    getPermalinkConfig(),
-    getSettings(),
-    getActiveThemeSlug(),
   ]);
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const items = all.items;
   const tc = getThemeChrome(themeSlug);
 
+  const homeHead = `<link rel="canonical" href="${R.esc(ctx?.origin ?? "")}">`;
   if (themeSlug !== "bluemix") {
+    const tagRows = await listTags();
+    const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
+
+    const ts = themeSlug === "pseudolinear" || themeSlug === "default" ? await getActiveThemeSettings() : undefined;
     return {
+      head: homeHead,
       main: tc.home({
-        hero: items.slice(0, 4),
-        latest: items.slice(4, 12),
+
+        hero: themeSlug === "pseudolinear" ? items : items.slice(0, 4),
+        latest: themeSlug === "pseudolinear" ? [] : items.slice(4, 12),
         liked: popular.items,
         random,
         cats,
+        tags,
+        total: all.total,
+        widgets: await sideWidgetsFor(themeSlug),
         settings,
+        themeSettings: ts,
       }),
     };
   }
@@ -361,6 +412,7 @@ async function home() {
   };
 
   return {
+    head: homeHead,
     main: tc.home({
       hero: items.slice(0, 4),
       latest: items.slice(4, 12),
@@ -381,7 +433,7 @@ async function home() {
   };
 }
 
-async function blogList(payload: { page?: number }) {
+async function blogList(payload: { page?: number }, ctx?: Ctx) {
   const [settings, themeSlug, cfg, catRows, all] = await Promise.all([
     getSettings(),
     getActiveThemeSlug(),
@@ -389,7 +441,13 @@ async function blogList(payload: { page?: number }) {
     listCategories(),
     listPosts({ status: "published", limit: 5, orderBy: "views" }),
   ]);
-  const perPage = settings.postsPerPage || 10;
+
+  const perPage =
+    themeSlug === "bluemix"
+      ? Math.min(100, Math.max(1, Number(settings.postsPerPage) || 10))
+      : themeSlug === "skyscraper"
+        ? settings.postsPerPage || 10
+        : settings.postsPerPage || 12;
   const page = pageNum(payload.page);
   const { items, total } = await listPosts({
     status: "published",
@@ -401,10 +459,20 @@ async function blogList(payload: { page?: number }) {
   const blogIndex = blogIndexUrlFor(cfg);
   const ts = await getActiveThemeSettings();
   const tc = getThemeChrome(themeSlug);
+
+  const siteTitle = settings.siteTitle ?? "";
+  const seoTitle = `文章 - ${siteTitle}`;
+  const blogUrl = `${ctx?.origin ?? ""}${blogIndex}`;
   return {
-    headTitle: `全部文章 - ${settings.siteTitle ?? ""}`,
+    headTitle: seoTitle,
+    head:
+      `<link rel="canonical" href="${R.esc(blogUrl)}">` +
+      `<meta property="og:title" content="${R.esc(seoTitle)}">` +
+      `<meta property="og:url" content="${R.esc(blogUrl)}">` +
+      `<meta name="twitter:title" content="${R.esc(seoTitle)}">`,
     main: tc.listPage({
-      title: "最新文章",
+
+      title: themeSlug === "bluemix" ? `最新文章 · ${total} 篇` : "全部文章",
       sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
       items,
       page,
@@ -416,6 +484,13 @@ async function blogList(payload: { page?: number }) {
       bannerMax: bmClamp(ts.bannerMaxCount, 5, 1, 10),
       activeHref: blogIndex,
       variant: "blog",
+      widgets: await sideWidgetsFor(themeSlug),
+      drawerPosts: await bmixDrawerPosts(themeSlug),
+      sidebarData: await defaultSidebarData(themeSlug === "default", ts.useCustomIcons === true),
+      settings,
+      themeSettings: ts,
+
+      total,
     }),
   };
 }
@@ -430,15 +505,16 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     listCategories(),
   ]);
   if (!category) return { notFound: true };
-  const perPage = settings.postsPerPage || 10;
+
+  const isSk = themeSlug === "skyscraper";
+  const catPerPage = isSk ? settings.postsPerPage || 10 : themeSlug === "codeman" || themeSlug === "pseudolinear" ? 30 : 12;
   const { items, total } = await listPosts({
     status: "published",
     categorySlug: payload.slug,
-    limit: perPage,
-    offset: (page - 1) * perPage,
+    limit: catPerPage,
+    offset: isSk ? (page - 1) * catPerPage : 0,
   });
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
-  const sub = `共 ${total} 篇 · 第 ${page}/${totalPages} 页`;
+  const totalPages = Math.max(1, Math.ceil(total / catPerPage));
   const catUrl = categoryUrlFor(cfg, category);
   const pluginHead = await pluginHeadHtml({
     kind: "taxonomy",
@@ -455,43 +531,62 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const ts = await getActiveThemeSettings();
   const tc = getThemeChrome(themeSlug);
+
+  const sub = isSk
+    ? `${category.description ? `<span>${category.description} · </span>` : ""}共 ${total} 篇 · 第 ${page}/${totalPages} 页`
+    : "";
   return {
     headTitle: `分类：${category.name} - ${settings.siteTitle ?? ""}`,
     pluginHead,
     main: tc.listPage({
-      title: category.name,
+      title:
+        themeSlug === "bluemix" || themeSlug === "codeman" || themeSlug === "pseudolinear"
+          ? category.name
+          : `分类：${category.name}`,
       sub,
       items,
       page,
       totalPages,
       hrefFor: (n) => paginate(catUrl, n),
+      showPager: isSk ? total > catPerPage : false,
       hero: items.slice(0, 5),
       cats,
       blogIndex: blogIndexUrlFor(cfg),
       bannerMax: bmClamp(ts.bannerMaxCount, 5, 1, 10),
       activeHref: catUrl,
       variant: "category",
+      widgets: await sideWidgetsFor(themeSlug),
+      drawerPosts: await bmixDrawerPosts(themeSlug),
+      sidebarData: await defaultSidebarData(themeSlug === "default", ts.useCustomIcons === true),
+      settings,
+      themeSettings: ts,
+      titleIcon: themeSlug === "bluemix"
+        ? (ts.useCustomIcons !== false ? category.icon : null)
+        : (ts.useCustomIcons === true ? category.icon : null),
+      titleDesc: category.description || "",
     }),
   };
 }
 
 async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
   const page = pageNum(payload.page);
-  const [tag, settings, cfg, themeSlug] = await Promise.all([
+  const [tag, settings, cfg, themeSlug, ts] = await Promise.all([
     getTagBySlug(payload.slug),
     getSettings(),
     getPermalinkConfig(),
     getActiveThemeSlug(),
+    getActiveThemeSettings(),
   ]);
   if (!tag) return { notFound: true };
-  const perPage = settings.postsPerPage || 10;
+  const isSk = themeSlug === "skyscraper";
+  const tagPerPage = isSk ? settings.postsPerPage || 10 : 12;
   const { items, total } = await listPosts({
     status: "published",
     tagSlug: payload.slug,
-    limit: perPage,
-    offset: (page - 1) * perPage,
+    limit: tagPerPage,
+    offset: isSk ? (page - 1) * tagPerPage : 0,
   });
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  const totalPages = Math.max(1, Math.ceil(total / tagPerPage));
   const tagUrl = tagUrlFor(cfg, tag);
   const pluginHead = await pluginHeadHtml({
     kind: "taxonomy",
@@ -506,31 +601,50 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
     ],
   });
   const tc = getThemeChrome(themeSlug);
+  const contentTc = isSk ? tc : getThemeChrome("default");
   return {
     headTitle: `标签：#${tag.name} - ${settings.siteTitle ?? ""}`,
     pluginHead,
-    main: tc.listPage({
+    main: contentTc.listPage({
       title: `标签：#${tag.name}`,
-      sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
+      sub: isSk ? `共 ${total} 篇 · 第 ${page}/${totalPages} 页` : "",
       items,
       page,
       totalPages,
       hrefFor: (n) => paginate(tagUrl, n),
+      showPager: isSk ? total > tagPerPage : false,
+      variant: "term",
+      widgets: await sideWidgetsFor(themeSlug),
+      drawerPosts: await bmixDrawerPosts(themeSlug),
+      sidebarData: await defaultSidebarData(!isSk, ts.useCustomIcons === true),
+      settings,
+      themeSettings: ts,
     }),
   };
 }
 
-async function search(payload: { q?: string; page?: number; all?: boolean }) {
+async function search(payload: { q?: string; page?: number; all?: boolean }, ctx?: Ctx) {
   const q = (payload.q ?? "").trim();
   const page = pageNum(payload.page);
-  const perPage = 20;
   const cleaned = q;
+  const settings0 = await getSettings();
+  const themeSlug = await getActiveThemeSlug();
+  const isBm = themeSlug === "bluemix";
+  const isSk = themeSlug === "skyscraper";
+  const perPage = isBm
+    ? Math.min(100, Math.max(1, Number(settings0.postsPerPage) || 10))
+    : isSk
+      ? 20
+      : themeSlug === "codeman" || themeSlug === "pseudolinear"
+        ? 30
+        : 20;
+  const paged = isBm || isSk;
   const { items, total } = cleaned
     ? await listPosts({
         status: "published",
         search: cleaned,
         limit: perPage,
-        offset: (page - 1) * perPage,
+        offset: paged ? (page - 1) * perPage : 0,
       })
     : { items: [] as PostView[], total: 0 };
   const totalPages = Math.max(1, Math.ceil(total / perPage));
@@ -546,17 +660,40 @@ async function search(payload: { q?: string; page?: number; all?: boolean }) {
         )}&all=1">查看全部结果</a></div>`
       : "";
   const settings = await getSettings();
+  const ts = await getActiveThemeSettings();
+  const searchSiteTitle = settings.siteTitle ?? "";
+  const searchHead =
+    `<meta property="og:url" content="${R.esc(ctx?.origin ?? "")}">` +
+    `<meta property="og:site_name" content="${R.esc(searchSiteTitle)}">` +
+    `<meta property="og:locale" content="zh_CN">`;
   return {
-    headTitle: `搜索 - ${settings.siteTitle ?? ""}`,
-    main: getThemeChrome(await getActiveThemeSlug() || "skyscraper").listPage({
-      title: cleaned ? `搜索：“${cleaned}”` : "搜索",
-      sub: cleaned ? `共 ${total} 条结果 · 第 ${page}/${totalPages} 页` : "在顶部搜索框输入关键词",
+    head: searchHead,
+    main: getThemeChrome(themeSlug || "skyscraper").listPage({
+      title: cleaned ? (isBm ? `搜索 “${cleaned}” · ${total} 篇` : `搜索：“${cleaned}”`) : "搜索",
+      sub: isBm || themeSlug === "codeman" || themeSlug === "pseudolinear"
+        ? ""
+        : cleaned
+          ? isSk
+            ? `共 ${total} 条结果 · 第 ${page}/${totalPages} 页`
+            : `找到 ${items.length} 篇结果`
+          : isSk
+            ? "在顶部搜索框输入关键词"
+            : "",
       items,
       page,
       totalPages,
       hrefFor,
-      showPager: total > perPage,
-      extra,
+      showPager: paged ? total > perPage : false,
+      extra: isBm || isSk ? extra : "",
+      variant: "search",
+      titleIcon: isBm ? null : "search",
+      query: cleaned,
+      widgets: await sideWidgetsFor(themeSlug),
+      drawerPosts: await bmixDrawerPosts(themeSlug),
+      sidebarData: await defaultSidebarData(themeSlug === "default", ts.useCustomIcons === true),
+      settings,
+      themeSettings: ts,
+      emptyHint: isBm && !cleaned ? "输入关键词，从右上角搜索框或导航搜索寻找内容。" : undefined,
     }),
   };
 }
@@ -564,8 +701,10 @@ async function search(payload: { q?: string; page?: number; all?: boolean }) {
 async function postDetail(payload: { slug: string }, ctx: Ctx) {
   const post = await getPost(payload.slug);
   if (!post) return { notFound: true };
+  const themeSlug0 = await getActiveThemeSlug();
+  const relatedN = themeSlug0 === "codeman" || themeSlug0 === "pseudolinear" ? 5 : 4;
   const [related, settings, items, themeSlug, popular, random, cfg] = await Promise.all([
-    relatedPosts(post, 4),
+    relatedPosts(post, relatedN),
     getSettings(),
     listPostComments(post.id, "post"),
     getActiveThemeSlug(),
@@ -573,6 +712,8 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     randomPosts(12),
     getPermalinkConfig(),
   ]);
+  const relatedTaxonomy =
+    themeSlug === "default" ? await relatedByTaxonomy(post.id, 4) : undefined;
   if (ctx.ip || ctx.ua) {
     try {
       await incrementViews(post.id, ctx.ip, ctx.ua);
@@ -583,7 +724,7 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
   const config = resolveCommentConfig(settings);
   const u = ctx.user as { id?: number; name?: string; email?: string } | undefined;
   const me = u && u.id ? { id: u.id, name: u.name ?? "", email: u.email ?? "" } : null;
-  const commentsHtml = R.commentsSection({
+  const commentsHtml = R.commentsBare({
     postId: post.id,
     postType: "post",
     open: post.commentStatus === "open",
@@ -617,7 +758,8 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     ],
   };
   const tc = getThemeChrome(themeSlug);
-  const bodyHtml = await R.buildPostBody(post, "post");
+  const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
+  const bodyHtml = await R.buildPostBody(post, "post", highlight);
   const metaHtml = metaPayload.items.length
     ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--muted)">${metaPayload.items.map((m) => `<span>${R.esc(m.label)}：${R.esc(m.value)}</span>`).join("")}</div>`
     : "";
@@ -625,18 +767,41 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     ? `<div style="margin-top:32px;display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border);padding-top:24px">${(post.tags || []).map((t) => `<a href="${R.esc(t.url || tagUrlFor(cfg, t))}" style="font-size:12px;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:4px 12px;border-radius:9999px">#${R.esc(t.name)}</a>`).join("")}</div>`
     : "";
   const shareHtml = R.shareBar(post);
+  const defMetaHtml = metaPayload.items.length
+    ? `<div class="mt-2 flex flex-wrap items-center gap-4 text-sm text-[var(--muted)]">${metaPayload.items.map((m) => `<span>${R.esc(m.label)}：${R.esc(m.value)}</span>`).join("")}</div>`
+    : "";
+  const defTagsHtml = (post.tags || []).length
+    ? `<div class="mt-8 flex flex-wrap gap-2 border-t border-[var(--border)] pt-6">${(post.tags || []).map((t) => `<a href="${R.esc(t.url || tagUrlFor(cfg, t))}" class="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]">#${R.esc(t.name)}</a>`).join("")}</div>`
+    : "";
+  const isDefault = themeSlug === "default";
+  const [postBottom, sidebarWidgets, ts] = isDefault
+    ? await Promise.all([
+        R.widgetAreaHtml(await getAreaWidgets(themeSlug, "post-bottom"), "space-y-6"),
+        R.widgetAreaHtml(await getAreaWidgets(themeSlug, "sidebar"), "space-y-6"),
+        getActiveThemeSettings(),
+      ])
+    : ["", "", undefined];
   return {
     main: tc.postPage({
       post,
       bodyHtml,
       related,
+      relatedTaxonomy,
       popular,
       random,
       commentsHtml,
       metaHtml,
+      defMetaHtml,
       tagsHtml,
+      defTagsHtml,
       shareHtml,
       blogIndex: blogIndexUrlFor(cfg),
+      widgets: await sideWidgetsFor(themeSlug),
+      postBottom,
+      sidebarWidgets,
+      sidebarData: isDefault ? await defaultSidebarData(true, ts?.useCustomIcons === true) : undefined,
+      settings,
+      canonical: `${ctx.origin}${post.url}`,
     }),
     head:
       R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
@@ -647,16 +812,17 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
 async function pageDetail(payload: { slug: string }, ctx: Ctx) {
   const page = await getPublishedPage(payload.slug);
   if (!page) return { notFound: true };
+  const recentLimit = (await getActiveThemeSlug()) === "bluemix" ? 4 : 5;
   const [settings, recent, items, themeSlug] = await Promise.all([
     getSettings(),
-    listPosts({ status: "published", limit: 5 }),
+    listPosts({ status: "published", limit: recentLimit }),
     listPostComments(page.id, "page"),
     getActiveThemeSlug(),
   ]);
   const config = resolveCommentConfig(settings);
   const u = ctx.user as { id?: number; name?: string; email?: string } | undefined;
   const me = u && u.id ? { id: u.id, name: u.name ?? "", email: u.email ?? "" } : null;
-  const commentsHtml = R.commentsSection({
+  const commentsHtml = R.commentsBare({
     postId: page.id,
     postType: "page",
     open: page.commentStatus === "open",
@@ -686,8 +852,15 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
     ],
   };
   const tc = getThemeChrome(themeSlug);
+  const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
   return {
-    main: tc.pagePage({ page, bodyHtml: await R.buildPostBody(page, "page"), recent: recent.items, commentsHtml }),
+    main: tc.pagePage({
+      page,
+      bodyHtml: await R.buildPostBody(page, "page", highlight),
+      recent: recent.items,
+      commentsHtml,
+      widgets: await sideWidgetsFor(themeSlug),
+    }),
     head:
       R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
       (await pluginHeadHtml(headContext)),
@@ -716,7 +889,7 @@ const POST_FORMAT_LABELS: Record<string, string> = {
   status: "状态",
 };
 
-async function archives(payload: { year?: number; month?: number }) {
+async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
   const year = Number(payload.year) || 0;
   const month = Number(payload.month) || 0;
   const esc = R.esc;
@@ -807,8 +980,14 @@ async function archives(payload: { year?: number; month?: number }) {
     `</div>${aside}</div>`;
 
   const siteTitle = settings.siteTitle ?? "";
+  const head =
+    `<meta name="description" content="${esc(siteTitle)} 的全部文章按时间归档">` +
+    `<meta property="og:url" content="${esc(ctx?.origin ?? "")}">` +
+    `<meta property="og:site_name" content="${esc(siteTitle)}">` +
+    `<meta property="og:locale" content="zh_CN">`;
   return {
     headTitle: `文章归档 - ${siteTitle}`,
+    head,
     main,
   };
 }
@@ -1166,6 +1345,7 @@ export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unk
     return {
       siteTitle: "管理后台",
       siteDescription: "",
+      siteUrl: "",
       themeHead: "",
       nav: "",
       aside: "",

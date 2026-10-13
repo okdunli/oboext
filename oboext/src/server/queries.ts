@@ -18,6 +18,8 @@ import {
   tags,
   users,
   type Post,
+  type Category,
+  type Tag,
 } from "./schema.js";
 import {
   getPermalinkConfig,
@@ -27,7 +29,7 @@ import {
 } from "./links.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 
-export type TaxRef = { id: number; name: string; slug: string; url: string };
+export type TaxRef = { id: number; name: string; slug: string; url: string; icon?: string | null };
 
 export type PostView = Post & {
   url: string;
@@ -89,7 +91,7 @@ export async function attachTaxonomies(ids: number[]) {
   return { categories: cats, tags: tg };
 }
 
-export async function listCategories() {
+export async function listCategories(): Promise<Category[]> {
   const rows = await db.select().from(categories);
   return rows.sort(
     (a, b) =>
@@ -99,7 +101,7 @@ export async function listCategories() {
   );
 }
 
-export async function listTags() {
+export async function listTags(): Promise<Tag[]> {
   const rows = await db.select().from(tags);
   return rows.sort((a, b) => b.id - a.id);
 }
@@ -298,6 +300,63 @@ export async function relatedPosts(post: PostView, n = 4): Promise<PostView[]> {
     limit: n,
   });
   return items;
+}
+
+export async function relatedByTaxonomy(postId: number, limit = 4): Promise<PostView[]> {
+  const [catRows, tagRows, cfg] = await Promise.all([
+    db.select({ id: postCategories.categoryId }).from(postCategories).where(eq(postCategories.postId, postId)),
+    db.select({ id: postTags.tagId }).from(postTags).where(eq(postTags.postId, postId)),
+    getPermalinkConfig(),
+  ]);
+  const catIds = catRows.map((r: { id: number }) => r.id);
+  const tagIds = tagRows.map((r: { id: number }) => r.id);
+  if (!catIds.length && !tagIds.length) {
+    const { items } = await listPosts({ status: "published", excludeId: postId, orderBy: "date", limit });
+    return items;
+  }
+  const [byCat, byTag] = await Promise.all([
+    catIds.length
+      ? db.select({ postId: postCategories.postId }).from(postCategories).where(inArray(postCategories.categoryId, catIds))
+      : Promise.resolve([] as { postId: number }[]),
+    tagIds.length
+      ? db.select({ postId: postTags.postId }).from(postTags).where(inArray(postTags.tagId, tagIds))
+      : Promise.resolve([] as { postId: number }[]),
+  ]);
+  const score = new Map<number, number>();
+  for (const r of byCat) {
+    if (r.postId === postId) continue;
+    score.set(r.postId, (score.get(r.postId) ?? 0) + 3);
+  }
+  for (const r of byTag) {
+    if (r.postId === postId) continue;
+    score.set(r.postId, (score.get(r.postId) ?? 0) + 2);
+  }
+  if (!score.size) {
+    const { items } = await listPosts({ status: "published", excludeId: postId, orderBy: "date", limit });
+    return items;
+  }
+  const candidateIds = [...score.keys()];
+  const rows = await db
+    .select({
+      id: posts.id,
+      title: posts.title,
+      slug: posts.slug,
+      publishedAt: posts.publishedAt,
+      featuredImage: posts.featuredImage,
+    })
+    .from(posts)
+    .where(and(eq(posts.status, "published"), inArray(posts.id, candidateIds)));
+  const byId = new Map(rows.map((r: { id: number }) => [r.id, r]));
+  return candidateIds
+    .map((id: number) => byId.get(id))
+    .filter((r): r is (typeof rows)[number] => Boolean(r))
+    .map((p) => ({ ...p, score: score.get(p.id) ?? 0 }))
+    .sort((a, b) => b.score - a.score || (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0))
+    .slice(0, limit)
+    .map((p) => ({
+      ...p,
+      url: postUrlFor(cfg, p),
+    })) as unknown as PostView[];
 }
 
 /** Published comments for one content item, oldest first (tree order). */

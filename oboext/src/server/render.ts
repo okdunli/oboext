@@ -467,11 +467,12 @@ const ICON_QZONE =
 const ICON_HEART =
   '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-heart"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg>';
 
-export function shareBar(p: PostView): string {
+export function shareBar(p: PostView, siteName = "", siteDescription = ""): string {
   const likes = p.likes ?? 0;
   return (
     `<div class="share-modal" data-post-id="${p.id}" data-likes="${likes}"` +
-    ` data-excerpt="${esc(p.excerpt || "")}" data-thumb="${esc(p.featuredImage || "")}">` +
+    ` data-title="${esc(p.title)}" data-excerpt="${esc(p.excerpt || "")}" data-thumb="${esc(p.featuredImage || "")}"` +
+    ` data-site="${esc(siteName)}" data-desc="${esc(siteDescription)}">` +
     `<button type="button" class="image">${ICON_IMAGE}</button>` +
     `<button type="button" class="likes">${ICON_WEIBO}</button>` +
     `<button type="button" class="qq">${ICON_QQ}</button>` +

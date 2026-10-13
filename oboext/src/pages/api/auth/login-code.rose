@@ -20,6 +20,8 @@
     LoginThrottledError,
   } from "@server/auth";
   import { verifyCode } from "@server/verify-codes";
+  import { getAdminSecurity, isEntryReferer } from "@server/security";
+  import { verifyLoginCaptcha, readCaptchaCookie } from "@server/captcha";
   import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
 
   export async function POST(request) {
@@ -28,6 +30,15 @@
       const channel = body.channel === "sms" ? "sms" : "email";
       const code = String(body.code || "").trim();
       if (!code) return jsonFail("请输入验证码", 422);
+
+      const sec = await getAdminSecurity();
+      if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);
+      const captchaError = await verifyLoginCaptcha(
+        sec,
+        body.captcha,
+        readCaptchaCookie(request),
+      );
+      if (captchaError) return jsonFail(captchaError, 400);
 
       const ip = clientIp(request);
       const ua = clientUa(request);

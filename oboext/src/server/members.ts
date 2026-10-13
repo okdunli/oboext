@@ -13,6 +13,7 @@ import { getNotifySettings } from "./notify.js";
 import { verifyCode } from "./verify-codes.js";
 import { getPermalinkConfig } from "./links.js";
 import { addPasswordlessMark } from "./passwordless.js";
+import { getAdminSecurity, normalizePublicPath } from "./security.js";
 import { ServiceError } from "./errors.js";
 
 const OPTION_KEY = "memberSettings";
@@ -53,58 +54,6 @@ export async function getMemberSettings(): Promise<MemberSettings> {
   return { ...DEFAULT_SETTINGS, ...stored };
 }
 
-const RESERVED_SEGMENTS = new Set([
-  "admin",
-  "api",
-  "search",
-  "archives",
-  "feed.xml",
-  "sitemap.xml",
-  "robots.txt",
-  "favicon.ico",
-  "theme-assets",
-  "theme-style",
-  "plugin-assets",
-  "uploads",
-  "static",
-  "manifest.json",
-  "manifest.webmanifest",
-]);
-
-const ENTRY_PATH_RE = /^\/[a-z0-9][a-z0-9-_/]*$/;
-
-export async function normalizeRegisterPath(raw: string): Promise<string> {
-  const path = raw
-    .trim()
-    .replace(/^\/+/, "/")
-    .replace(/\/+$/, "")
-    .replace(/\/{2,}/g, "/")
-    .toLowerCase();
-  if (!ENTRY_PATH_RE.test(path)) {
-    throw new ServiceError("路径只能包含字母、数字、-、_、/，需以 / 开头且不以 / 结尾", 422);
-  }
-  if (path.length > 64) throw new ServiceError("路径过长（最多 64 个字符）", 422);
-  const segments = path.split("/").filter(Boolean);
-  if (segments.length > 3) throw new ServiceError("路径最多 3 层目录", 422);
-  const first = segments[0];
-  if (RESERVED_SEGMENTS.has(first)) {
-    throw new ServiceError(`/${first} 是系统保留路径，请更换`, 422);
-  }
-  const permalink = await getPermalinkConfig();
-  for (const base of [
-    permalink.postBase,
-    permalink.pageBase,
-    permalink.categoryBase,
-    permalink.tagBase,
-  ]) {
-    const seg = base.split("/").filter(Boolean)[0];
-    if (seg && seg === first) {
-      throw new ServiceError(`路径与固定链接前缀 /${base} 冲突，请更换`, 422);
-    }
-  }
-  return path;
-}
-
 export async function saveMemberSettings(
   input: Partial<MemberSettings>,
 ): Promise<MemberSettings> {
@@ -135,13 +84,18 @@ export async function saveMemberSettings(
         ? input.defaultRole
         : current.defaultRole,
   };
-  next.registerPath = await normalizeRegisterPath(next.registerPath);
+
+  next.registerPath = await normalizePublicPath(next.registerPath);
+  const sec = await getAdminSecurity();
+  if (sec.entryEnabled && next.registerPath === sec.entryPath) {
+    throw new ServiceError("注册路径不能与伪装登录入口相同，请更换", 422);
+  }
   await setOption(OPTION_KEY, next);
   return next;
 }
 
 export async function getPublicRegisterConfig() {
-  const [member, notify] = await Promise.all([getMemberSettings(), getNotifySettings()]);
+  const [member, notify, sec] = await Promise.all([getMemberSettings(), getNotifySettings(), getAdminSecurity()]);
 
   const emailVerify = notify.register.emailVerify && notify.email.enabled;
   const phoneVerify = notify.register.phoneVerify && notify.sms.enabled;
@@ -173,9 +127,20 @@ export async function getPublicRegisterConfig() {
     inviteOnly: member.inviteOnly,
     captcha: {
       enabled: member.captchaEnabled,
-      mode: member.captchaEnabled ? ("builtin" as const) : null,
+      mode: member.captchaEnabled ? sec.captchaMode : null,
     },
   };
+}
+
+export function isRegisterReferer(req: Request, member: MemberSettings): boolean {
+  if (!member.registerEnabled) return false;
+  let pathname = "";
+  try {
+    pathname = new URL(req.headers.get("referer") ?? "").pathname;
+  } catch {
+    pathname = "";
+  }
+  return pathname === member.registerPath;
 }
 
 const NAME_RE = /^[^\s@]{2,32}$/u;
@@ -213,10 +178,6 @@ export async function registerMember(input: RegisterInput): Promise<SessionUser>
   await ensureMigrations();
   const member = await getMemberSettings();
   if (!member.registerEnabled) throw new ServiceError("注册已关闭", 404);
-
-  if (member.captchaEnabled) {
-    throw new ServiceError("注册验证码暂不可用，请稍后再试或联系站长", 503);
-  }
 
   if (member.inviteOnly) {
     const code = (input.inviteCode ?? "").trim();

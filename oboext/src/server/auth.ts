@@ -21,6 +21,7 @@ import { db, ensureMigrations } from "./db.js";
 import { users, securityEvents } from "./schema.js";
 import type { Role } from "./schema.js";
 import { ServiceError } from "./errors.js";
+import { getAdminSecurity } from "./security.js";
 
 export const COOKIE_NAME = "cms_session";
 const SESSION_DAYS = 7;
@@ -151,9 +152,6 @@ export async function verifyCredentials(
   return { id: row.id, email: row.email, name: row.name, role: row.role };
 }
 
-const THROTTLE_MAX = 5;
-const THROTTLE_WINDOW_MS = 15 * 60_000;
-
 export const LOGIN_EVENTS = {
   SUCCESS: "login.success",
   FAIL: "login.fail",
@@ -161,6 +159,37 @@ export const LOGIN_EVENTS = {
   RESET_REQUEST: "password.reset.request",
   RESET_DONE: "password.reset.done",
 } as const;
+
+export async function assertLoginAllowed(account: string, ip: string | null): Promise<void> {
+  const sec = await getAdminSecurity();
+  if (!sec.throttleEnabled) return;
+  const max = Math.max(1, sec.throttleMaxFailures);
+  const windowMs = Math.max(1, sec.throttleWindowMinutes) * 60_000;
+  const since = new Date(Date.now() - windowMs);
+  const rows = await db
+    .select({ createdAt: securityEvents.createdAt })
+    .from(securityEvents)
+    .where(
+      and(
+        eq(securityEvents.eventType, LOGIN_EVENTS.FAIL),
+        gt(securityEvents.createdAt, since),
+        or(
+          account ? eq(securityEvents.account, account) : sql`false`,
+          ip ? eq(securityEvents.ip, ip) : sql`false`,
+        )!,
+      ),
+    )
+    .orderBy(desc(securityEvents.id))
+    .limit(max);
+  if (rows.length >= max) {
+    const unlockAt = rows[rows.length - 1].createdAt.getTime() + windowMs;
+    const remainMs = unlockAt - Date.now();
+    if (remainMs > 0) {
+      const mins = Math.max(1, Math.ceil(remainMs / 60_000));
+      throw new LoginThrottledError(`登录失败次数过多，请 ${mins} 分钟后再试`);
+    }
+  }
+}
 
 export async function recordLoginEvent(input: {
   eventType: string;
@@ -179,34 +208,6 @@ export async function recordLoginEvent(input: {
     });
   } catch (e) {
     console.error("[security-events] write failed:", e);
-  }
-}
-
-/** Sliding-window failure gate: 5 fails (same account or IP) within 15 min. */
-export async function assertLoginAllowed(account: string, ip: string | null): Promise<void> {
-  const since = new Date(Date.now() - THROTTLE_WINDOW_MS);
-  const rows = await db
-    .select({ createdAt: securityEvents.createdAt })
-    .from(securityEvents)
-    .where(
-      and(
-        eq(securityEvents.eventType, LOGIN_EVENTS.FAIL),
-        gt(securityEvents.createdAt, since),
-        or(
-          account ? eq(securityEvents.account, account) : sql`false`,
-          ip ? eq(securityEvents.ip, ip) : sql`false`,
-        )!,
-      ),
-    )
-    .orderBy(desc(securityEvents.id))
-    .limit(THROTTLE_MAX);
-  if (rows.length >= THROTTLE_MAX) {
-    const unlockAt = rows[rows.length - 1].createdAt.getTime() + THROTTLE_WINDOW_MS;
-    const remainMs = unlockAt - Date.now();
-    if (remainMs > 0) {
-      const mins = Math.max(1, Math.ceil(remainMs / 60_000));
-      throw new LoginThrottledError(`登录失败次数过多，请 ${mins} 分钟后再试`);
-    }
   }
 }
 

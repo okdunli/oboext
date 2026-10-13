@@ -13,6 +13,8 @@
     recordLoginEvent,
     LOGIN_EVENTS,
   } from "@server/auth";
+  import { getAdminSecurity, isEntryReferer } from "@server/security";
+  import { verifyLoginCaptcha, readCaptchaCookie } from "@server/captcha";
   import { sendVerificationCode } from "@server/notify";
 
   export async function POST(request) {
@@ -20,6 +22,15 @@
       const body = await readBody(request);
       const account = String(body.account || "").trim();
       if (!account) return jsonFail("请输入邮箱或昵称", 422);
+
+      const sec = await getAdminSecurity();
+      if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);
+      const captchaError = await verifyLoginCaptcha(
+        sec,
+        body.captcha,
+        readCaptchaCookie(request),
+      );
+      if (captchaError) return jsonFail(captchaError, 400);
 
       const ip = clientIp(request);
       const user = await findUserByAccount(account);

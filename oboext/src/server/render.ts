@@ -594,12 +594,12 @@ function builtinCommentsHtml(m: CommentModel): string {
     ? ""
     : '<div class="guest-info fields flex gx-3 mx-5">' +
       '<div class="item"><input type="text" class="comment-field" name="authorName" autocomplete="nickname" placeholder=' +
-      `"昵称${m.requireNameEmail ? " *" : ""}` +
-      `>${`<i>${ICON_USER}</i>`}</div>` +
+      `"昵称${m.requireNameEmail ? " *" : ""}">` +
+      `<i>${ICON_USER}</i></div>` +
       '<div class="item"><input type="email" class="comment-field" name="authorEmail" autocomplete="email" placeholder=' +
-      `"邮箱${m.requireNameEmail ? " *" : ""}` +
-      `>${`<i>${ICON_MAIL}</i>`}</div>` +
-      `<div class="item"><input type="url" class="comment-field" name="authorUrl" autocomplete="url" placeholder="个人首页">${`<i>${ICON_LINK}</i>`}</div>` +
+      `"邮箱${m.requireNameEmail ? " *" : ""}">` +
+      `<i>${ICON_MAIL}</i></div>` +
+      `<div class="item"><input type="url" class="comment-field" name="authorUrl" autocomplete="url" placeholder="个人首页"><i>${ICON_LINK}</i></div>` +
       "</div>";
 
   const form =

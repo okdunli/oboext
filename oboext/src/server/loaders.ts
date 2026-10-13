@@ -41,6 +41,8 @@ import { ensurePluginsLoaded } from "./plugins.js";
 import { getNotFoundSettings } from "./not-found-config.js";
 import { getPublicRegisterConfig } from "./members.js";
 import { renderUserCenter, renderUserCenterGuest } from "./account.js";
+import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
+import { getAdminSecurity } from "./security.js";
 import { getThemeChrome, publicAssetHref, type MenuItem } from "./theme-chrome.js";
 
 export type Ctx = {
@@ -904,6 +906,7 @@ function registerView(config: {
   emailVerify: boolean;
   phoneVerify: boolean;
   inviteOnly: boolean;
+  captcha: { enabled: boolean; mode: "builtin" | "custom" | null };
 }) {
   const head =
     `<title>注册账号</title>` +
@@ -920,6 +923,17 @@ function registerView(config: {
     `<input class="oboe-reg-input" name="${name}" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="6 位验证码" required>` +
     `<button type="button" class="oboe-reg-send" ${sendAttr}>发送验证码</button>` +
     `</div></div>`;
+
+  const captchaBlock = !config.captcha.enabled
+    ? ""
+    : config.captcha.mode === "custom"
+      ? `<div class="oboe-reg-fld"><label>验证码</label>` +
+        `<input class="oboe-reg-input" name="captchaToken" maxlength="200" autocomplete="off" placeholder="第三方验证码凭证" required></div>`
+      : `<div class="oboe-reg-fld"><label>验证码</label>` +
+        `<div class="oboe-reg-code">` +
+        `<input class="oboe-reg-input" name="captcha" maxlength="4" autocomplete="off" spellcheck="false" placeholder="4 位字符" required style="max-width:120px;text-transform:uppercase;letter-spacing:.18em;">` +
+        `<img data-oboe-reg-captcha-img src="/api/captcha/image" alt="验证码" title="看不清？点击刷新" style="height:38px;width:120px;cursor:pointer;border:1px solid var(--border-color,#d4d4d8);border-radius:8px;background:#eef2f7;">` +
+        `</div></div>`;
   const main =
     `<style>` +
     `.oboe-reg{display:flex;flex-direction:column;gap:16px}` +
@@ -952,6 +966,7 @@ function registerView(config: {
       ? field("inviteCode", "邀请码", 'type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="请输入管理员发放的邀请码"', true)
       : "") +
     field("password", "密码", `type="password" maxlength="200" autocomplete="new-password" placeholder="${config.passwordRequired ? "至少 8 位" : "留空可免密注册，事后可补设"}"`, config.passwordRequired) +
+    captchaBlock +
     `<p class="oboe-reg-msg" data-oboe-reg-msg></p>` +
     `<button type="submit" class="oboe-reg-submit" data-oboe-reg-submit>注 册</button>` +
     `<p class="oboe-reg-note">注册即代表同意站点规则 · <a href="/" style="color:var(--primary-color,#4f46e5)">返回首页</a></p>` +
@@ -988,6 +1003,15 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
         }
       })
       .filter(Boolean);
+
+    const sec = await getAdminSecurity();
+    if (sec.entryEnabled && decoded.join("/") === sec.entryPath.replace(/^\//, "")) {
+      return {
+        kind: "secret-entry",
+        head: `<title>登录</title><meta name="robots" content="noindex, nofollow">`,
+        main: secretEntryPageHtml(),
+      };
+    }
 
     const registerCfg = await getPublicRegisterConfig();
     if (
@@ -1035,8 +1059,13 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
   return { kind: res.kind === "blogIndex" ? "blog" : res.kind, ...out };
 }
 
+async function loginCard() {
+  return { html: loginCardHtml() };
+}
+
 export const loaders = {
   chrome,
+  loginCard,
   home,
   blog: blogList,
   category: categoryList,
@@ -1069,6 +1098,8 @@ export const loaders = {
   "admin.notify": admin.adminNotify,
   "admin.members": admin.adminMembers,
   "admin.account": admin.adminAccount,
+  "admin.security": admin.adminSecurity,
+  "admin.security-public": admin.adminSecurityPublic,
   "notFoundConfig": admin.notFoundConfig,
 };
 export type LoaderKey = keyof typeof loaders;

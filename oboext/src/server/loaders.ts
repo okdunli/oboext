@@ -25,7 +25,8 @@ import {
   relatedPosts,
   type PostView,
 } from "./queries.js";
-import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, resolveSitePath, paginate } from "./links.js";
+import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, resolveSitePath, paginate, type PermalinkConfig } from "./links.js";
+import { resolveVirtualRoute, type VirtualSiteRoute } from "./virtual-routes.js";
 import { resolveCommentConfig } from "./comments-config.js";
 import { getPublishedPage } from "./pages.js";
 import * as R from "./render.js";
@@ -84,10 +85,16 @@ async function pluginHeadHtml(context: HeadContext): Promise<string> {
  * Generic head context for pages whose loader does not build its own:
  * home, the blog index, search and archives. Entity pages (post, page,
  * category, tag) carry richer facts and build theirs in their own loaders.
+ * The blog index URL is config-driven (permalink prefixes can be renamed).
  */
-function chromeHeadContext(pathname: string, siteTitle: string, origin: string): HeadContext {
+function chromeHeadContext(
+  pathname: string,
+  siteTitle: string,
+  origin: string,
+  blogIndex: string,
+): HeadContext {
   if (pathname === "/") return { kind: "home", siteTitle, siteUrl: origin };
-  if (pathname === "/blog" || pathname === "/blog/")
+  if (pathname === blogIndex || pathname === blogIndex + "/")
     return {
       kind: "archive",
       siteTitle,
@@ -95,7 +102,7 @@ function chromeHeadContext(pathname: string, siteTitle: string, origin: string):
       title: "所有文章",
       breadcrumbs: [
         { label: "首页", href: "/" },
-        { label: "文章", href: "/blog" },
+        { label: "文章", href: blogIndex },
       ],
     };
   if (pathname.indexOf("/search") === 0)
@@ -106,20 +113,21 @@ function chromeHeadContext(pathname: string, siteTitle: string, origin: string):
 /**
  * Entity/taxonomy detail pages build head nodes in their own loader (with
  * the entity's title/dates/breadcrumbs), so the chrome-level pass skips
- * them to avoid double emission.
+ * them to avoid double emission. The prefixes come from the permalink
+ * config, so a renamed prefix still skips exactly the entity pages.
  */
-function chromeSkipsHead(pathname: string): boolean {
-  return (
-    (pathname.indexOf("/blog/") === 0 && pathname !== "/blog/") ||
-    (pathname.indexOf("/pages/") === 0 && pathname !== "/pages/")
-  );
+function chromeSkipsHead(pathname: string, cfg: PermalinkConfig): boolean {
+  const bases = [cfg.postBase, cfg.pageBase, cfg.categoryBase, cfg.tagBase]
+    .map((b) => ("/" + b).replace(/\/+$/, ""))
+    .filter((b) => b !== "");
+  return bases.some((b) => pathname.indexOf(b + "/") === 0);
 }
 
 const pageNum = (v: unknown): number => Math.max(1, Number(v) || 1);
 
-const SIDEBAR_FALLBACK: R.SkyItem[] = [
+const sidebarFallback = (cfg: PermalinkConfig): R.SkyItem[] => [
   { id: "s1", label: "首页", url: "/" },
-  { id: "s2", label: "所有文章", url: "/blog" },
+  { id: "s2", label: "所有文章", url: blogIndexUrlFor(cfg) },
 ];
 
 async function chromeData(pathname: string) {
@@ -167,7 +175,7 @@ async function chromeData(pathname: string) {
           : "");
   const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
   const menuItems: R.SkyItem[] =
-    sideMenu && sideMenu.items.length ? (sideMenu.items as R.SkyItem[]) : SIDEBAR_FALLBACK;
+    sideMenu && sideMenu.items.length ? (sideMenu.items as R.SkyItem[]) : sidebarFallback(cfg);
   const tc = getThemeChrome(themeSlug);
   const headerMenu = await getMenuByLocation("header");
   const headerItems: MenuItem[] = (headerMenu?.items ?? []) as MenuItem[];
@@ -183,8 +191,8 @@ async function chromeData(pathname: string) {
     cssHref: tc.cssHref(),
     bodyFix: tc.bodyFix(),
     headExtra: tc.headExtra(),
-    navHtml: tc.nav(settings, headerItems),
-    bodyOpen: tc.bodyOpen(settings, headerItems),
+    navHtml: tc.nav({ ...settings, __pathname: pathname }, headerItems),
+    bodyOpen: tc.bodyOpen({ ...settings, __pathname: pathname }, headerItems),
     bodyClose: tc.bodyClose(settings, footerHtml),
     asideHtml: tc.aside({
       menu: R.sidebarMenu(menuItems, pathname),
@@ -200,13 +208,14 @@ async function chromeData(pathname: string) {
 async function chrome(_payload: unknown, ctx?: Ctx) {
   const pathname = (ctx && ctx.pathname) || "/";
   const origin = (ctx && ctx.origin) || "";
-  const d = await chromeData(pathname);
+  const [d, cfg] = await Promise.all([chromeData(pathname), getPermalinkConfig()]);
   const isAdmin = pathname.indexOf("/admin") === 0;
+  const blogIndex = blogIndexUrlFor(cfg);
   const pluginFooter = isAdmin ? "" : await pluginFooterHtml();
   const pluginHead =
-    isAdmin || chromeSkipsHead(pathname)
+    isAdmin || chromeSkipsHead(pathname, cfg)
       ? ""
-      : await pluginHeadHtml(chromeHeadContext(pathname, d.siteTitle, origin));
+      : await pluginHeadHtml(chromeHeadContext(pathname, d.siteTitle, origin, blogIndex));
   return {
     siteTitle: d.siteTitle,
     siteDescription: d.siteDescription,
@@ -361,7 +370,13 @@ async function home() {
 }
 
 async function blogList(payload: { page?: number }) {
-  const [settings, themeSlug, cfg] = await Promise.all([getSettings(), getActiveThemeSlug(), getPermalinkConfig()]);
+  const [settings, themeSlug, cfg, catRows, all] = await Promise.all([
+    getSettings(),
+    getActiveThemeSlug(),
+    getPermalinkConfig(),
+    listCategories(),
+    listPosts({ status: "published", limit: 5, orderBy: "views" }),
+  ]);
   const perPage = settings.postsPerPage || 10;
   const page = pageNum(payload.page);
   const { items, total } = await listPosts({
@@ -370,27 +385,37 @@ async function blogList(payload: { page?: number }) {
     offset: (page - 1) * perPage,
   });
   const totalPages = Math.max(1, Math.ceil(total / perPage));
+  const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
+  const blogIndex = blogIndexUrlFor(cfg);
+  const ts = await getActiveThemeSettings();
   const tc = getThemeChrome(themeSlug);
   return {
     headTitle: `全部文章 - ${settings.siteTitle ?? ""}`,
     main: tc.listPage({
-      title: "全部文章",
+      title: "最新文章",
       sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
       items,
       page,
       totalPages,
-      hrefFor: (p) => paginate(blogIndexUrlFor(cfg), p),
+      hrefFor: (p) => paginate(blogIndex, p),
+      hero: all.items,
+      cats,
+      blogIndex,
+      bannerMax: bmClamp(ts.bannerMaxCount, 5, 1, 10),
+      activeHref: blogIndex,
+      variant: "blog",
     }),
   };
 }
 
 async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) {
   const page = pageNum(payload.page);
-  const [category, settings, cfg, themeSlug] = await Promise.all([
+  const [category, settings, cfg, themeSlug, catRows] = await Promise.all([
     getCategoryBySlug(payload.slug),
     getSettings(),
     getPermalinkConfig(),
     getActiveThemeSlug(),
+    listCategories(),
   ]);
   if (!category) return { notFound: true };
   const perPage = settings.postsPerPage || 10;
@@ -401,9 +426,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     offset: (page - 1) * perPage,
   });
   const totalPages = Math.max(1, Math.ceil(total / perPage));
-  const sub =
-    (category.description ? `${category.description} · ` : "") +
-    `共 ${total} 篇 · 第 ${page}/${totalPages} 页`;
+  const sub = `共 ${total} 篇 · 第 ${page}/${totalPages} 页`;
   const catUrl = categoryUrlFor(cfg, category);
   const pluginHead = await pluginHeadHtml({
     kind: "taxonomy",
@@ -417,17 +440,25 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
       { label: category.name, href: catUrl },
     ],
   });
+  const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
+  const ts = await getActiveThemeSettings();
   const tc = getThemeChrome(themeSlug);
   return {
     headTitle: `分类：${category.name} - ${settings.siteTitle ?? ""}`,
     pluginHead,
     main: tc.listPage({
-      title: `分类：${category.name}`,
+      title: category.name,
       sub,
       items,
       page,
       totalPages,
       hrefFor: (n) => paginate(catUrl, n),
+      hero: items.slice(0, 5),
+      cats,
+      blogIndex: blogIndexUrlFor(cfg),
+      bannerMax: bmClamp(ts.bannerMaxCount, 5, 1, 10),
+      activeHref: catUrl,
+      variant: "category",
     }),
   };
 }
@@ -521,13 +552,14 @@ async function search(payload: { q?: string; page?: number; all?: boolean }) {
 async function postDetail(payload: { slug: string }, ctx: Ctx) {
   const post = await getPost(payload.slug);
   if (!post) return { notFound: true };
-  const [related, settings, items, themeSlug, popular, random] = await Promise.all([
+  const [related, settings, items, themeSlug, popular, random, cfg] = await Promise.all([
     relatedPosts(post, 4),
     getSettings(),
     listPostComments(post.id, "post"),
     getActiveThemeSlug(),
     popularPosts(4),
     randomPosts(12),
+    getPermalinkConfig(),
   ]);
   if (ctx.ip || ctx.ua) {
     try {
@@ -573,16 +605,27 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     ],
   };
   const tc = getThemeChrome(themeSlug);
-  const bodyHtml = R.buildPostBody(post);
+  const bodyHtml = await R.buildPostBody(post, "post");
   const metaHtml = metaPayload.items.length
     ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--muted)">${metaPayload.items.map((m) => `<span>${R.esc(m.label)}：${R.esc(m.value)}</span>`).join("")}</div>`
     : "";
   const tagsHtml = (post.tags || []).length
-    ? `<div style="margin-top:32px;display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border);padding-top:24px">${(post.tags || []).map((t) => `<a href="${R.esc(t.url || `/blog/tag/${t.slug}`)}" style="font-size:12px;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:4px 12px;border-radius:9999px">#${R.esc(t.name)}</a>`).join("")}</div>`
+    ? `<div style="margin-top:32px;display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border);padding-top:24px">${(post.tags || []).map((t) => `<a href="${R.esc(t.url || tagUrlFor(cfg, t))}" style="font-size:12px;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:4px 12px;border-radius:9999px">#${R.esc(t.name)}</a>`).join("")}</div>`
     : "";
   const shareHtml = R.shareBar(post);
   return {
-    main: tc.postPage({ post, bodyHtml, related, popular, random, commentsHtml, metaHtml, tagsHtml, shareHtml }),
+    main: tc.postPage({
+      post,
+      bodyHtml,
+      related,
+      popular,
+      random,
+      commentsHtml,
+      metaHtml,
+      tagsHtml,
+      shareHtml,
+      blogIndex: blogIndexUrlFor(cfg),
+    }),
     head:
       R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
       (await pluginHeadHtml(headContext)),
@@ -632,7 +675,7 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
   };
   const tc = getThemeChrome(themeSlug);
   return {
-    main: tc.pagePage({ page, bodyHtml: R.buildPostBody(page), recent: recent.items, commentsHtml }),
+    main: tc.pagePage({ page, bodyHtml: await R.buildPostBody(page, "page"), recent: recent.items, commentsHtml }),
     head:
       R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
       (await pluginHeadHtml(headContext)),
@@ -757,17 +800,21 @@ async function feed(ctx: Ctx): Promise<string> {
   const full = settings.feedContent === "full";
   const cdata = (html: string) =>
     `<![CDATA[${html.replace(/]]>/g, "]]]]><![CDATA[>")}]]>`;
-  const xmlItems = items
-    .map((p) => {
-      const extra = full ? `\n      <content:encoded>${cdata(R.buildPostBody(p))}</content:encoded>` : "";
-      return (
-        `    <item>\n      <title>${escXml(p.title)}</title>\n      <link>${escXml(ctx.origin)}${escXml(p.url)}</link>` +
-        `\n      <guid>${escXml(ctx.origin)}${escXml(p.url)}</guid>` +
-        `\n      <pubDate>${(p.publishedAt ? new Date(p.publishedAt) : new Date()).toUTCString()}</pubDate>` +
-        `\n      <description>${escXml(p.excerpt ?? "")}</description>${extra}\n    </item>`
-      );
-    })
-    .join("\n");
+  const xmlItems = (
+    await Promise.all(
+      items.map(async (p) => {
+        const extra = full
+          ? `\n      <content:encoded>${cdata(await R.buildPostBody(p, "post"))}</content:encoded>`
+          : "";
+        return (
+          `    <item>\n      <title>${escXml(p.title)}</title>\n      <link>${escXml(ctx.origin)}${escXml(p.url)}</link>` +
+          `\n      <guid>${escXml(ctx.origin)}${escXml(p.url)}</guid>` +
+          `\n      <pubDate>${(p.publishedAt ? new Date(p.publishedAt) : new Date()).toUTCString()}</pubDate>` +
+          `\n      <description>${escXml(p.excerpt ?? "")}</description>${extra}\n    </item>`
+        );
+      }),
+    )
+  ).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
@@ -816,9 +863,46 @@ async function notFound(_p: unknown, _ctx: Ctx) {
   return { settings, recent };
 }
 
+function virtualRouteView(route: VirtualSiteRoute, ctx: Ctx) {
+  const title = route.seoTitle || route.title;
+  const desc = route.seoDescription ?? "";
+  const kw = route.seoKeywords ?? "";
+  const canonical = `${ctx.origin ?? ""}${route.path}`;
+  const head =
+    `<title>${R.esc(title)}</title>` +
+    (desc ? `<meta name="description" content="${R.esc(desc)}">` : "") +
+    (kw ? `<meta name="keywords" content="${R.esc(kw)}">` : "") +
+    `<link rel="canonical" href="${R.esc(canonical)}">` +
+    `<meta property="og:title" content="${R.esc(title)}">` +
+    (desc ? `<meta property="og:description" content="${R.esc(desc)}">` : "") +
+    `<meta property="og:type" content="website">` +
+    `<meta property="og:url" content="${R.esc(canonical)}">`;
+  const main =
+    `<div class="container-np" style="padding:40px 16px 64px;max-width:1200px;margin-inline:auto">` +
+    `<h1 style="font-size:28px;font-weight:700;margin-bottom:8px;color:var(--text-color,var(--foreground,#18181b))">${R.esc(route.title)}</h1>` +
+
+    `<div>${route.html}</div>` +
+    `</div>`;
+  return { head, main };
+}
+
 async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
-  const res = await resolveSitePath(payload.segments ?? []);
-  if (!res) return null;
+  const raw = (payload.segments ?? []).map((s) => String(s));
+  const res = await resolveSitePath(raw);
+  if (!res) {
+    const decoded = raw
+      .map((s) => {
+        try {
+          return decodeURIComponent(s);
+        } catch {
+          return s;
+        }
+      })
+      .filter(Boolean);
+    const virtual = await resolveVirtualRoute(decoded);
+    if (!virtual) return null;
+    return { kind: "virtual", ...virtualRouteView(virtual, ctx) };
+  }
   const page = Math.max(1, Number(payload.page) || 1);
   let out: Record<string, any>;
   switch (res.kind) {
@@ -872,6 +956,7 @@ export const loaders = {
   "admin.theme-panel": admin.adminThemePanel,
   "admin.plugins": admin.adminPlugins,
   "admin.plugin": admin.adminPlugin,
+  "admin.plugin-panel": admin.adminPluginPanel,
   "admin.menu-settings": admin.adminMenuSettings,
   "admin.taxonomies": admin.adminTaxonomies,
   "admin.users": admin.adminUsers,

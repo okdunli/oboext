@@ -5,6 +5,7 @@ export const PLUGIN_ENTRIES: Record<string, () => Promise<any>> = {
   "comment-guard": () => import("../../../plugins/comment-guard/index"),
   "copy-copyright": () => import("../../../plugins/copy-copyright/index"),
   "external-links": () => import("../../../plugins/external-links/index"),
+  "friend-links": () => import("../../../plugins/friend-links/index"),
   "hello-oboext": () => import("../../../plugins/hello-oboext/index"),
   "image-lightbox": () => import("../../../plugins/image-lightbox/index"),
   "reading-progress": () => import("../../../plugins/reading-progress/index"),

@@ -11,6 +11,13 @@ import type { Block } from "./schema.js";
 import type { PostView, TaxRef } from "./queries.js";
 import type { PageView } from "./pages.js";
 import { getAvatarUrl, type AvatarSource } from "./avatar.js";
+import { renderShortcodes, ensureShortcodes, type ShortcodeResolvers } from "./shortcodes.js";
+import { applyAsyncFilters, HOOKS } from "./hooks.js";
+import { ensurePluginsLoaded } from "./plugins.js";
+import { inArray } from "drizzle-orm";
+import { db } from "./db.js";
+import { media } from "./schema.js";
+import { listPosts } from "./queries.js";
 
 export const esc = (s: unknown): string =>
   String(s ?? "")
@@ -295,11 +302,56 @@ function highlightCodeBlocks(html: string): string {
   });
 }
 
-/** blocks -> heading ids -> highlight. Output is trusted HTML rendered with
- *  the template `{@html}` primitive; braces inside cause no parsing issues. */
-export function buildPostBody(p: { content?: Block[] | null; slug: string }): string {
+/** blocks -> heading ids -> highlight -> shortcodes -> content.html filter.
+ *  Output is trusted HTML rendered with the template `{@html}` primitive;
+ *  braces inside cause no parsing issues. Mirrors the original's
+ *  renderContent() pipeline (lib/services/render.ts). */
+export async function buildPostBody(
+  p: { content?: Block[] | null; slug: string; title?: string | null },
+  kind: "post" | "page" = "post",
+): Promise<string> {
+  await ensurePluginsLoaded();
+  ensureShortcodes();
   const blocks = (p.content ?? []) as Block[];
-  return highlightCodeBlocks(addHeadingIds(serializeBlocks(blocks), p.slug));
+  let html = highlightCodeBlocks(addHeadingIds(serializeBlocks(blocks), p.slug));
+  html = await renderShortcodes(html, {
+    kind,
+    slug: p.slug,
+    siteTitle: undefined,
+    resolvers: shortcodeResolvers(),
+  });
+  const filtered = await applyAsyncFilters<{ html: string; context: Record<string, unknown> }>(
+    HOOKS.contentHtml,
+    { html, context: { kind, slug: p.slug, title: p.title ?? undefined } },
+  );
+  return filtered.html;
+}
+
+/** DB-backed resolvers for the [gallery]/[posts] shortcodes (original
+ *  parity: lib/services/render.ts resolvers()). */
+function shortcodeResolvers(): ShortcodeResolvers {
+  return {
+    media: async (ids) => {
+      const rows = await db.select().from(media).where(inArray(media.id, ids));
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      return ids.map((i) => byId.get(i)).filter(Boolean) as typeof rows;
+    },
+    posts: async ({ limit, category, tag }) => {
+      const { items } = await listPosts({
+        status: "published",
+        categorySlug: category,
+        tagSlug: tag,
+        limit: Math.min(Math.max(limit, 1), 50),
+      });
+      return items.map((p) => ({
+        title: p.title,
+        slug: p.slug,
+        url: p.url,
+        excerpt: p.excerpt,
+        publishedAt: p.publishedAt,
+      }));
+    },
+  };
 }
 
 const CARD_COLS = "post-card-col col-xxs-6 col-xs-6 col-sm-4 col-md-4 col-lg-3 col-xl-3";
@@ -595,7 +647,8 @@ export function postPage(
   related: PostView[],
   commentsHtml = "",
   pluginMeta: MetaItem[] = [],
-  bodyHtml?: string,
+  bodyHtml: string,
+  blogIndex = "/blog",
 ): string {
   const cat = p.categories[0] ?? null;
   const meta =
@@ -606,7 +659,7 @@ export function postPage(
     `<span> · ${p.commentsCount ?? 0} 评论</span>` +
     pluginMeta.map((m) => `<span> · ${esc(m.label)}：${esc(m.value)}</span>`).join("") +
     "</div>";
-  const renderedBody = bodyHtml ?? buildPostBody(p);
+  const renderedBody = bodyHtml;
   const headings = extractHeadings(renderedBody);
   const toc = headings.length
     ? '<div class="sk-toc"><div class="toc-title">目录</div><ul>' +
@@ -623,7 +676,7 @@ export function postPage(
     : "";
   return (
     '<div class="sk-postpage">' +
-    `<div class="sk-crumbs"><a href="/">首页</a> / <a href="/blog">全部文章</a> / <span>${esc(p.title)}</span></div>` +
+    `<div class="sk-crumbs"><a href="/">首页</a> / <a href="${esc(blogIndex)}">全部文章</a> / <span>${esc(p.title)}</span></div>` +
     '<article class="post-wrapper" id="post-body">' +
     meta +
     `<h1>${esc(p.title)}</h1>` +
@@ -632,7 +685,7 @@ export function postPage(
     `<div class="post-content prose-cms">${renderedBody}</div>` +
     tags +
     shareBar(p) +
-    '<div class="post-nav"><a href="/blog">← 返回列表</a></div>' +
+    '<div class="post-nav"><a href="' + esc(blogIndex) + '">← 返回列表</a></div>' +
     "</article>" +
     '<section class="sk-section"><h2 class="title_style_01">相关文章</h2>' +
     cardRow(related, false) +
@@ -683,9 +736,9 @@ export function pagePage(
   p: PageView,
   recent: PostView[],
   commentsHtml = "",
-  bodyHtml?: string,
+  bodyHtml: string,
 ): string {
-  const renderedBody = bodyHtml ?? buildPostBody(p);
+  const renderedBody = bodyHtml;
   const lis = recent
     .map(
       (x) =>

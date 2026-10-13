@@ -310,6 +310,7 @@ button { font-family: inherit; }
   display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   border: 1px solid var(--adm-border); background: transparent; color: var(--adm-muted);
   border-radius: 7px; padding: 5px 9px; font-size: 12.5px; cursor: pointer;
+  text-decoration: none;
 }
 .adm-iconbtn:hover { color: var(--adm-text); background: var(--adm-hover); }
 .adm-iconbtn.danger:hover { color: #fca5a5; border-color: var(--adm-red); }
@@ -1036,6 +1037,11 @@ button { font-family: inherit; }
 .adm-thp-cat-row .adm-input { width: 170px; flex-shrink: 0; }
 .adm-thp-cat-row .adm-iconbtn { flex: 0 0 auto; border: none; }
 .adm-thp-cats-state { margin: 4px 0 0; font-size: 12px; color: var(--adm-faint); }
+
+.adm-thp-verifs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 640px) {
+  .adm-thp-verifs { grid-template-columns: 1fr; }
+}
 
 @media (max-width: 900px) {
   .adm-th-grid { grid-template-columns: 1fr; }

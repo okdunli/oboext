@@ -16,6 +16,20 @@
   function iconBg(p) { return p.enabled ? "rgba(79,70,229,.15)" : "var(--adm-panel-2)"; }
   function iconColor(p) { return p.enabled ? "#818cf8" : "var(--adm-faint)"; }
   function emptyHint() { return list().length ? [] : [1]; }
+
+  function hasSettings(p) {
+    const sections = (p.manifest && p.manifest.settings) || [];
+    for (let i = 0; i < sections.length; i++) {
+      const fields = sections[i].fields || [];
+      for (let j = 0; j < fields.length; j++) {
+        if (fields[j].type !== "hidden" && fields[j].type !== "group") return true;
+      }
+    }
+    return false;
+  }
+  function ic(n) {
+    return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/' + n + '.svg)"></span>';
+  }
 </script>
 
 <head>
@@ -57,6 +71,18 @@
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+      {#if hasSettings(p)}
+      <button class="adm-iconbtn" data-plg-settings data-slug={p.slug} title="插件设置">
+        <span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/settings-2.svg)"></span>
+        设置
+      </button>
+      {/if}
+      {#if p.hasAdmin && p.enabled}
+      <a class="adm-iconbtn" href={"/admin/plugins/" + p.slug} title="管理面板">
+        <span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/external-link.svg)"></span>
+        面板
+      </a>
+      {/if}
       <button class="adm-iconbtn" data-adm-act="plugin-toggle" data-slug={p.slug} data-enabled={p.enabled ? "1" : "0"}>
         <span class="adm-ic adm-ic-sm" style="--i:url({toggleIcon(p)})"></span>
         {toggleText(p)}
@@ -72,3 +98,30 @@
   <span class="adm-hint">将插件 zip 包上传到 plugins/ 目录即可。</span>
 </div>
 {/each}
+
+<div class="adm-modal" data-plg-modal hidden>
+  <div class="adm-modal-box" style="max-width:min(94vw,920px);">
+    <div class="adm-modal-hd">
+      <div>
+        <h2 style="margin:0;font-size:15px;" data-plg-title>插件设置</h2>
+        <p class="adm-hint" style="margin:3px 0 0;" data-plg-sub></p>
+      </div>
+      <button type="button" class="adm-modal-x" data-plg-close aria-label="关闭">{@html ic("x")}</button>
+    </div>
+    <div class="adm-modal-bd">
+      <div class="adm-thp-grid">
+        <nav class="adm-thp-nav">
+          <div class="adm-thp-navgroup" data-plg-navgroup>
+            <div class="adm-thp-navlist" data-plg-nav></div>
+          </div>
+        </nav>
+        <div class="adm-thp-body" data-plg-body></div>
+      </div>
+    </div>
+    <div class="adm-modal-ft">
+      <span class="adm-thp-msg" data-plg-msg style="margin-right:auto;"></span>
+      <button type="button" class="adm-btn adm-btn-ghost" data-plg-close>取消</button>
+      <button type="button" class="adm-btn" data-plg-save>保存设置</button>
+    </div>
+  </div>
+</div>

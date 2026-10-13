@@ -1,0 +1,58 @@
+<script>
+  // POST /api/auth/reset { account, code, password }
+  //
+  // Password reset step two: the emailed reset code IS the second factor
+  // (single use, 10 min), so no extra captcha here. On success the new
+  // password is written and the user signs in with it.
+  import { jsonOk, jsonFail, readBody, apiGate } from "@server/admin";
+  import {
+    findUserByAccount,
+    resetUserPassword,
+    recordLoginEvent,
+    LOGIN_EVENTS,
+    clientIp,
+    clientUa,
+  } from "@server/auth";
+  import { verifyCode } from "@server/verify-codes";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const account = String(body.account || "").trim();
+      const code = String(body.code || "").trim();
+      const password = String(body.password || "");
+      if (!account || !code || !password) return jsonFail("请填写完整信息", 422);
+      if (password.length < 8 || password.length > 200) {
+        return jsonFail("密码长度需为 8~200 个字符", 422);
+      }
+
+      const ip = clientIp(request);
+      const user = await findUserByAccount(account);
+      if (!user?.email) {
+
+        return jsonFail("验证码错误或已过期", 401);
+      }
+
+      try {
+        await verifyCode({
+          channel: "email",
+          target: user.email,
+          purpose: "reset",
+          code,
+        });
+      } catch {
+        return jsonFail("验证码错误或已过期", 401);
+      }
+
+      await resetUserPassword(user.id, password);
+      await recordLoginEvent({
+        eventType: LOGIN_EVENTS.RESET_DONE,
+        userId: user.id,
+        account,
+        ip,
+        userAgent: clientUa(request),
+      });
+      return { reset: true };
+    });
+  }
+</script>

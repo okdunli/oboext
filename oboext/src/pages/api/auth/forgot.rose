@@ -1,0 +1,45 @@
+<script>
+  // POST /api/auth/forgot { account }
+  //
+  // Password reset step one: send a 6-digit reset code (10 min, single use)
+  // to the account's bound email via the generic code service (purpose=reset).
+  // An unknown account (or one without an email) answers the same
+  // { sent: true } without sending — no account enumeration.
+  import { jsonOk, jsonFail, readBody, apiGate } from "@server/admin";
+  import {
+    clientIp,
+    clientUa,
+    findUserByAccount,
+    recordLoginEvent,
+    LOGIN_EVENTS,
+  } from "@server/auth";
+  import { sendVerificationCode } from "@server/notify";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const account = String(body.account || "").trim();
+      if (!account) return jsonFail("请输入邮箱或昵称", 422);
+
+      const ip = clientIp(request);
+      const user = await findUserByAccount(account);
+      if (user?.email) {
+        await sendVerificationCode({
+          channel: "email",
+          target: user.email,
+          purpose: "reset",
+          ip,
+        });
+        await recordLoginEvent({
+          eventType: LOGIN_EVENTS.RESET_REQUEST,
+          userId: user.id,
+          account,
+          ip,
+          userAgent: clientUa(request),
+        });
+      }
+
+      return { sent: true };
+    });
+  }
+</script>

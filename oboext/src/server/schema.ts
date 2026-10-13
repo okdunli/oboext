@@ -1,5 +1,5 @@
 /**
- * oboext Drizzle schema — ported verbatim from the original
+ * oboext schema — ported verbatim from the original app
  * (db/schema.ts). The Block type formerly imported from @/lib/blocks is
  * inlined here so the server layer has no app-alias dependency.
  */

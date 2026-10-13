@@ -34,7 +34,6 @@
         <p class="su-hint">推荐：零配置、无需外部服务，数据保存在本地 .data 目录。</p>
       </div>
       <div class="su-panel" data-su-panel="driver-postgres" hidden>
-        <p class="su-hint">推荐 Neon（免费档，空闲自动休眠不烧额度）或 Supabase。连接串形如：</p>
         <code class="su-code">postgresql://user:pass@host:5432/dbname?sslmode=require</code>
         <label class="su-label">连接串</label>
         <input class="adm-input su-input" name="dbUrl" placeholder="postgresql://…" spellcheck="false">

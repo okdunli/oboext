@@ -1,5 +1,5 @@
 /**
- * Admin service layer + Web API helpers — ported from the original
+ * Admin service layer + Web API helpers — ported from the original app
  * (lib/services/{posts,comments,taxonomies,settings,users,dashboard}.ts and
  * lib/http.ts), trimmed to what the B-phase admin uses:
  *
@@ -35,6 +35,8 @@ import {
   listComments,
   listTags as allTags,
 } from "./queries.js";
+import { getPostMetas, setPostMetas } from "./metas.js";
+import { getPermalinkConfig, postUrlFor } from "./links.js";
 import type { SessionUser } from "./auth.js";
 import { hashPassword } from "./auth.js";
 import { HOOKS, applyAsyncFilters, doAction } from "./hooks.js";
@@ -284,8 +286,20 @@ export async function adminGetPost(user: SessionUser, id: number) {
   if (!row) throw new ServiceError("文章不存在", 404);
   if (!canModifyContent(user.role, row.authorId, user.id))
     throw new ServiceError("权限不足", 403);
-  const tax = await attachTaxonomyIds([id]);
-  return { ...row, categoryIds: tax.cats[id] ?? [], tagIds: tax.tags[id] ?? [] };
+  const [tax, metas, cfg] = await Promise.all([
+    attachTaxonomyIds([id]),
+    getPostMetas(id),
+    getPermalinkConfig(),
+  ]);
+  return {
+    ...row,
+    url: postUrlFor(cfg, row),
+    categoryIds: tax.cats[id] ?? [],
+    tagIds: tax.tags[id] ?? [],
+    metas,
+
+    metaList: Object.entries(metas).map(([key, value]) => ({ key, value })),
+  };
 }
 
 type PostInput = {
@@ -306,7 +320,15 @@ type PostInput = {
   authorId?: number;
   categoryIds?: number[];
   tagIds?: number[];
+  /** Custom fields (post_metas); full-set replace, mirror pages.ts. */
+  metas?: { key: string; value: string }[];
 };
+
+/** Validate the editor's custom-field array (mirror pages.ts validate). */
+function normMetas(v: unknown): { key: string; value: string }[] {
+  if (!Array.isArray(v)) throw new ServiceError("自定义字段格式不正确", 422);
+  return v.map((m: any) => ({ key: String(m?.key ?? ""), value: String(m?.value ?? "") }));
+}
 
 function clean(v: string | null | undefined): string | null {
   return v === undefined || v === null || v === "" ? null : v;
@@ -360,6 +382,7 @@ export async function createPost(user: SessionUser, input: PostInput) {
     })
     .returning();
   await setTaxonomies(row.id, normIds(input.categoryIds), normIds(input.tagIds));
+  if (input.metas) await setPostMetas(row.id, normMetas(input.metas));
   return adminGetPost(user, row.id);
 }
 
@@ -413,6 +436,7 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
 
   if (input.categoryIds || input.tagIds)
     await setTaxonomies(id, normIds(input.categoryIds), normIds(input.tagIds));
+  if (input.metas !== undefined) await setPostMetas(id, normMetas(input.metas));
   return adminGetPost(user, id);
 }
 

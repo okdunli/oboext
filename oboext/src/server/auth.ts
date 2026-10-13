@@ -1,5 +1,5 @@
 /**
- * Authentication — ported verbatim in spirit from the original
+ * Authentication — ported verbatim in spirit from the original app
  * (lib/auth.ts + the throttling half of lib/services/security-events.ts).
  *
  * jose HS256 sessions (7d), bcryptjs cost-10 passwords, a per-PGlite-dir

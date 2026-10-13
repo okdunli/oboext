@@ -1055,7 +1055,7 @@ function waShell(w: { id: number; type: string; title: string }, body: string): 
 
 /**
  * Render resolved DB widgets for one theme area — pixel port of
- * components/shared/WidgetArea.tsx (inline-style variant, no Tailwind).
+ * components/shared/WidgetArea.tsx (inline-style variant, no utility framework).
  * `wrapClass` supplies the theme wrapper (sk-widget-area / sk-footer-widgets).
  */
 export function widgetAreaHtml(

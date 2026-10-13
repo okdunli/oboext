@@ -1,0 +1,90 @@
+<script>
+  // POST /api/auth/login-code { channel, target, code }
+  //
+  // Email/SMS code login. Same security chain as password login: throttle →
+  // one-time code (verify-codes, purpose=login, 5 attempts / 10 min) →
+  // second-factor plugin challenge ticket → session → security event +
+  // user.logged-in hook. The code itself replaces the password.
+  import { jsonOk, jsonFail, readBody, apiGate } from "@server/admin";
+  import {
+    assertLoginAllowed,
+    recordLoginEvent,
+    LOGIN_EVENTS,
+    sessionCookieValue,
+    signChallengeTicket,
+    findUserByContact,
+    normalizeContactTarget,
+    touchLastLogin,
+    clientIp,
+    clientUa,
+    LoginThrottledError,
+  } from "@server/auth";
+  import { verifyCode } from "@server/verify-codes";
+  import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const channel = body.channel === "sms" ? "sms" : "email";
+      const code = String(body.code || "").trim();
+      if (!code) return jsonFail("请输入验证码", 422);
+
+      const ip = clientIp(request);
+      const ua = clientUa(request);
+      const target = normalizeContactTarget(channel, String(body.target || ""));
+      const account = channel === "email" ? target : `手机:${target}`;
+
+      try {
+        await assertLoginAllowed(account, ip);
+      } catch (e) {
+        await recordLoginEvent({ eventType: LOGIN_EVENTS.LOCKED, account, ip, userAgent: ua });
+        if (e instanceof LoginThrottledError) return jsonFail(e.message, 429);
+        throw e;
+      }
+
+      try {
+        await verifyCode({ channel, target, purpose: "login", code });
+      } catch {
+        await recordLoginEvent({ eventType: LOGIN_EVENTS.FAIL, account, ip, userAgent: ua });
+        return jsonFail("验证码不正确或已过期", 401);
+      }
+
+      const row = await findUserByContact(channel, target);
+      if (!row || row.status !== "active") {
+        await recordLoginEvent({ eventType: LOGIN_EVENTS.FAIL, account, ip, userAgent: ua });
+        return jsonFail("验证码不正确或已过期", 401);
+      }
+      const user = { id: row.id, email: row.email, name: row.name, role: row.role };
+
+      const challenged = await applyAsyncFilters(HOOKS.authChallenge, {
+        user,
+        challenge: null,
+      });
+      if (challenged.challenge) {
+        const ticket = await signChallengeTicket(user);
+        return {
+          twoFactorRequired: true,
+          challengeType: challenged.challenge.type,
+          ticket,
+        };
+      }
+
+      await touchLastLogin(row.id);
+      await recordLoginEvent({
+        eventType: LOGIN_EVENTS.SUCCESS,
+        userId: user.id,
+        account,
+        ip,
+        userAgent: ua,
+      });
+      doAction(HOOKS.userLoggedIn, { user });
+      return new Response(JSON.stringify({ user }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "set-cookie": await sessionCookieValue(user),
+        },
+      });
+    });
+  }
+</script>

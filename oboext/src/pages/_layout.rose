@@ -60,16 +60,7 @@
 {/if}
 {#if publicPath()}
 <script src="/public/noflash.js"></script>
-{#if isSkyscraper()}
-<script src="/public/theme.js"></script>
-{/if}
-{#if isNotSkyscraper()}
-<script src="/public/theme-pjax.js"></script>
-{/if}
-{#if isBluemix()}
-<script src="/public/theme-bluemix.js"></script>
-{/if}
-<script src="/public/comments.js"></script>
+{@html chrome().themeScripts}
 {@html chrome().bodyFix}
 {#if isSkyscraper()}
 {@html chrome().nav}

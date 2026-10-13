@@ -1,0 +1,39 @@
+<script>
+
+  import { apiGate } from "@server/admin";
+  import { startOAuth, STATE_COOKIE } from "@server/oauth";
+
+  function pathProvider(request) {
+    return decodeURIComponent(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const key = pathProvider(request);
+      const url = new URL(request.url);
+      const bind = url.searchParams.get("bind") === "1";
+      const redirect = url.searchParams.get("redirect") ?? undefined;
+      const user = getContext().user;
+      if (bind && !user) {
+        return new Response(JSON.stringify({ error: "请先登录后再绑定账号" }), {
+          status: 401,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      }
+      const { authorizeUrl, state } = await startOAuth({
+        key,
+        origin: url.origin,
+        bindUserId: bind && user ? user.id : undefined,
+        redirect: bind ? "/admin/account" : redirect,
+      });
+
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: authorizeUrl,
+          "set-cookie": `${STATE_COOKIE}=${encodeURIComponent(state)}; HttpOnly; SameSite=Lax; Path=/api/oauth; Max-Age=600`,
+        },
+      });
+    });
+  }
+</script>

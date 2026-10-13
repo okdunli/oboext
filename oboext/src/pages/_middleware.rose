@@ -90,10 +90,10 @@
 
     const rp = real.pathname;
 
-    // ------------------------------------------------- /admin login wall
+    // ----------------------------------------------- /admin login wall
     // Whitelist: /admin/login and /admin/setup. First run (no users) sends
     // everyone to setup; once initialized setup redirects away; every other
-    // /admin page without a session bounces to login.
+
     if (rp.indexOf("/admin") === 0) {
       const user = getContext().user;
       if (rp === "/admin/setup") {
@@ -114,6 +114,13 @@
         // places (mirrors app/admin/page.tsx + app/admin/dashboard/page.tsx).
         const to = reg.adminHome ? await reg.adminHome.redirect(rp) : null;
         if (to) return Response.redirect(new URL(to, real.origin), 302);
+      }
+    }
+
+    if (reg.security) {
+      const sec = await reg.security.get();
+      if (sec.entryEnabled && getContext().user && rp === sec.entryPath) {
+        return Response.redirect(new URL("/admin", real.origin), 302);
       }
     }
 

@@ -13,6 +13,7 @@
     clientIp,
     clientUa,
   } from "@server/auth";
+  import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { verifyCode } from "@server/verify-codes";
 
   export async function POST(request) {
@@ -25,6 +26,9 @@
       if (password.length < 8 || password.length > 200) {
         return jsonFail("密码长度需为 8~200 个字符", 422);
       }
+
+      const sec = await getAdminSecurity();
+      if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);
 
       const ip = clientIp(request);
       const user = await findUserByAccount(account);

@@ -68,10 +68,23 @@
   }
 
   form.addEventListener("click", function (e) {
+
+    if (e.target.hasAttribute && e.target.hasAttribute("data-oboe-reg-captcha-img")) {
+      e.target.src = "/api/captcha/image?t=" + Date.now();
+      var ci = form.querySelector("[name=captcha]");
+      if (ci) ci.value = "";
+      return;
+    }
     var btn = e.target.closest ? e.target.closest("[data-oboe-reg-send]") : null;
     if (!btn || !form.contains(btn) || btn.disabled) return;
     sendCode(btn.getAttribute("data-oboe-reg-send"), btn);
   });
+
+  function refreshCaptcha() {
+    var img = form.querySelector("[data-oboe-reg-captcha-img]");
+    if (img) img.src = "/api/captcha/image?t=" + Date.now();
+    if (form.captcha) form.captcha.value = "";
+  }
 
   form.addEventListener("submit", function (e) {
     e.preventDefault();
@@ -94,6 +107,10 @@
       return say("请填写手机验证码", false);
     if (flag("data-invite-only") && !inviteCode) return say("请填写邀请码", false);
 
+    var captcha = "";
+    if (form.captcha && !form.captcha.hidden) captcha = form.captcha.value;
+    else if (form.captchaToken) captcha = form.captchaToken.value;
+
     submitBtn.disabled = true;
     submitBtn.textContent = "注册中…";
     var payload = {};
@@ -104,6 +121,7 @@
     if (inviteCode) payload.inviteCode = inviteCode;
     if (form.emailCode && email) payload.emailCode = (form.emailCode.value || "").trim();
     if (form.phoneCode && phone) payload.phoneCode = (form.phoneCode.value || "").trim();
+    if (captcha) payload.captcha = captcha;
 
     fetch("/api/auth/register", {
       method: "POST",
@@ -122,9 +140,11 @@
           data = await res.json();
         } catch (e) {}
         say(data.error || "注册失败，请稍后再试", false);
+        refreshCaptcha();
       })
       .catch(function () {
         say("网络异常，请稍后再试", false);
+        refreshCaptcha();
       })
       .finally(function () {
         submitBtn.disabled = false;

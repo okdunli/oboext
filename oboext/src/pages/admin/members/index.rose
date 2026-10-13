@@ -53,6 +53,7 @@
       <label class="adm-switch"><span><span class="t">密码必填</span><span class="d">关闭后可免密注册，事后可在账号中心补设</span></span><input type="checkbox" name="passwordRequired" data-on={on('passwordRequired')} data-bool></label>
       <label class="adm-switch"><span><span class="t">邮箱必填</span><span class="d">关闭后邮箱为可选项</span></span><input type="checkbox" name="emailRequired" data-on={on('emailRequired')} data-bool></label>
       <label class="adm-switch"><span><span class="t">手机号必填</span><span class="d">关闭后手机号为可选项</span></span><input type="checkbox" name="phoneRequired" data-on={on('phoneRequired')} data-bool></label>
+      <label class="adm-switch"><span><span class="t">注册需要图形验证码</span><span class="d">通道（内置/第三方）复用「后台安全」配置，此处仅开关</span></span><input type="checkbox" name="captchaEnabled" data-on={on('captchaEnabled')} data-bool></label>
     </div>
   </div>
 

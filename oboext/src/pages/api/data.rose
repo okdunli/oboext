@@ -17,6 +17,7 @@
   import { serveUpload } from "@server/storage";
   import { ensureMigrations } from "@server/db";
   import { getSessionFromRequest, hasAnyUser } from "@server/auth";
+  import { getAdminSecurity } from "@server/security";
   import { getAdminMenuPrefs, homeRedirectFor } from "@server/admin-menu";
   import { syncPlugins, ensurePluginsLoaded } from "@server/plugins";
   import { dispatchPluginApi } from "@server/plugin-gateway";
@@ -58,6 +59,13 @@
     auth: {
       userFromRequest: (request) => getSessionFromRequest(request),
       hasAnyUser: () => hasAnyUser(),
+    },
+
+    security: {
+      get: async () => {
+        await ready();
+        return getAdminSecurity();
+      },
     },
     searchRedirect: async (q) => {
       await ready();

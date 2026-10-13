@@ -3,15 +3,26 @@
   import { jsonFail, readBody, apiGate } from "@server/admin";
   import { sessionCookieValue, hasAnyUser } from "@server/auth";
   import { getMemberSettings, registerMember } from "@server/members";
+  import { getAdminSecurity } from "@server/security";
+  import { verifyCaptchaFor, readCaptchaCookie } from "@server/captcha";
 
   export async function POST(request) {
     return apiGate(async () => {
+      const body = await readBody(request);
 
       if (!(await hasAnyUser())) return jsonFail("接口不存在", 404);
       const member = await getMemberSettings();
       if (!member.registerEnabled) return jsonFail("接口不存在", 404);
 
-      const body = await readBody(request);
+      const sec = await getAdminSecurity();
+      const captchaError = await verifyCaptchaFor(
+        sec,
+        member.captchaEnabled,
+        body.captcha,
+        readCaptchaCookie(request),
+      );
+      if (captchaError) return jsonFail(captchaError, 400);
+
       const user = await registerMember({
         name: body.name,
         email: body.email,

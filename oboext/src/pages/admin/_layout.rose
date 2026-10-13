@@ -3,6 +3,14 @@
   // routes (/admin/login, /admin/setup — the middleware whitelist) render the
   // bare slot; everything else gets the sidebar + topbar chrome.
   let session = $data(() => __rvLoad("admin.session", {}));
+
+  let entryGate = $data(async () => {
+    const s = await __rvLoad("admin.session", {});
+    if (s.user) return false;
+    const sec = await __rvLoad("admin.security-public", {});
+    if (sec.entryEnabled) notFound();
+    return false;
+  });
   function authed() {
     return session() && session().user;
   }
@@ -31,6 +39,7 @@
     if (p.indexOf("/admin/menus") === 0) return "菜单";
     if (p.indexOf("/admin/menu-settings") === 0) return "菜单与首页";
     if (p.indexOf("/admin/settings") === 0) return "站点设置";
+    if (p.indexOf("/admin/security") === 0) return "后台安全";
     if (p.indexOf("/admin/notify") === 0) return "通知设置";
     if (p.indexOf("/admin/members") === 0) return "会员注册";
     if (p.indexOf("/admin/account") === 0) return "我的账号";

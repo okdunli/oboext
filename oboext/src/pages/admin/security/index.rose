@@ -1,0 +1,98 @@
+<script>
+
+  let s = $data(() => __rvLoad("admin.security", {}));
+  function g(k, dflt) {
+    const v = s()[k];
+    return v == null || v === "" ? (dflt == null ? "" : dflt) : v;
+  }
+  function on(k) {
+    return s()[k] ? "1" : "0";
+  }
+</script>
+
+<head>
+  <title>后台安全 - 管理后台</title>
+</head>
+
+<form data-adm-form="security">
+  <div class="adm-toolbar">
+    <strong style="font-size:16px">后台安全</strong>
+    <span style="flex:1"></span>
+    <button class="adm-btn" type="submit">保存更改</button>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-bd">
+      <label class="adm-switch"><span><span class="t">伪装后台入口</span><span class="d">开启后未登录访问 /admin 一律 404，登录只能走秘密入口</span></span><input type="checkbox" name="entryEnabled" data-on={on('entryEnabled')} data-bool></label>
+      <div class="adm-field" data-show-if="entryEnabled=1" style="margin-top:14px;">
+        <label>秘密登录入口路径</label>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="adm-hint" style="margin:0;">/</span>
+          <input class="adm-input" name="entryPath" value={g('entryPath', '/secret-login').replace(/^\//, '')} placeholder="secret-login" spellcheck="false" style="max-width:280px;">
+        </div>
+        <p class="adm-hint" style="margin:6px 0 0;">
+          仅允许小写字母、数字、-、_，可用 / 分层（最多 3 层），总长度 ≤ 64；不可占用 /admin、/api、/search 等保留路径，也不能与固定链接前缀冲突。
+        </p>
+        <p class="adm-hint" style="margin:6px 0 0;color:#fbbf24;">
+          保存后请立即收藏新的登录入口地址；误设无法回忆时，可到项目根目录删除 options 表中的 adminSecurity 配置行恢复默认。
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-bd">
+      <label class="adm-switch"><span><span class="t">登录需要图形验证码</span><span class="d">密码登录 / 验证码登录 / 找回密码均生效</span></span><input type="checkbox" name="captchaEnabled" data-on={on('captchaEnabled')} data-bool></label>
+      <div class="adm-field" data-show-if="captchaEnabled=1" style="margin-top:14px;">
+        <label>验证码通道</label>
+        <select class="adm-select" name="captchaMode" data-val={g('captchaMode', 'builtin')} style="max-width:280px;">
+          <option value="builtin">内置图形验证码（本地 SVG）</option>
+          <option value="custom">第三方校验接口（行为验证码）</option>
+        </select>
+      </div>
+      <div data-show-if="captchaMode=custom" hidden>
+        <div class="adm-field">
+          <label>{"校验接口地址（支持 {{token}} 占位）"}</label>
+          <input class="adm-input" name="captchaVerifyUrl" value={g('captchaVerifyUrl')} placeholder="https://captcha.example.com/verify">
+        </div>
+        <div class="adm-field">
+          <label>请求方法</label>
+          <select class="adm-select" name="captchaVerifyMethod" data-val={g('captchaVerifyMethod', 'POST')} style="max-width:280px;">
+            <option value="POST">POST</option>
+            <option value="GET">GET</option>
+            <option value="PUT">PUT</option>
+          </select>
+        </div>
+        <div class="adm-field">
+          <label>请求头（JSON 对象或每行 Key: Value，可空）</label>
+          <textarea class="adm-textarea" name="captchaVerifyHeaders" rows="3" placeholder="Content-Type: application/json">{g('captchaVerifyHeaders')}</textarea>
+        </div>
+        <div class="adm-field">
+          <label>{"请求体模板（{{token}} 替换为用户输入；GET 不发送）"}</label>
+          <textarea class="adm-textarea" name="captchaVerifyBody" rows="3">{g('captchaVerifyBody')}</textarea>
+        </div>
+        <div class="adm-field">
+          <label>成功判定规则（留空 = 2xx 且 ok/success 为 true）</label>
+          <input class="adm-input" name="captchaVerifySuccess" value={g('captchaVerifySuccess')} placeholder="code=200">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-bd">
+      <label class="adm-switch"><span><span class="t">登录失败限流</span><span class="d">滑动窗口内失败达到阈值后临时拒绝登录</span></span><input type="checkbox" name="throttleEnabled" data-on={on('throttleEnabled')} data-bool></label>
+      <div class="adm-form-grid" data-show-if="throttleEnabled=1">
+        <div class="adm-field">
+          <label>窗口内最大失败次数（3~50）</label>
+          <input class="adm-input" type="number" name="throttleMaxFailures" data-num value={g('throttleMaxFailures', 5)} min="3" max="50">
+        </div>
+        <div class="adm-field">
+          <label>统计窗口（分钟，1~1440）</label>
+          <input class="adm-input" type="number" name="throttleWindowMinutes" data-num value={g('throttleWindowMinutes', 15)} min="1" max="1440">
+        </div>
+      </div>
+      <p class="adm-hint" style="margin:6px 0 0;">按「同一账号或同一 IP」计数；窗口滑过后自动解锁。注册页验证码开关在「会员注册」配置（通道复用此处）。</p>
+    </div>
+  </div>
+</form>

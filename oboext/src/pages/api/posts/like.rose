@@ -1,0 +1,15 @@
+<script>
+
+  import { apiGate, jsonFail, readBody } from "@server/admin";
+  import { likePost } from "@server/queries";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const id = Number(body?.id);
+      if (!Number.isInteger(id) || id <= 0) return jsonFail("参数不正确", 422);
+      const likes = await likePost(id);
+      return { likes };
+    });
+  }
+</script>

@@ -43,6 +43,9 @@ import { getAdminSecurity } from "./security.js";
 import { getOwnProfile } from "./account.js";
 import { isPasswordlessUser } from "./passwordless.js";
 import { listAdminProviders, type AdminProvider } from "./oauth.js";
+import { getPermalinkConfig } from "./links.js";
+import { getMaintenanceSettings } from "./maintenance.js";
+import { listSecurityEvents } from "./security-events.js";
 import { applyFilters, HOOKS } from "./hooks.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
@@ -246,6 +249,33 @@ export async function adminOAuth(_p: unknown, ctx: Ctx) {
     callbackUrl: `${origin}/api/oauth/${encodeURIComponent(p.key)}/callback`,
   }));
   return { providers: rows };
+}
+
+export async function adminPermalinks(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  return getPermalinkConfig();
+}
+
+export async function adminMaintenance(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  return getMaintenanceSettings();
+}
+
+export async function adminSecurityLogs(p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  const q = ctx.query as URLSearchParams | undefined;
+  const page = Math.max(1, Number(q?.get("page") || (p as any)?.page) || 1);
+  const type = String(q?.get("type") || (p as any)?.type || "").trim();
+  const limit = 30;
+  const out = await listSecurityEvents({
+    limit,
+    offset: (page - 1) * limit,
+    eventType: type || undefined,
+  });
+  return { ...out, page, pages: Math.max(1, Math.ceil(out.total / limit)), type };
 }
 
 /** Widget manager: areas, registered types and the selected theme's instances. */

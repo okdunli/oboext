@@ -40,6 +40,7 @@ import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { getNotFoundSettings } from "./not-found-config.js";
 import { getPublicRegisterConfig } from "./members.js";
+import { maintenanceGate, type MaintenanceSettings } from "./maintenance.js";
 import { renderUserCenter, renderUserCenterGuest } from "./account.js";
 import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
 import { getAdminSecurity } from "./security.js";
@@ -990,6 +991,22 @@ function userCenterView(route: VirtualSiteRoute, ctx: Ctx) {
   return { head, main };
 }
 
+function maintenanceView(settings: MaintenanceSettings) {
+  const paras = String(settings.message || "")
+    .split(/\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((p) => `<p>${R.esc(p)}</p>`)
+    .join("");
+  const main =
+    `<div class="container-np" style="display:flex;align-items:center;justify-content:center;min-height:60vh;padding:64px 16px;">` +
+    `<div style="width:100%;max-width:520px;border:1px solid var(--border-color,var(--border,#e5e7eb));border-radius:16px;background:var(--surface-color,var(--surface,#fff));padding:44px 36px;text-align:center;">` +
+    `<h1 style="font-size:24px;font-weight:700;color:var(--text-color,var(--foreground,#18181b));">${R.esc(settings.title)}</h1>` +
+    `<div style="margin-top:12px;font-size:14px;line-height:1.7;color:var(--text-color-2,#52525b);">${paras}</div>` +
+    `</div></div>`;
+  return main;
+}
+
 async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
   const raw = (payload.segments ?? []).map((s) => String(s));
   const res = await resolveSitePath(raw);
@@ -1031,6 +1048,15 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
     const virtual = await resolveVirtualRoute(decoded);
     if (!virtual) return null;
     return { kind: "virtual", ...virtualRouteView(virtual, ctx) };
+  }
+
+  const maintenance = await maintenanceGate((ctx.user as any) ?? null);
+  if (maintenance) {
+    return {
+      kind: "maintenance",
+      head: `<title>${R.esc(maintenance.title)}</title><meta name="robots" content="noindex, nofollow">`,
+      main: maintenanceView(maintenance),
+    };
   }
   const page = Math.max(1, Number(payload.page) || 1);
   let out: Record<string, any>;
@@ -1101,6 +1127,9 @@ export const loaders = {
   "admin.security": admin.adminSecurity,
   "admin.security-public": admin.adminSecurityPublic,
   "admin.oauth": admin.adminOAuth,
+  "admin.permalinks": admin.adminPermalinks,
+  "admin.maintenance": admin.adminMaintenance,
+  "admin.security-logs": admin.adminSecurityLogs,
   "notFoundConfig": admin.notFoundConfig,
 };
 export type LoaderKey = keyof typeof loaders;

@@ -96,7 +96,10 @@ const CORE_GROUPS: MenuGroup[] = [
     superOnly: true,
     children: [
       { href: "/admin/settings", label: "站点设置", glyph: "settings" },
+      { href: "/admin/permalinks", label: "固定链接", glyph: "link-2", superOnly: true },
       { href: "/admin/security", label: "后台安全", glyph: "shield", superOnly: true },
+      { href: "/admin/security-logs", label: "安全日志", glyph: "scroll-text", superOnly: true },
+      { href: "/admin/maintenance", label: "维护模式", glyph: "construction", superOnly: true },
       { href: "/admin/notify", label: "通知设置", glyph: "bell", superOnly: true },
       { href: "/admin/members", label: "会员注册", glyph: "user-plus", superOnly: true },
       { href: "/admin/oauth", label: "第三方登录", glyph: "share-2", superOnly: true },

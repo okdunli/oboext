@@ -659,6 +659,31 @@
     var btn = form.querySelector("[type=submit]");
     if (btn) btn.disabled = true;
     try {
+      if (kind === "backup-restore") {
+
+        var msgEl = form.querySelector("[data-adm-msg]");
+        try {
+          var fd = new FormData(form);
+          var res = await fetch("/api/admin/backup", { method: "POST", body: fd });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) throw new Error(data.error || "恢复失败（" + res.status + "）");
+          var counts = Object.keys(data.restored || {});
+          var rows = counts.reduce(function (n, k) { return n + data.restored[k]; }, 0);
+          var lines = [
+            "恢复完成：" + counts.length + " 张表、" + rows + " 行已导回。",
+            (data.missingTables || []).length
+              ? "跳过备份中已不存在的表：" + data.missingTables.join("、")
+              : null,
+            data.autoSnapshot ? "恢复前快照已保存在服务器：" + data.autoSnapshot : null,
+          ].filter(Boolean);
+          if (msgEl) { msgEl.textContent = lines.join("\n"); msgEl.style.color = "#4ade80"; }
+          toast("恢复完成", "ok");
+        } catch (err) {
+          if (msgEl) { msgEl.textContent = err.message; msgEl.style.color = "#f87171"; }
+        }
+        if (btn) btn.disabled = false;
+        return;
+      }
       if (kind === "login") {
         if (form.__loginSubmit) {
           if (btn) btn.disabled = false;
@@ -2456,6 +2481,40 @@
     load();
   }
 
+  function initIconExplorer() {
+    var table = document.querySelector("[data-ic-table]");
+    if (!table || table.__icBound) return;
+    table.__icBound = true;
+    var search = document.querySelector("[data-ic-search]");
+    var empty = document.querySelector("[data-ic-empty]");
+    var rows = Array.prototype.slice.call(table.querySelectorAll("[data-ic-row]"));
+    if (search) {
+      search.addEventListener("input", function () {
+        var kw = search.value.trim().toLowerCase();
+        var shown = 0;
+        rows.forEach(function (r) {
+          const hit = !kw || (r.getAttribute("data-search") || "").indexOf(kw) >= 0;
+          r.hidden = !hit;
+          if (hit) shown++;
+        });
+        if (empty) empty.hidden = shown > 0;
+      });
+    }
+    table.addEventListener("click", function (e) {
+      var btn = e.target.closest && e.target.closest("[data-ic-copy]");
+      if (!btn) return;
+      var name = btn.getAttribute("data-ic-copy") || "";
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(name).then(
+          function () { toast("已复制 " + name, "ok"); },
+          function () { toast("复制失败，请手动复制", "err"); },
+        );
+      } else {
+        toast("当前浏览器不支持一键复制", "err");
+      }
+    });
+  }
+
   function initPluginSettings() {
     if (window.__plgSetBound) return;
     window.__plgSetBound = true;
@@ -2957,6 +3016,7 @@
     initThemePanel();
     initPluginSettings();
     initOAuthBindings();
+    initIconExplorer();
     initLogin();
     initTaxonomy();
   }

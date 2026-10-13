@@ -48,6 +48,9 @@
     if (p.indexOf("/admin/members") === 0) return "会员注册";
     if (p.indexOf("/admin/account") === 0) return "我的账号";
     if (p.indexOf("/admin/notfound") === 0) return "404 页面";
+    if (p.indexOf("/admin/backup") === 0) return "备份恢复";
+    if (p.indexOf("/admin/export") === 0) return "内容导出";
+    if (p.indexOf("/admin/icons") === 0) return "图标库";
     if (p.indexOf("/admin/plugins") === 0) return "插件";
     return "管理后台";
   }

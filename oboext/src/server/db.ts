@@ -15,7 +15,11 @@
 import fs from "fs";
 import path from "path";
 import { sql, type SQL } from "drizzle-orm";
+import type { PgliteDatabase } from "drizzle-orm/pglite";
 import * as schema from "./schema";
+
+/** The driver-agnostic handle shape both drivers satisfy for our call sites. */
+export type Db = PgliteDatabase<typeof schema>;
 
 type Driver = "pglite" | "postgres";
 
@@ -282,7 +286,7 @@ export function ensureMigrations(): Promise<void> {
  * DB handle. Only valid after ensureDb()/ensureMigrations() resolved —
  * the middleware awaits that before any render.
  */
-export const db = new Proxy({} as any, {
+export const db = new Proxy({} as Db, {
   get(_target, prop) {
     const instance = globalForDb.__oboeDb;
     if (!instance) {

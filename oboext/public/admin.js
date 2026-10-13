@@ -714,6 +714,11 @@
         await api("PUT", "/api/members", body);
         toast("会员注册设置已保存并立即生效", "ok");
         setTimeout(admRefresh, 600);
+      } else if (kind === "security") {
+
+        await api("PUT", "/api/security", formObject(form));
+        toast("安全设置已保存并立即生效", "ok");
+        setTimeout(admRefresh, 600);
       } else if (kind === "account-profile") {
 
         await api("POST", "/api/account/profile", {
@@ -2442,6 +2447,8 @@
       resetSent: false,
       cd: 0,
       cdTimer: null,
+      captchaOn: false,
+      captchaNonce: 0,
     };
 
     var TITLES = {
@@ -2482,7 +2489,34 @@
         target.type = st.channel === "sms" ? "tel" : "email";
         target.placeholder = st.channel === "sms" ? "账号绑定的手机号" : "账号绑定的邮箱";
       }
+
+      var cap = root.querySelector("[data-login-captcha]");
+      if (cap && st.captchaOn) cap.hidden = m === "forgot" && st.resetSent;
     }
+
+    function refreshCaptcha() {
+      st.captchaNonce = Date.now();
+      var img = root.querySelector("[data-login-captcha-img]");
+      if (img) img.src = "/api/captcha/image?t=" + st.captchaNonce;
+      if (form.captcha) form.captcha.value = "";
+      if (form.captchaToken) form.captchaToken.value = "";
+    }
+    api("GET", "/api/captcha")
+      .then(function (d) {
+        st.captchaOn = !!d.enabled;
+        var cap = root.querySelector("[data-login-captcha]");
+        if (!cap || !st.captchaOn) return;
+        var builtin = d.mode !== "custom";
+        var bi = root.querySelector("[data-login-captcha-builtin]");
+        var img = root.querySelector("[data-login-captcha-img]");
+        var cu = root.querySelector("[data-login-captcha-custom]");
+        if (bi) bi.hidden = !builtin;
+        if (img) img.hidden = !builtin;
+        if (cu) cu.hidden = builtin;
+        cap.hidden = false;
+        if (builtin) refreshCaptcha();
+      })
+      .catch(function () {});
 
     function setMode(m) {
       st.mode = m;
@@ -2560,6 +2594,16 @@
     async function submit() {
       var m = st.mode;
       var account = String(form.account.value || "").trim();
+
+      var captcha = "";
+      if (st.captchaOn) {
+        captcha =
+          form.captcha && !form.captcha.hidden
+            ? form.captcha.value
+            : form.captchaToken
+              ? form.captchaToken.value
+              : "";
+      }
       submitBtn.disabled = true;
       try {
         if (m === "twofa") {
@@ -2572,6 +2616,7 @@
             channel: st.channel,
             target: String(form.target.value || "").trim(),
             code: String(form.code.value || "").trim(),
+            captcha: captcha,
           });
           if (r.twoFactorRequired) {
             submitBtn.disabled = false;
@@ -2580,7 +2625,7 @@
           }
         } else if (m === "forgot") {
           if (!st.resetSent) {
-            await api("POST", "/api/auth/forgot", { account: account });
+            await api("POST", "/api/auth/forgot", { account: account, captcha: captcha });
             st.resetSent = true;
             say("若该账号存在且绑定了邮箱，重置码已发送，10 分钟内有效。", true);
             submitBtn.disabled = false;
@@ -2601,6 +2646,7 @@
           var r2 = await api("POST", "/api/auth/login", {
             account: account,
             password: String(form.password.value || ""),
+            captcha: captcha,
           });
           if (r2.twoFactorRequired) {
             submitBtn.disabled = false;
@@ -2613,11 +2659,18 @@
       } catch (err) {
         say(err.message, false);
         submitBtn.disabled = false;
+
+        if (st.captchaOn && form.captcha && !form.captcha.hidden) refreshCaptcha();
       }
     }
     form.__loginSubmit = submit;
 
     root.addEventListener("click", function (e) {
+
+      if (e.target.hasAttribute && e.target.hasAttribute("data-login-captcha-img")) {
+        refreshCaptcha();
+        return;
+      }
       var btn = e.target.closest ? e.target.closest("[data-adm-act]") : null;
       if (!btn || !root.contains(btn)) return;
       var act = btn.getAttribute("data-adm-act");

@@ -39,6 +39,7 @@ import { listCategories, listTags, getSettings } from "./queries.js";
 import { listPlugins, getPlugin, ensurePluginsLoaded } from "./plugins.js";
 import { getNotifySettings } from "./notify.js";
 import { getMemberSettings } from "./members.js";
+import { getAdminSecurity } from "./security.js";
 import { getOwnProfile } from "./account.js";
 import { isPasswordlessUser } from "./passwordless.js";
 import { applyFilters, HOOKS } from "./hooks.js";
@@ -221,6 +222,17 @@ export async function adminAccount(_p: unknown, ctx: Ctx) {
     isPasswordlessUser(user.id),
   ]);
   return { ...profile, role: user.role, passwordless };
+}
+
+export async function adminSecurity(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  return getAdminSecurity();
+}
+
+export async function adminSecurityPublic(_p: unknown, _ctx: Ctx) {
+  const sec = await getAdminSecurity();
+  return { entryEnabled: sec.entryEnabled };
 }
 
 /** Widget manager: areas, registered types and the selected theme's instances. */

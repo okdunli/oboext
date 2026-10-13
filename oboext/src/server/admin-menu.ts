@@ -96,6 +96,7 @@ const CORE_GROUPS: MenuGroup[] = [
     superOnly: true,
     children: [
       { href: "/admin/settings", label: "站点设置", glyph: "settings" },
+      { href: "/admin/security", label: "后台安全", glyph: "shield", superOnly: true },
       { href: "/admin/notify", label: "通知设置", glyph: "bell", superOnly: true },
       { href: "/admin/members", label: "会员注册", glyph: "user-plus", superOnly: true },
       { href: "/admin/notfound", label: "404 页面", glyph: "file-question" },

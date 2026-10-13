@@ -31,11 +31,13 @@ import {
 } from "./themes.js";
 import {
   buildAdminMenuAll,
+  collectAdminMenuExtras,
   getAdminMenuPrefs,
   shellNavHtml,
 } from "./admin-menu.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
-import { listPlugins, getPlugin } from "./plugins.js";
+import { listPlugins, getPlugin, ensurePluginsLoaded } from "./plugins.js";
+import { applyFilters, HOOKS } from "./hooks.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
 import { db } from "./db.js";
@@ -50,7 +52,8 @@ function requireUser(ctx: Ctx): SessionUser {
 }
 
 /** Login/setup pages: who am I, and does first-run setup still apply.
- *  Authed pages additionally receive the preference-driven sidebar nav. */
+ *  Authed pages additionally receive the preference-driven sidebar nav
+ *  (core groups + plugin hook entries + plugin panel links). */
 export async function adminSession(_p: unknown, _ctx: Ctx) {
   const user = _ctx.user ?? null;
   const out: {
@@ -60,9 +63,12 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
     navRaw?: string;
   } = { user, needsSetup: !(await hasAnyUser()) };
   if (user) {
-    const prefs = await getAdminMenuPrefs();
+    const [prefs, extras] = await Promise.all([
+      getAdminMenuPrefs(),
+      collectAdminMenuExtras(),
+    ]);
     out.homePath = prefs.homePath;
-    out.navRaw = shellNavHtml(user.role, String(_ctx.pathname || ""), prefs);
+    out.navRaw = shellNavHtml(user.role, String(_ctx.pathname || ""), prefs, extras);
   }
   return out;
 }
@@ -70,8 +76,15 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
 export async function adminMenuSettings(_p: unknown, ctx: Ctx) {
   const user = requireUser(ctx);
   if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
-  const prefs = await getAdminMenuPrefs();
-  return { groups: buildAdminMenuAll(), hiddenHrefs: prefs.hiddenHrefs, homePath: prefs.homePath };
+  const [prefs, extras] = await Promise.all([
+    getAdminMenuPrefs(),
+    collectAdminMenuExtras(),
+  ]);
+  return {
+    groups: buildAdminMenuAll(extras),
+    hiddenHrefs: prefs.hiddenHrefs,
+    homePath: prefs.homePath,
+  };
 }
 
 export async function adminDashboard(_p: unknown, ctx: Ctx) {
@@ -146,6 +159,34 @@ export async function adminPlugin(p: any, ctx: Ctx) {
   const user = requireUser(ctx);
   if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
   return getPlugin(String(p?.slug || ""));
+}
+
+/**
+ * Plugin-owned admin panel host (original parity: app/admin/plugins/[slug]).
+ * Guards existence + activation (missing/disabled → { plugin: null }, the
+ * page answers the segment 404), then lets the enabled plugin fill the
+ * panel through the admin.panel filter: server-rendered `html` plus the URL
+ * of an external `scriptSrc` (strict admin CSP: 'self' scripts only).
+ * Plugins without a panel fall back to the host page's own hint.
+ */
+export async function adminPluginPanel(p: any, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  const slug = String(p?.slug || "").trim();
+  let plugin: Awaited<ReturnType<typeof getPlugin>> | null = null;
+  try {
+    plugin = await getPlugin(slug);
+  } catch {
+    return { plugin: null, html: "", scriptSrc: "" };
+  }
+  if (!plugin.enabled) return { plugin: null, html: "", scriptSrc: "" };
+  await ensurePluginsLoaded();
+  const out = applyFilters<{ slug: string; html: string; scriptSrc: string }>(HOOKS.adminPanel, {
+    slug,
+    html: "",
+    scriptSrc: "",
+  });
+  return { plugin, html: out.html, scriptSrc: out.scriptSrc };
 }
 
 /** Widget manager: areas, registered types and the selected theme's instances. */

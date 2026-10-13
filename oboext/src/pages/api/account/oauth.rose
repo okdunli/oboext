@@ -1,0 +1,41 @@
+<script>
+
+  import { apiGate, readBody, jsonFail } from "@server/admin";
+  import {
+    getPublicProviders,
+    listUserIdentities,
+    unbindUserIdentity,
+  } from "@server/oauth";
+  import { isPasswordlessUser } from "@server/passwordless";
+
+  export async function GET() {
+    return apiGate(async () => {
+      const user = getContext().user;
+      if (!user) return jsonFail("未认证", 401);
+      const [identities, providers, passwordless] = await Promise.all([
+        listUserIdentities(user.id),
+        getPublicProviders(),
+        isPasswordlessUser(user.id),
+      ]);
+      return { identities, providers, passwordless };
+    });
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => {
+      const user = getContext().user;
+      if (!user) return jsonFail("未认证", 401);
+      const body = await readBody(request);
+      const identityId = Number(body?.identityId);
+      if (!Number.isInteger(identityId) || identityId <= 0) {
+        return jsonFail("参数不正确", 422);
+      }
+      await unbindUserIdentity(user.id, identityId);
+      return { ok: true };
+    });
+  }
+
+  export async function POST() {
+    return jsonFail("不支持的操作", 405);
+  }
+</script>

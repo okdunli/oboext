@@ -40,6 +40,7 @@
     if (p.indexOf("/admin/menu-settings") === 0) return "菜单与首页";
     if (p.indexOf("/admin/settings") === 0) return "站点设置";
     if (p.indexOf("/admin/security") === 0) return "后台安全";
+    if (p.indexOf("/admin/oauth") === 0) return "第三方登录";
     if (p.indexOf("/admin/notify") === 0) return "通知设置";
     if (p.indexOf("/admin/members") === 0) return "会员注册";
     if (p.indexOf("/admin/account") === 0) return "我的账号";

@@ -1,0 +1,77 @@
+<script>
+  // GET /api/oauth/<provider>/callback?code=&state=
+
+  import { handleOAuthCallback, STATE_COOKIE } from "@server/oauth";
+  import { getAdminSecurity } from "@server/security";
+  import { sessionCookieValue } from "@server/auth";
+  import { ServiceError } from "@server/errors";
+
+  function pathProvider(request) {
+    return decodeURIComponent(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+  }
+
+  function readStateCookie(request) {
+    const header = request.headers.get("cookie") || "";
+    const hit = header
+      .split(";")
+      .map((c) => c.trim())
+      .find((c) => c.startsWith(STATE_COOKIE + "="));
+    return hit ? decodeURIComponent(hit.slice(STATE_COOKIE.length + 1)) : null;
+  }
+
+  const CLEAR_COOKIE = `${STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/api/oauth; Max-Age=0`;
+
+  async function redirectWithError(origin, message) {
+    const sec = await getAdminSecurity();
+    const entry = sec.entryEnabled ? sec.entryPath : "/admin/login";
+    const to = new URL(entry, origin);
+    to.searchParams.set("oauth_error", message);
+    return new Response(null, {
+      status: 302,
+      headers: { location: to.toString(), "set-cookie": CLEAR_COOKIE },
+    });
+  }
+
+  export async function GET(request) {
+    const url = new URL(request.url);
+    const origin = url.origin;
+    try {
+      const key = pathProvider(request);
+      const code = url.searchParams.get("code") ?? "";
+      const state = url.searchParams.get("state") ?? "";
+      const stateCookie = readStateCookie(request);
+      const user = getContext().user;
+
+      if (!code || !state) {
+        return await redirectWithError(origin, "授权回调缺少必要参数");
+      }
+
+      const result = await handleOAuthCallback({
+        key,
+        code,
+        state,
+        stateCookie,
+        origin,
+        currentUserId: user ? user.id : undefined,
+      });
+
+      let to = result.redirectTo;
+
+      if (result.mode === "registered" && result.needProfile) {
+        to = "/admin/account?oauth_new=1";
+      }
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: new URL(to, origin).toString(),
+          "set-cookie": `${await sessionCookieValue(result.user)}; ${CLEAR_COOKIE}`,
+        },
+      });
+    } catch (e) {
+
+      const friendly =
+        e instanceof ServiceError ? e.message : "第三方登录失败，请重试";
+      return await redirectWithError(origin, friendly);
+    }
+  }
+</script>

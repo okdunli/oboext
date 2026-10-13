@@ -1,0 +1,9 @@
+<script>
+
+  import { apiGate } from "@server/admin";
+  import { getPublicProviders } from "@server/oauth";
+
+  export async function GET() {
+    return apiGate(async () => getPublicProviders());
+  }
+</script>

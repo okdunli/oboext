@@ -1,0 +1,80 @@
+<script>
+
+  let s = $data(() => __rvLoad("admin.members", {}));
+  function g(k, dflt) {
+    const v = s()[k];
+    return v == null || v === "" ? (dflt == null ? "" : dflt) : v;
+  }
+  function on(k) {
+    return s()[k] ? "1" : "0";
+  }
+  function codesText() {
+    return (s().inviteCodes || []).join("\n");
+  }
+</script>
+
+<head>
+  <title>会员注册 - 管理后台</title>
+</head>
+
+<form data-adm-form="members">
+  <div class="adm-toolbar">
+    <strong style="font-size:16px">会员注册</strong>
+    <span style="flex:1"></span>
+    <button class="adm-btn" type="submit">保存更改</button>
+  </div>
+  <p class="adm-hint" style="margin:0 0 16px;">
+    开启后访客可在前台注册页自行注册账号，注册成功即自动登录；关闭后注册页与注册接口一律返回 404，不暴露任何注册信息。
+  </p>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-bd">
+      <label class="adm-switch"><span><span class="t">开放注册</span><span class="d">关闭时注册页与接口均不可见</span></span><input type="checkbox" name="registerEnabled" data-on={on('registerEnabled')} data-bool></label>
+      <div class="adm-field" data-show-if="registerEnabled=1" style="margin-top:14px;">
+        <label>注册页路径</label>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="adm-hint" style="margin:0;">/</span>
+          <input class="adm-input" name="registerPath" value={g('registerPath', '/user').replace(/^\//, '')} placeholder="user" spellcheck="false" style="max-width:280px;">
+        </div>
+        <p class="adm-hint" style="margin:6px 0 0;">
+          仅允许小写字母、数字、-、_，可用 / 分层（最多 3 层），总长度 ≤ 64；不能与固定链接前缀或系统保留路径冲突。
+        </p>
+        <p class="adm-hint" style="margin:6px 0 0;">
+          若与已发布文章 / 页面地址相同，内容页面优先，注册页将无法打开；可在「菜单管理」添加指向该地址的链接供访客进入。
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-bd">
+      <div class="adm-section-title" style="margin-top:0;">字段策略</div>
+      <label class="adm-switch"><span><span class="t">昵称必填</span><span class="d">关闭后留空由系统生成唯一昵称</span></span><input type="checkbox" name="nameRequired" data-on={on('nameRequired')} data-bool></label>
+      <label class="adm-switch"><span><span class="t">密码必填</span><span class="d">关闭后可免密注册，事后可在账号中心补设</span></span><input type="checkbox" name="passwordRequired" data-on={on('passwordRequired')} data-bool></label>
+      <label class="adm-switch"><span><span class="t">邮箱必填</span><span class="d">关闭后邮箱为可选项</span></span><input type="checkbox" name="emailRequired" data-on={on('emailRequired')} data-bool></label>
+      <label class="adm-switch"><span><span class="t">手机号必填</span><span class="d">关闭后手机号为可选项</span></span><input type="checkbox" name="phoneRequired" data-on={on('phoneRequired')} data-bool></label>
+    </div>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-bd">
+      <label class="adm-switch"><span><span class="t">邀请制注册</span><span class="d">开启后必须提交有效的邀请码</span></span><input type="checkbox" name="inviteOnly" data-on={on('inviteOnly')} data-bool></label>
+      <div class="adm-field" data-show-if="inviteOnly=1" style="margin-top:14px;">
+        <label>邀请码列表（每行一个）</label>
+        <textarea class="adm-textarea" name="inviteCodes" rows="5" placeholder="WELCOME-2026&#10;VIP-8888">{codesText()}</textarea>
+        <p class="adm-hint" style="margin:6px 0 0;">最多 200 个，单个不超过 64 字符；校验时忽略大小写。</p>
+      </div>
+      <div class="adm-field" style="margin-top:14px;">
+        <label>新用户默认角色</label>
+        <select class="adm-select" name="defaultRole" data-val={g('defaultRole', 'subscriber')} style="max-width:280px;">
+          <option value="subscriber">订阅者（仅阅读）</option>
+          <option value="author">作者（可撰写自己的内容）</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <p class="adm-hint" style="margin:0;">
+    邮箱 / 手机验证码的投递通道与开关在「通知设置」配置；注册验证码策略随「后台安全」批次提供。
+  </p>
+</form>

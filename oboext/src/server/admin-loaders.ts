@@ -38,6 +38,7 @@ import {
 import { listCategories, listTags, getSettings } from "./queries.js";
 import { listPlugins, getPlugin, ensurePluginsLoaded } from "./plugins.js";
 import { getNotifySettings } from "./notify.js";
+import { getMemberSettings } from "./members.js";
 import { applyFilters, HOOKS } from "./hooks.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
@@ -203,6 +204,12 @@ export async function adminNotify(_p: unknown, ctx: Ctx) {
       tencent: { ...s.sms.tencent, secretKey: "" },
     },
   };
+}
+
+export async function adminMembers(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  return getMemberSettings();
 }
 
 /** Widget manager: areas, registered types and the selected theme's instances. */

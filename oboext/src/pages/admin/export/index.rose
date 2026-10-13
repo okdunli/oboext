@@ -1,0 +1,42 @@
+<script>
+
+  let s = $data(() => __rvLoad("admin.session", {}));
+</script>
+
+<head>
+  <title>内容导出 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="adm-ic" style="--i:url(/public/icons/file-text.svg);width:20px;height:20px;color:#818cf8;"></span>
+    <strong style="font-size:16px">内容导出</strong>
+  </div>
+</div>
+
+<form method="get" action="/api/admin/export">
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-hd"><strong style="font-size:14px;">导出范围</strong></div>
+    <div class="adm-card-bd" style="display:grid;gap:10px;">
+      <label class="adm-switch" style="margin:0;"><span><span class="t">文章</span><span class="d">全部文章（含草稿）的标题、元信息与正文</span></span><input type="checkbox" name="scope" value="posts" checked></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">独立页面</span><span class="d">全部页面的标题、元信息与正文</span></span><input type="checkbox" name="scope" value="pages" checked></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">评论</span><span class="d">全部评论的作者、内容与状态</span></span><input type="checkbox" name="scope" value="comments" checked></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">分类与标签</span><span class="d">全部分类与标签的名称和别名</span></span><input type="checkbox" name="scope" value="taxonomies" checked></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">站点设置</span><span class="d">站点基础设置项</span></span><input type="checkbox" name="scope" value="settings" checked></label>
+    </div>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-hd"><strong style="font-size:14px;">导出格式</strong></div>
+    <div class="adm-card-bd" style="display:grid;gap:10px;">
+      <label class="adm-switch" style="margin:0;"><span><span class="t">JSON</span><span class="d">完整结构化数据，适合再导入或程序处理</span></span><input type="radio" name="format" value="json" checked></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">Markdown</span><span class="d">正文转为 Markdown 的纯文本，适合审阅与迁移</span></span><input type="radio" name="format" value="markdown"></label>
+      <p class="adm-hint" style="margin:4px 0 0;">与「备份恢复」的整库备份互补：这里只导内容语义数据，媒体文件请单独保管。</p>
+    </div>
+  </div>
+
+  <div class="adm-toolbar">
+    <span style="flex:1"></span>
+    <button class="adm-btn" type="submit"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/download.svg)"></span>开始导出</button>
+  </div>
+</form>

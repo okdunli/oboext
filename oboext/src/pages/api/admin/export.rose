@@ -1,0 +1,39 @@
+<script>
+  // GET /api/admin/export?scope=posts&scope=pages&format=markdown
+
+  import { apiGate, requireCap } from "@server/admin";
+  import { EXPORT_SCOPES, buildExportData, exportToMarkdown } from "@server/export";
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const user = requireCap(getContext().user, "settings:manage");
+      const url = new URL(request.url);
+      const picked = url.searchParams.getAll("scope");
+      const scopes = picked.length
+        ? picked.filter((s) => EXPORT_SCOPES.indexOf(s) >= 0)
+        : EXPORT_SCOPES.slice();
+      if (!scopes.length) {
+        return new Response("至少选择一个导出范围", { status: 400 });
+      }
+      const markdown = url.searchParams.get("format") === "markdown";
+      const data = await buildExportData(user, scopes);
+      const stamp = new Date().toISOString().slice(0, 10);
+      if (markdown) {
+        return new Response(exportToMarkdown(data), {
+          status: 200,
+          headers: {
+            "content-type": "text/markdown; charset=utf-8",
+            "content-disposition": `attachment; filename="oboext-export-${stamp}.md"`,
+          },
+        });
+      }
+      return new Response(JSON.stringify(data, null, 2), {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "content-disposition": `attachment; filename="oboext-export-${stamp}.json"`,
+        },
+      });
+    });
+  }
+</script>

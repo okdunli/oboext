@@ -47,6 +47,23 @@
     const x = d().post;
     return x ? x.url || "/blog/" + x.slug : "#";
   }
+  function formatDefs() {
+    return d().formats || [];
+  }
+
+  function curFormat() {
+    const v = d().post ? d().post.format : "";
+    const list = formatDefs();
+    return (
+      list.find((f) => f.value === v) ||
+      list.find((f) => f.value === "standard") ||
+      list[0] || { value: "standard", label: "标准", icon: "file-text", description: "" }
+    );
+  }
+  function fmVal(key) {
+    const m = d().post ? d().post.formatMeta : null;
+    return m && m[key] != null ? m[key] : "";
+  }
   function deleteUrl() {
     const x = d().post;
     return x ? "/api/posts/" + x.id : "";
@@ -168,6 +185,29 @@
           <div class="adm-field" style="margin-bottom:0">
             <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">特色图 URL</span>
             <input class="adm-input" name="featuredImage" placeholder="https://…" value={val('featuredImage')}>
+          </div>
+
+          <div class="adm-field" style="margin-top:12px">
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">文章形式</span>
+            <select class="adm-select" name="format">
+              {#each formatDefs() as f}
+              <option value={f.value}>{f.label}</option>
+              {/each}
+            </select>
+            <div class="adm-hint" style="margin-top:4px" data-adm-format-desc>{curFormat().description}</div>
+          </div>
+          <div data-adm-format-fields>
+            {#each curFormat().extraFields || [] as field}
+            <div class="adm-field" style="margin-top:10px">
+              <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{field.label}</span>
+              {#if field.type === "textarea"}
+              <textarea class="adm-textarea" rows="2" data-fm={field.key} placeholder={field.placeholder || ""} data-dv={fmVal(field.key)}></textarea>
+              {/if}
+              {#if field.type !== "textarea"}
+              <input class="adm-input" type={field.type === "url" ? "url" : "text"} data-fm={field.key} placeholder={field.placeholder || ""} value={fmVal(field.key)}>
+              {/if}
+            </div>
+            {/each}
           </div>
           <div class="adm-switch" style="margin-top:10px">
             <div>

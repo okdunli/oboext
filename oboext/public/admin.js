@@ -1079,6 +1079,52 @@
       };
     });
   };
+
+  BlockEditor.prototype.renderFormatFields = function () {
+    var box = this.root.querySelector("[data-adm-format-fields]");
+    if (!box) return;
+    var sel = this.root.querySelector("[name=format]");
+    var value = sel ? sel.value : "standard";
+    var defs = this.data.formats || [];
+    var def = null;
+    for (var i = 0; i < defs.length; i++) if (defs[i].value === value) def = defs[i];
+    var desc = this.root.querySelector("[data-adm-format-desc]");
+    if (desc) desc.textContent = def ? def.description : "";
+    box.innerHTML = "";
+    var fields = (def && def.extraFields) || [];
+    fields.forEach(function (field) {
+      var wrap = document.createElement("div");
+      wrap.className = "adm-field";
+      wrap.setAttribute("style", "margin-top:10px");
+      var label = document.createElement("span");
+      label.setAttribute("style", "display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px");
+      label.textContent = field.label;
+      wrap.appendChild(label);
+      var el;
+      if (field.type === "textarea") {
+        el = document.createElement("textarea");
+        el.className = "adm-textarea";
+        el.rows = 2;
+      } else {
+        el = document.createElement("input");
+        el.className = "adm-input";
+        el.type = field.type === "url" ? "url" : "text";
+      }
+      el.setAttribute("data-fm", field.key);
+      if (field.placeholder) el.placeholder = field.placeholder;
+      wrap.appendChild(el);
+      box.appendChild(wrap);
+    });
+  };
+  BlockEditor.prototype.collectFormatMeta = function () {
+    var box = this.root.querySelector("[data-adm-format-fields]");
+    if (!box) return {};
+    var out = {};
+    Array.prototype.forEach.call(box.querySelectorAll("[data-fm]"), function (el) {
+      out[el.getAttribute("data-fm")] = el.value;
+    });
+    return out;
+  };
   BlockEditor.prototype.payload = function (status) {
     this.collect();
     var form = this.root;
@@ -1096,6 +1142,8 @@
     }
 
     if (form.querySelector("[data-adm-metas]")) body.metas = this.collectMetas();
+
+    if (form.querySelector("[data-adm-format-fields]")) body.formatMeta = this.collectFormatMeta();
     if (status) body.status = status;
     if (body.commentStatus === "on") body.commentStatus = "open";
     return body;
@@ -1445,10 +1493,16 @@
         var pin = root.querySelector("[name=pinned]");
         if (pin) pin.checked = !!entity.pinned;
       }
-      ["status", "commentStatus"].forEach(function (name) {
+      ["status", "commentStatus", "format"].forEach(function (name) {
         var el = root.querySelector("[name=" + name + "]");
         if (el && entity[name] != null && entity[name] !== "") el.value = String(entity[name]);
       });
+
+      var fmtSel = root.querySelector("[name=format]");
+      if (fmtSel)
+        fmtSel.addEventListener("change", function () {
+          editor.renderFormatFields();
+        });
       var pa = root.querySelector("[name=publishedAt]");
       if (pa && entity.publishedAt) pa.value = toLocalInput(entity.publishedAt);
     }

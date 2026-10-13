@@ -69,8 +69,8 @@
       <input class="adm-input" name="description" placeholder="分类说明">
     </div>
     <div class="adm-field">
-      <label>图标名（可选）</label>
-      <input class="adm-input" name="icon" placeholder="如 folder">
+      <label>图标（可选）</label>
+      <input class="adm-input" name="icon" data-icon-picker placeholder="留空则用默认图标">
     </div>
   </div>
   <button class="adm-btn" type="submit">{@html ic("plus")} 添加</button>
@@ -167,8 +167,8 @@
           <textarea class="adm-textarea" name="description" rows="2" maxlength="500"></textarea>
         </div>
         <div class="adm-field">
-          <label>图标名（lucide，如 folder；也可留空）</label>
-          <input class="adm-input" name="icon" placeholder="folder">
+          <label>图标</label>
+          <input class="adm-input" name="icon" data-icon-picker placeholder="留空则用默认图标">
         </div>
       </div>
       <div class="adm-modal-ft">

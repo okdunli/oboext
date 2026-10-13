@@ -105,7 +105,7 @@
       {#if (() => menuIsRef(r))()}
       <span class="adm-menu-mono" title={r.url}>{refState(r)}</span>
       {/if}
-      <input class="adm-input adm-menu-icon" data-f="icon" value={r.icon} placeholder="图标标识" title="图标标识（lucide 名称，如 house）">
+      <input class="adm-input adm-menu-icon" data-f="icon" data-icon-picker="compact" value={r.icon} placeholder="图标标识" title="设置图标">
       <div class="adm-menu-tools">
         <button type="button" class="adm-iconbtn" data-menu-act="up" title="上移" aria-label="上移"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-up.svg)"></span></button>
         <button type="button" class="adm-iconbtn" data-menu-act="down" title="下移" aria-label="下移"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-down.svg)"></span></button>

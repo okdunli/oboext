@@ -77,7 +77,7 @@
     return '<div class="adm-wg-link-row" data-repeat-row>' +
       '<input class="adm-input" data-rk="label" placeholder="名称" value="' + sfEsc(it.label || "") + '">' +
       '<input class="adm-input" data-rk="url" placeholder="https://" value="' + sfEsc(it.url || "") + '">' +
-      '<input class="adm-input" data-rk="icon" placeholder="图标" value="' + sfEsc(it.icon || "") + '">' +
+      '<input class="adm-input" data-rk="icon" data-icon-picker="compact" placeholder="图标" value="' + sfEsc(it.icon || "") + '">' +
       '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
   }
 
@@ -96,6 +96,7 @@
       (missing ? '<option value="' + sfEsc(it.slug) + '" selected>' + sfEsc(it.slug) + "（已删除）</option>" : "") +
       "</select>" +
       '<input class="adm-input" data-rk="title" placeholder="标题留空则用分类名" value="' + sfEsc(it.title || "") + '">' +
+      '<input class="adm-input" data-rk="icon" data-icon-picker="compact" placeholder="图标" value="' + sfEsc(it.icon || "") + '">' +
       '<button type="button" class="adm-iconbtn" data-repeat-up title="上移" aria-label="上移">' + admIc("chevron-up", 14) + "</button>" +
       '<button type="button" class="adm-iconbtn" data-repeat-down title="下移" aria-label="下移">' + admIc("chevron-down", 14) + "</button>" +
       '<button type="button" class="adm-iconbtn danger" data-repeat-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
@@ -1708,8 +1709,8 @@
         html += '<span class="adm-menu-mono" title="' + esc(it.url) + '">' +
           esc(it.referenceSlug ? (it.url || "已选择") : "未选择") + "</span>";
       }
-      html += '<input class="adm-input adm-menu-icon" data-f="icon" value="' + esc(it.icon) +
-        '" placeholder="图标标识" title="图标标识（lucide 名称，如 house）">';
+      html += '<input class="adm-input adm-menu-icon" data-f="icon" data-icon-picker="compact" value="' + esc(it.icon) +
+        '" placeholder="图标标识" title="设置图标">';
       html += '<div class="adm-menu-tools">';
       html += '<button type="button" class="adm-iconbtn" data-menu-act="up" title="上移" aria-label="上移" ' +
         (idx === 0 ? "disabled" : "") + ">" + admIc("chevron-up", 14) + "</button>";
@@ -2038,7 +2039,7 @@
               return '<div class="adm-wg-link-row">' +
                 '<input class="adm-input" data-wg-link="label" placeholder="名称" value="' + esc(it.label || "") + '">' +
                 '<input class="adm-input" data-wg-link="url" placeholder="https://" value="' + esc(it.url || "") + '">' +
-                '<input class="adm-input" data-wg-link="icon" placeholder="图标" value="' + esc(it.icon || "") + '">' +
+                '<input class="adm-input" data-wg-link="icon" data-icon-picker="compact" placeholder="图标" value="' + esc(it.icon || "") + '">' +
                 '<button type="button" class="adm-iconbtn danger" data-wg-link-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
             }).join("") +
             '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-wg-link-add>' + admIc("plus", 14) + " 添加一项</button></div>";
@@ -2055,7 +2056,7 @@
       return '<div class="adm-wg-link-row">' +
         '<input class="adm-input" data-wg-link="label" placeholder="名称" value="' + esc(it.label || "") + '">' +
         '<input class="adm-input" data-wg-link="url" placeholder="https://" value="' + esc(it.url || "") + '">' +
-        '<input class="adm-input" data-wg-link="icon" placeholder="图标" value="' + esc(it.icon || "") + '">' +
+        '<input class="adm-input" data-wg-link="icon" data-icon-picker="compact" placeholder="图标" value="' + esc(it.icon || "") + '">' +
         '<button type="button" class="adm-iconbtn danger" data-wg-link-del title="删除" aria-label="删除">' + admIc("trash-2", 14) + "</button></div>";
     }
     function liveValue(f) {
@@ -2579,6 +2580,212 @@
     });
   }
 
+  var ICP_PAGE = 72;
+  var icpNames = null;
+  var icpNamesPromise = null;
+  var icpModal = null;
+  var icpState = { input: null, query: "", limit: ICP_PAGE, io: null };
+
+  function icpPascal(k) {
+    return String(k)
+      .split("-")
+      .map(function (s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : ""; })
+      .join("");
+  }
+
+  function icpLoadNames() {
+    if (icpNamesPromise) return icpNamesPromise;
+    icpNamesPromise = fetch(
+      "/api/data?r=" + encodeURIComponent("admin.icons") + "&d=" + encodeURIComponent("{}"),
+      {
+        headers: {
+          accept: "application/json",
+          "x-rv-url": window.location.pathname + window.location.search,
+        },
+      },
+    )
+      .then(function (r) { return r.ok ? r.json() : { names: [] }; })
+      .then(function (d) { icpNames = (d && d.names) || []; return icpNames; })
+      .catch(function () { icpNames = []; return icpNames; });
+    return icpNamesPromise;
+  }
+
+  function icpFiltered() {
+    var all = icpNames || [];
+    var key = icpState.query.trim().toLowerCase();
+    if (!key) return all;
+    return all.filter(function (n) {
+      return n.indexOf(key) >= 0 || icpPascal(n).toLowerCase().indexOf(key) >= 0;
+    });
+  }
+
+  function icpRender() {
+    if (!icpModal) return;
+    var cur = icpState.input ? icpState.input.value : "";
+    var grid = icpModal.querySelector("[data-icp-grid]");
+    var countEl = icpModal.querySelector("[data-icp-count]");
+    icpModal.querySelector("[data-icp-cur]").textContent = cur ? "当前：" + cur : "未选择图标";
+    icpModal.querySelector("[data-icp-clear]").disabled = !cur;
+
+    if (icpNames === null) {
+      countEl.textContent = "";
+      grid.innerHTML = '<p class="adm-icp-empty">正在加载图标库…</p>';
+      return;
+    }
+    var list = icpFiltered();
+    countEl.textContent = list.length + " 个";
+    if (!list.length) {
+      grid.innerHTML = '<p class="adm-icp-empty">没有匹配的图标</p>';
+      if (icpState.io) { icpState.io.disconnect(); icpState.io = null; }
+      return;
+    }
+    grid.innerHTML =
+      list.slice(0, icpState.limit).map(function (n) {
+        return (
+          '<button type="button" class="adm-icp-cell' + (n === cur ? " is-on" : "") +
+          '" data-icp-pick="' + sfEsc(n) + '" title="' + sfEsc(n) + '">' +
+          '<span class="adm-ic adm-ic-lg" style="--i:url(/public/icons/' + sfEsc(n) + '.svg)"></span>' +
+          "<b>" + sfEsc(n) + "</b></button>"
+        );
+      }).join("") +
+      '<div class="adm-icp-sentinel" style="grid-column:1/-1;height:1px"></div>';
+    icpObserve();
+  }
+
+  function icpObserve() {
+    if (icpState.io) { icpState.io.disconnect(); icpState.io = null; }
+    var grid = icpModal.querySelector("[data-icp-grid]");
+    var sen = grid.querySelector(".adm-icp-sentinel");
+    if (!sen || !window.IntersectionObserver) return;
+    icpState.io = new IntersectionObserver(
+      function (entries) {
+        if (!entries[0] || !entries[0].isIntersecting) return;
+        var total = icpFiltered().length;
+        if (icpState.limit >= total) return;
+        icpState.limit = Math.min(icpState.limit + ICP_PAGE, total);
+        icpRender();
+      },
+      { root: grid, rootMargin: "400px" },
+    );
+    icpState.io.observe(sen);
+  }
+
+  function icpBuild() {
+    if (icpModal) return icpModal;
+    var m = document.createElement("div");
+    m.className = "adm-modal";
+    m.setAttribute("data-icp-modal", "");
+    m.hidden = true;
+    m.innerHTML =
+      '<div class="adm-modal-box adm-icp-box">' +
+      '<div class="adm-modal-hd">' +
+      '<div class="adm-icp-search">' + admIc("search", 15) +
+      '<input class="adm-input" data-icp-search placeholder="搜索图标标识符…" spellcheck="false" autocomplete="off"></div>' +
+      '<span class="adm-icp-count" data-icp-count></span>' +
+      '<button type="button" class="adm-iconbtn" data-icp-close title="关闭 (Esc)" aria-label="关闭">' + admIc("x", 16) + "</button>" +
+      "</div>" +
+      '<div class="adm-icp-grid" data-icp-grid></div>' +
+      '<div class="adm-icp-foot">' +
+      '<span class="adm-icp-cur" data-icp-cur></span>' +
+      '<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-icp-clear>清除图标</button>' +
+      "</div></div>";
+    document.body.appendChild(m);
+    icpModal = m;
+
+    m.addEventListener("click", function (e) {
+      if (e.target === m || (e.target.closest && e.target.closest("[data-icp-close]"))) {
+        return icpClose();
+      }
+      var cell = e.target.closest && e.target.closest("[data-icp-pick]");
+      if (cell) return icpSet(cell.getAttribute("data-icp-pick"));
+      if (e.target.closest && e.target.closest("[data-icp-clear]")) return icpSet("");
+    });
+    m.querySelector("[data-icp-search]").addEventListener("input", function () {
+      icpState.query = this.value;
+      icpState.limit = ICP_PAGE;
+      icpRender();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !icpModal || icpModal.hidden) return;
+      e.stopPropagation();
+      icpClose();
+    }, true);
+    return m;
+  }
+
+  function icpSet(value) {
+    var input = icpState.input;
+    if (input) {
+      input.value = value;
+      if (input.__icpPaint) input.__icpPaint();
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    icpClose();
+  }
+
+  function icpOpen(input) {
+    icpBuild();
+    icpState.input = input;
+    icpState.query = "";
+    icpState.limit = ICP_PAGE;
+    icpModal.querySelector("[data-icp-search]").value = "";
+    icpModal.hidden = false;
+    icpRender();
+    var s = icpModal.querySelector("[data-icp-search]");
+    setTimeout(function () { s.focus(); }, 30);
+    if (icpNames === null) icpLoadNames().then(icpRender);
+  }
+
+  function icpClose() {
+    if (!icpModal) return;
+    icpModal.hidden = true;
+    if (icpState.io) { icpState.io.disconnect(); icpState.io = null; }
+    icpState.input = null;
+  }
+
+  function initIconPicker() {
+    document.querySelectorAll("input[data-icon-picker]").forEach(function (input) {
+      if (input.getAttribute("data-icp-ready")) return;
+      input.setAttribute("data-icp-ready", "1");
+      input.type = "hidden";
+
+      var compact = input.getAttribute("data-icon-picker") === "compact";
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "adm-iconpick" + (compact ? " is-compact" : "");
+      btn.setAttribute("data-icp-open", "");
+      btn.title = compact ? "设置图标" : "";
+      function paint() {
+        var v = input.value;
+        var ok = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v);
+        if (compact) {
+          btn.innerHTML = v && ok ? admIc(v, 18) : admIc("smile-plus", 16);
+          btn.title = v ? "图标：" + v + "（点击更换）" : "设置图标";
+          return;
+        }
+        btn.innerHTML = v
+          ? (ok ? admIc(v, 18) : "") +
+            '<span class="adm-iconpick-name">' + sfEsc(v) + "</span>" +
+            '<span class="adm-iconpick-x" data-icp-clear-inline title="清除图标">×</span>'
+          : admIc("smile-plus", 16) +
+            '<span class="adm-iconpick-empty">选择图标（可选）</span>';
+      }
+      input.__icpPaint = paint;
+      paint();
+      input.parentNode.insertBefore(btn, input);
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        if (e.target.closest && e.target.closest("[data-icp-clear-inline]")) {
+          input.value = "";
+          paint();
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+          return;
+        }
+        icpOpen(input);
+      });
+    });
+  }
+
   function initPluginSettings() {
     if (window.__plgSetBound) return;
     window.__plgSetBound = true;
@@ -2977,7 +3184,10 @@
           description: "data-description", icon: "data-icon", parentId: "data-parentid" };
         Object.keys(fields).forEach(function (name) {
           var el = modal.querySelector("[name=" + name + "]");
-          if (el) el.value = edit.getAttribute(fields[name]) || "";
+          if (el) {
+            el.value = edit.getAttribute(fields[name]) || "";
+            if (el.__icpPaint) el.__icpPaint();
+          }
         });
         modal.hidden = false;
         var n = modal.querySelector('[name=name]');
@@ -3081,6 +3291,7 @@
     initPluginSettings();
     initOAuthBindings();
     initIconExplorer();
+    initIconPicker();
     initLogin();
     initTaxonomy();
   }

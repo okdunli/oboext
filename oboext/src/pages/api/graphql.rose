@@ -1,0 +1,92 @@
+<script>
+
+  //
+
+  import { graphql } from "graphql";
+  import { schema, buildContext } from "@server/graphql";
+
+  function jsonOut(obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  }
+
+  async function execute(request, payload) {
+    const query = payload.query;
+    if (typeof query !== "string" || !query) {
+      return jsonOut({ errors: [{ message: "Must provide query string." }] }, 400);
+    }
+    const contextValue = await buildContext(request);
+    const result = await graphql({
+      schema,
+      source: query,
+      variableValues: payload.variables,
+      operationName: payload.operationName,
+      contextValue,
+    });
+    return jsonOut(result);
+  }
+
+  function graphiqlHtml() {
+    return [
+      "<!DOCTYPE html>",
+      "<html><head><meta charset=\"utf-8\"><title>GraphiQL</title>",
+      "<link rel=\"stylesheet\" href=\"https://unpkg.com/graphiql@3/graphiql.min.css\">",
+      "<style>body{margin:0}#graphiql{height:100vh}</style></head>",
+      "<body><div id=\"graphiql\">Loading...</div>",
+      "<script src=\"https://unpkg.com/react@17/umd/react.production.min.js\"><\/script>",
+      "<script src=\"https://unpkg.com/react-dom@17/umd/react-dom.production.min.js\"><\/script>",
+      "<script src=\"https://unpkg.com/graphiql@3/graphiql.min.js\"><\/script>",
+      "<script>",
+      "ReactDOM.render(React.createElement(GraphiQL,{fetcher:GraphiQL.createFetcher({url:'/api/graphql'})}),document.getElementById('graphiql'));",
+      "<\/script></body></html>",
+    ].join("\n");
+  }
+
+  export async function GET(request) {
+    const url = new URL(request.url);
+    if ((request.headers.get("accept") || "").includes("text/html")) {
+
+      if (process.env.NODE_ENV === "production") return jsonOut({ errors: [{ message: "Not found" }] }, 404);
+      return new Response(graphiqlHtml(), {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+    let variables;
+    const rawVars = url.searchParams.get("variables");
+    if (rawVars) {
+      try {
+        variables = JSON.parse(rawVars);
+      } catch {
+        return jsonOut({ errors: [{ message: "Variables are invalid JSON." }] }, 400);
+      }
+    }
+    return execute(request, {
+      query: url.searchParams.get("query"),
+      variables,
+      operationName: url.searchParams.get("operationName"),
+    });
+  }
+
+  export async function POST(request) {
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return jsonOut({ errors: [{ message: "POST body sent invalid JSON." }] }, 400);
+    }
+    return execute(request, body);
+  }
+
+  export async function OPTIONS() {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "GET, POST, OPTIONS",
+        "access-control-allow-headers": "content-type, authorization",
+      },
+    });
+  }
+</script>

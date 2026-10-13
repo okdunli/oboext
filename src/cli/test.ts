@@ -22,6 +22,8 @@ export interface TestResult {
   state: Record<string, unknown>;
   head: string[];
   csr?: boolean;
+  /** the route exported `shell = false`: the document keeps the bundle but drops the #app wrapper + STYLES_MIN */
+  shell?: boolean;
   lang: string;
   dir: string;
   /** the complete document, byte-identical to what the servers send */
@@ -192,9 +194,10 @@ export async function test(file: string, opts: TestOptions = {}): Promise<TestAp
     state: page.state ? JSON.parse(page.state) : {},
     head: page.head ?? [],
     csr: page.csr,
+    shell: page.shell,
     lang: page.lang ?? 'en',
     dir: page.dir ?? '',
-    document: buildShell(page.html, page.state, clientSource, page.head ?? [], styles, page.csr !== false, page.lang ?? 'en', page.dir ?? ''),
+    document: buildShell(page.html, page.state, clientSource, page.head ?? [], styles, page.csr !== false, page.lang ?? 'en', page.dir ?? '', '', page.shell !== false),
     redirect,
   });
 

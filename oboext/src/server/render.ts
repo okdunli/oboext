@@ -35,6 +35,40 @@ export function fmtDate(v: Date | string | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+export function formatSiteDate(
+  v: Date | string | null | undefined,
+  settings: { dateFormat?: string; timezone?: string; language?: string },
+): string {
+  if (!v) return "";
+  const d = typeof v === "string" ? new Date(v) : v;
+  if (Number.isNaN(d.getTime())) return "";
+  const tz = settings.timezone || "Asia/Shanghai";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(d)
+    .split("-");
+  const [y, m, day] = parts;
+  switch (settings.dateFormat) {
+    case "YYYY年M月D日":
+      return `${y}年${Number(m)}月${Number(day)}日`;
+    case "MMM D, YYYY":
+      return new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      }).format(d);
+    case "D/M/YYYY":
+      return `${Number(day)}/${Number(m)}/${y}`;
+    default:
+      return `${y}-${m}-${day}`;
+  }
+}
+
 function renderBlock(b: Block): string {
   switch (b.type) {
     case "heading": {

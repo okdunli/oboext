@@ -27,6 +27,7 @@ import {
   categoryUrlFor,
   tagUrlFor,
 } from "./links.js";
+import { attachPostMetas, getPostMetas } from "./metas.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 
 export type TaxRef = { id: number; name: string; slug: string; url: string; icon?: string | null };
@@ -36,6 +37,8 @@ export type PostView = Post & {
   author: { id: number; name: string; email: string } | null;
   categories: TaxRef[];
   tags: TaxRef[];
+  /** Custom fields (post_metas); themes consume e.g. bluemix_card_theme. */
+  metas: Record<string, string>;
 };
 
 export type PostQuery = {
@@ -233,7 +236,7 @@ export async function listPosts(
 
   const cfg = await getPermalinkConfig();
   const ids = rows.map((r) => r.post.id);
-  const tax = await attachTaxonomies(ids);
+  const [tax, metaMap] = await Promise.all([attachTaxonomies(ids), attachPostMetas(ids)]);
 
   const items: PostView[] = rows.map((r) => ({
     ...r.post,
@@ -241,14 +244,18 @@ export async function listPosts(
     author: r.authorId ? { id: r.authorId, name: r.authorName!, email: r.authorEmail! } : null,
     categories: (tax.categories[r.post.id] ?? []).map((c) => ({ ...c, url: categoryUrlFor(cfg, c) })),
     tags: (tax.tags[r.post.id] ?? []).map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
+    metas: metaMap[r.post.id] ?? {},
   }));
 
   return { items, total };
 }
 
 async function hydrate(row: { post: Post; authorName: string | null; authorEmail: string | null; authorId: number | null }) {
-  const cfg = await getPermalinkConfig();
-  const tax = await attachTaxonomies([row.post.id]);
+  const [cfg, tax, metas] = await Promise.all([
+    getPermalinkConfig(),
+    attachTaxonomies([row.post.id]),
+    getPostMetas(row.post.id),
+  ]);
   const item: PostView = {
     ...row.post,
     url: postUrlFor(cfg, row.post),
@@ -257,6 +264,7 @@ async function hydrate(row: { post: Post; authorName: string | null; authorEmail
       : null,
     categories: (tax.categories[row.post.id] ?? []).map((c) => ({ ...c, url: categoryUrlFor(cfg, c) })),
     tags: (tax.tags[row.post.id] ?? []).map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
+    metas,
   };
   return item;
 }

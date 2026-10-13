@@ -45,8 +45,13 @@ export type MenuItem = {
   label: string;
   url: string;
   target?: string;
+  icon?: string | null;
   children?: MenuItem[];
 };
+
+function cssUrl(v: string): string {
+  return `url(&quot;${String(v ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;")}&quot;)`;
+}
 
 export type AsideParts = {
   menu: string;
@@ -62,6 +67,11 @@ export type HomeParts = {
   liked: PostView[];
   random: PostView[];
   cats: TaxRef[];
+  tags?: TaxRef[];
+
+  total?: number;
+
+  widgets?: string;
   settings: Record<string, unknown>;
   recent?: PostView[];
   sections?: { row: { category: TaxRef; title: string; icon: string | null }; posts: PostView[] }[];
@@ -100,7 +110,26 @@ export type ListParts = {
   bannerMax?: number;
   activeHref?: string;
 
-  variant?: "blog" | "category" | "term";
+  variant?: "blog" | "category" | "search" | "term";
+
+  widgets?: string;
+
+  drawerPosts?: PostView[];
+
+  sidebarData?: { posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons?: boolean };
+
+  settings?: Record<string, unknown>;
+  themeSettings?: Record<string, unknown>;
+
+  titleIcon?: string | null;
+
+  titleDesc?: string;
+
+  emptyHint?: string;
+
+  total?: number;
+
+  query?: string;
 };
 
 export type PostPageParts = {
@@ -108,15 +137,33 @@ export type PostPageParts = {
   bodyHtml: string;
   related: PostView[];
 
+  relatedTaxonomy?: PostView[];
+
   popular?: PostView[];
 
   random?: PostView[];
   commentsHtml: string;
   metaHtml: string;
+
+  defMetaHtml?: string;
   tagsHtml: string;
+
+  defTagsHtml?: string;
   shareHtml: string;
 
   blogIndex?: string;
+
+  widgets?: string;
+
+  postBottom?: string;
+
+  sidebarWidgets?: string;
+
+  canonical?: string;
+
+  sidebarData?: { posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons?: boolean };
+
+  settings?: Record<string, unknown>;
 };
 
 export type PagePageParts = {
@@ -124,6 +171,8 @@ export type PagePageParts = {
   bodyHtml: string;
   recent: PostView[];
   commentsHtml: string;
+
+  widgets?: string;
 };
 
 const THEMES_DIR = path.join(process.cwd(), "themes");
@@ -172,6 +221,14 @@ export function publicAssetHref(file: string): string {
   }
 }
 
+const GLOBALS_BODY_UTILITIES = `.min-h-screen{min-height:100vh}
+.bg-\\[var\\(--bg\\)\\]{background-color:var(--bg)}
+.text-\\[var\\(--text\\)\\]{color:var(--text)}
+.antialiased{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+.py-16{padding-block:64px}
+.mt-4{margin-top:16px}
+`;
+
 export function themeCssContent(slug: string): string {
   if (slug === "skyscraper") return "";
   const main = readThemeCss(slug, slug + ".css");
@@ -180,7 +237,7 @@ export function themeCssContent(slug: string): string {
     const extra = readThemeCss(slug, slug + "-extra.css");
     if (extra.css) css += "\n" + extra.css;
   } catch { /* no extra */ }
-  return css;
+  return GLOBALS_BODY_UTILITIES + css;
 }
 
 export function serveThemeAsset(urlPath: string, method = "GET"): Response {
@@ -282,8 +339,19 @@ const defaultBodyFix = `<style id="rv-body-fix">body{background:var(--bg,#09090b
 
 function defaultMenuUl(items: MenuItem[], cls: string): string {
   if (!items.length) return "";
+  const link = (it: MenuItem, extra: string) =>
+    `<a href="${esc(it.url)}"${it.target && it.target !== "_self" ? ` target="${esc(it.target)}" rel="noopener"` : ""} class="flex items-center gap-1.5 px-3 py-2 text-sm text-zinc-300 transition ${extra}">${esc(it.label)}</a>`;
   const lis = items
-    .map((it) => `<li><a href="${esc(it.url)}"${it.target && it.target !== "_self" ? ` target="${esc(it.target)}" rel="noopener"` : ""} class="px-2 py-1 text-sm text-[var(--muted)] transition hover:text-[var(--accent)]">${esc(it.label)}</a></li>`)
+    .map((it) => {
+      const kids = it.children?.length
+        ? `<ul class="absolute left-0 top-full z-20 hidden min-w-[180px] rounded-lg border border-[var(--border)] bg-[var(--surface)] py-1 shadow-xl group-hover:block">` +
+          (it.children || [])
+            .map((c) => `<li>${link(c, "hover:bg-white/5 hover:text-white")}</li>`)
+            .join("") +
+          `</ul>`
+        : "";
+      return `<li class="group relative">${link(it, "hover:text-white")}${kids}</li>`;
+    })
     .join("");
   return `<ul class="${cls}">${lis}</ul>`;
 }
@@ -294,15 +362,16 @@ function defaultNav(settings: Record<string, any>, items: MenuItem[]): string {
   const brandLink =
     settings.logoUrl
       ? `<img src="${esc(settings.logoUrl)}" alt="${title}" class="h-7 w-auto">`
-      : `<span class="flex h-8 w-8 items-center justify-center rounded-lg font-bold" style="background:var(--accent);color:var(--accent-text)">${(title || "").charAt(0).toUpperCase()}</span>${title}`;
+      : `<span class="flex h-8 w-8 items-center justify-center rounded-lg" style="background:var(--accent);color:var(--accent-text)">${(title || "").charAt(0).toUpperCase()}</span>${title}`;
   const menu = defaultMenuUl(items, "flex flex-wrap items-center");
+
   return `<div class="theme-root relative flex min-h-screen flex-col">` +
-    `<header class="sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--header-bg)] backdrop-blur">` +
+    `<header class="sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg)]">` +
     `<div class="relative mx-auto flex max-w-5xl items-center gap-4 px-4 py-3">` +
     `<a href="/" class="flex items-center gap-2 text-lg font-bold tracking-tight ${headingClass}">${brandLink}</a>` +
     `<nav class="ml-2 hidden flex-1 md:block">${menu}</nav>` +
     `<form action="/search" method="get" class="ml-auto hidden sm:block"><div class="relative">` +
-    `<span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]">⌕</span>` +
+    lucideSvg("search", 16, "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]") +
     `<input name="q" placeholder="搜索…" class="w-44 rounded-full border border-[var(--border)] bg-[var(--surface)] py-1.5 pl-9 pr-3 text-sm outline-none focus:border-[var(--accent)]">` +
     `</div></form></div></header>`;
 }
@@ -321,7 +390,8 @@ function defaultFooter(settings: Record<string, any>, widgetsHtml: string): stri
 
 function defaultCatPill(c: { name: string; url?: string }): string {
   const label = esc(c.name);
-  const cls = "rounded-full bg-[var(--accent)]/15 px-2.5 py-0.5 text-xs text-[var(--accent)]";
+
+  const cls = "rounded-full bg-[var(--accent)]/15 px-2.5 py-0.5 text-[var(--accent)]";
   return c.url ? `<a href="${esc(c.url)}" class="${cls}">${label}</a>` : `<span class="${cls}">${label}</span>`;
 }
 
@@ -337,25 +407,26 @@ function defaultPostCard(p: PostView, idx: number): string {
     `<h2 class="text-lg font-semibold leading-snug text-[var(--text)]"><a href="${esc(p.url)}" class="transition group-hover:text-[var(--accent)]">${esc(p.title)}</a></h2>` +
     (p.excerpt ? `<p class="mt-2 line-clamp-3 flex-1 text-sm text-[var(--muted)]">${esc(p.excerpt)}</p>` : "") +
     `<div class="mt-4 flex flex-wrap items-center gap-3 text-xs text-[var(--muted)]">` +
-    `<span class="inline-flex items-center gap-1">${author}</span>` +
-    `<span class="inline-flex items-center gap-1">${fmtDate(p.publishedAt)}</span>` +
-    (p.commentsCount > 0 ? `<span class="inline-flex items-center gap-1">${p.commentsCount} 评论</span>` : "") +
+    `<span class="inline-flex items-center gap-1">${lucideSvg("user", 13)}${author}</span>` +
+    `<span class="inline-flex items-center gap-1">${lucideSvg("calendar", 13)}${fmtDate(p.publishedAt)}</span>` +
+    (p.commentsCount > 0 ? `<span class="inline-flex items-center gap-1">${lucideSvg("message-circle", 13)}${p.commentsCount} 评论</span>` : "") +
     `</div></div></article>`;
 }
 
 function defaultHome(parts: HomeParts): string {
   const siteTitle = esc((parts.settings.siteTitle as string) ?? "");
-  const tagline = parts.settings.tagline ? `<p class="mt-3 text-base text-zinc-400">${esc(parts.settings.tagline as string)}</p>` : "";
+
+  const tagline = parts.settings.tagline ? `<p class="mt-3 text-base text-[var(--muted)]">${esc(parts.settings.tagline as string)}</p>` : "";
   const desc = parts.settings.siteDescription
-    ? `<p class="mx-auto mt-3 max-w-2xl text-sm text-zinc-500">${esc(parts.settings.siteDescription as string)}</p>`
+    ? `<p class="mx-auto mt-3 max-w-2xl text-sm text-[var(--muted)]">${esc(parts.settings.siteDescription as string)}</p>`
     : "";
   const hero = `<section class="relative overflow-hidden rounded-3xl border border-[var(--border)] bg-gradient-to-br from-[var(--surface)] to-[var(--bg)] px-8 py-12 text-center">` +
-    `<span class="mx-auto mb-4 block text-center text-[var(--accent)]" style="font-size:28px;line-height:1">✦</span>` +
-    `<h1 class="text-4xl font-bold tracking-tight text-zinc-100">${siteTitle}</h1>${tagline}${desc}</section>`;
+    lucideSvg("sparkles", 28, "mx-auto mb-4 text-[var(--accent)]") +
+    `<h1 class="text-4xl font-bold tracking-tight text-[var(--text)]">${siteTitle}</h1>${tagline}${desc}</section>`;
   const all = [...parts.hero, ...parts.latest];
   const featured = all[0];
   const rest = all.slice(1);
-  let featuredHtml = `<p class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center text-zinc-400">还没有已发布的文章。</p>`;
+  let featuredHtml = `<p class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center text-[var(--muted)]">还没有已发布的文章。</p>`;
   if (featured) {
     const cats = ((featured.categories || []).slice(0, 3).map(defaultCatPill)).join("");
     featuredHtml = `<article class="group overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--surface)]">` +
@@ -363,85 +434,208 @@ function defaultHome(parts: HomeParts): string {
         ? `<a href="${esc(featured.url)}" class="block aspect-[21/9] overflow-hidden"><img src="${esc(featured.featuredImage)}" alt="${esc(featured.title)}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105" loading="lazy"></a>`
         : "") +
       `<div class="p-6">${cats ? `<div class="mb-2 flex flex-wrap gap-2 text-xs">${cats}</div>` : ""}` +
-      `<h2 class="text-2xl font-bold leading-snug text-zinc-100"><a href="${esc(featured.url)}" class="transition group-hover:text-[var(--accent)]">${esc(featured.title)}</a></h2>` +
-      `<span class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)]">✦ 推荐阅读</span>` +
-      (featured.excerpt ? `<p class="mt-3 line-clamp-3 text-sm text-zinc-400">${esc(featured.excerpt)}</p>` : "") +
+      `<h2 class="text-2xl font-bold leading-snug text-[var(--text)]"><a href="${esc(featured.url)}" class="transition group-hover:text-[var(--accent)]">${esc(featured.title)}</a></h2>` +
+      `<span class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)]">${lucideSvg("sparkles", 13)} 推荐阅读</span>` +
+      (featured.excerpt ? `<p class="mt-3 line-clamp-3 text-sm text-[var(--muted)]">${esc(featured.excerpt)}</p>` : "") +
       `</div></article>`;
   }
   const grid = rest.map((p, i) => defaultPostCard(p, i)).join("");
+
   return `<div class="space-y-10">${hero}` +
-    `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><div class="space-y-6">${featuredHtml}` +
+    `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><div><div class="space-y-6">${featuredHtml}` +
     (rest.length ? `<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">${grid}</div>` : "") +
-    `</div>${defaultAside(parts)}</div></div>`;
+    `</div></div>${defaultAside(parts.cats || [], parts.tags || [], [...parts.hero, ...parts.latest].slice(0, 5), parts.settings, (parts.themeSettings as Record<string, any> | undefined)?.useCustomIcons === true)}</div></div>`;
 }
 
-function defaultAside(parts: HomeParts): string {
-  const cats = parts.cats || [];
-  const recent = [...parts.hero, ...parts.latest].slice(0, 5);
+function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settings: Record<string, unknown>, showCatIcons = false): string {
   const catLis = cats.map((c) =>
-    `<li><a href="${esc(c.url)}" class="flex items-center gap-1.5 text-sm text-[var(--text)] hover:text-[var(--accent)]">${esc(c.name)}</a></li>`).join("");
+    `<li><a href="${esc(c.url)}" class="flex items-center gap-1.5 text-[var(--text)] hover:text-[var(--accent)]">${showCatIcons && c.icon ? lucideSvg(c.icon, 14, "text-[var(--accent)]") : ""}${esc(c.name)}</a></li>`).join("");
   const recentLis = recent.map((p) =>
-    `<li><a href="${esc(p.url)}" class="text-sm text-[var(--text)] hover:text-[var(--accent)]">${esc(p.title)}</a><p class="text-xs text-[var(--muted)]">${fmtDate(p.publishedAt)}</p></li>`).join("");
+    `<li><a href="${esc(p.url)}" class="text-[var(--text)] hover:text-[var(--accent)]">${esc(p.title)}</a><p class="text-xs text-[var(--muted)]">${fmtDate(p.publishedAt)}</p></li>`).join("");
+  const tagPills = tags.map((t) =>
+    `<a href="${esc(t.url)}" class="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]">#${esc(t.name)}</a>`).join("");
+  const cardHead = (icon: string, label: string) =>
+    `<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">${lucideSvg(icon, 15)}${label}</h3>`;
   return `<aside class="space-y-6">` +
-    `<form action="/search" method="get"><div class="relative">` +
-    `<span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]">⌕</span>` +
+    `<form action="/search" method="get" class="block"><div class="relative">` +
+    lucideSvg("search", 16, "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]") +
     `<input name="q" placeholder="搜索文章…" class="w-full rounded-full border border-[var(--border)] bg-[var(--surface)] py-2 pl-9 pr-4 text-sm outline-none focus:border-[var(--accent)]">` +
     `</div></form>` +
-    `<div class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5"><h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">分类</h3>` +
-    `<ul class="space-y-1 text-sm">${catLis || `<li class="text-sm text-[var(--muted)]">暂无分类</li>`}</ul></div>` +
-    `<div class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5"><h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">最新文章</h3>` +
-    `<ul class="space-y-2 text-sm">${recentLis || `<li class="text-sm text-[var(--muted)]">暂无文章</li>`}</ul></div>` +
+    `<div class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">${cardHead("folder", "分类")}` +
+    `<ul class="space-y-1 text-sm">${catLis || `<li class="text-[var(--muted)]">暂无分类</li>`}</ul></div>` +
+    `<div class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">${cardHead("tags", "标签")}` +
+    `<div class="flex flex-wrap gap-2">${tagPills || `<span class="text-xs text-[var(--muted)]">暂无标签</span>`}</div></div>` +
+    `<div class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">${cardHead("clock", "最新文章")}` +
+    `<ul class="space-y-2 text-sm">${recentLis}</ul></div>` +
     `</aside>`;
+}
+
+function defaultPager(page: number, totalPages: number, hrefFor: (p: number) => string): string {
+  if (totalPages <= 1) return "";
+  const windowSize = 5;
+  let start = Math.max(1, page - Math.floor(windowSize / 2));
+  let end = Math.min(totalPages, start + windowSize - 1);
+  start = Math.max(1, end - windowSize + 1);
+  const pages: number[] = [];
+  for (let p = start; p <= end; p++) pages.push(p);
+  const cell = (p: number) => {
+    const active = p === page;
+    return `<a href="${esc(hrefFor(p))}"${active ? ' aria-current="page"' : ""} class="min-w-9 rounded-lg border px-3 py-2 text-center text-sm transition ${active
+      ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+      : "border-[var(--border)] text-zinc-300 hover:border-[var(--accent)] hover:text-[var(--accent)]"}">${p}</a>`;
+  };
+  const edge = (label: string, icon: string, p: number) =>
+    `<a href="${esc(hrefFor(p))}" class="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-zinc-300 transition hover:border-[var(--accent)] hover:text-[var(--accent)]">${icon}${label}</a>`;
+  let out = `<nav class="mt-10 flex items-center justify-center gap-1.5" aria-label="分页">`;
+  if (page > 1) out += edge("上一页", lucideSvg("chevron-left", 15), page - 1);
+  if (start > 1) {
+    out += cell(1);
+    if (start > 2) out += `<span class="px-1 text-zinc-500">…</span>`;
+  }
+  out += pages.map(cell).join("");
+  if (end < totalPages) {
+    if (end < totalPages - 1) out += `<span class="px-1 text-zinc-500">…</span>`;
+    out += cell(totalPages);
+  }
+  if (page < totalPages) out += edge("下一页", lucideSvg("chevron-right", 15), page + 1);
+  return out + `</nav>`;
+}
+
+/** mirror components/shared/Breadcrumb.tsx。 */
+function defaultBreadcrumb(items: { label: string; href?: string }[]): string {
+  if (!items.length) return "";
+  const spans = items
+    .map((c, i) => {
+      const last = i === items.length - 1;
+      const inner = c.href && !last
+        ? `<a href="${esc(c.href)}" class="transition hover:text-[var(--accent)]">${esc(c.label)}</a>`
+        : `<span class="${last ? "text-zinc-300" : ""}">${esc(c.label)}</span>`;
+      return `<span class="inline-flex items-center gap-1">${inner}${last ? "" : lucideSvg("chevron-right", 12, "text-zinc-600")}</span>`;
+    })
+    .join("");
+  return `<nav aria-label="面包屑" class="flex flex-wrap items-center gap-1 text-xs text-zinc-500">${spans}</nav>`;
 }
 
 function defaultListPage(parts: ListParts): string {
   const cards = parts.items.map((p, i) => defaultPostCard(p, i)).join("");
-  const pager = parts.showPager !== false ? pagerHtml(parts.page, parts.totalPages, parts.hrefFor) : "";
-  return `<div class="space-y-6"><header class="mb-6">` +
-    `<h1 class="text-3xl font-bold tracking-tight text-zinc-100">${esc(parts.title)}</h1>` +
-    `<p class="mt-2 text-sm text-zinc-500">${esc(parts.sub)}</p></header>` +
+  const pager = parts.showPager !== false ? defaultPager(parts.page, parts.totalPages, parts.hrefFor) : "";
+  const isBlog = parts.variant === "blog";
+  const isCategory = parts.variant === "category";
+  const isSearch = parts.variant === "search";
+  const isTerm = !isBlog && !isCategory && !isSearch;
+  const backLink = isTerm || parts.variant === "category"
+    ? `<div class="mb-6"><a href="/" class="text-sm text-zinc-400 hover:text-[var(--accent)]">← 首页</a>`
+    : `<div class="mb-6"><a href="/" class="inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-[var(--accent)]">${lucideSvg("arrow-left", 14)}首页</a>`;
+  const iconHtml = parts.titleIcon ? lucideSvg(parts.titleIcon, parts.variant === "search" ? 26 : 22, "text-[var(--accent)]") : "";
+  const headHtml = isBlog
+    ? defaultBreadcrumb([{ label: "首页", href: "/" }, { label: "文章" }]) +
+      `<header class="mb-6 mt-3">` +
+      `<h1 class="text-3xl font-bold text-zinc-100">${esc(parts.title)}</h1>` +
+      (parts.sub ? `<p class="mt-1 text-sm text-zinc-500">${esc(parts.sub)}</p>` : "") +
+      `</header>`
+    : backLink +
+      (isTerm
+        ? `<h1 class="mt-2 text-3xl font-bold text-zinc-100">${esc(parts.title)}</h1>`
+        : `<h1 class="mt-2 flex items-center gap-2 text-3xl font-bold text-zinc-100">${iconHtml}${esc(parts.title)}</h1>`) +
+      (parts.titleDesc ? `<p class="mt-2 text-sm text-zinc-400">${esc(parts.titleDesc)}</p>` : parts.sub ? `<p class="mt-2 text-sm text-zinc-400">${esc(parts.sub)}</p>` : "") +
+      `</div>`;
+  const sidebar = parts.sidebarData
+    ? defaultAside(parts.sidebarData.cats, parts.sidebarData.tags, parts.sidebarData.posts, parts.settings || {}, parts.sidebarData.showCatIcons === true)
+    : "";
+  const emptyText = isCategory
+    ? "该分类下还没有文章。"
+    : isSearch
+      ? "没有匹配的文章。"
+      : isTerm
+        ? "该标签下还没有文章。"
+        : "还没有已发布的文章。";
+  const listHtml = cards
+    ? `<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">${cards}</div>`
+    : isSearch && !(parts.query ?? "").trim()
+      ? `<div class="grid grid-cols-1 gap-6 sm:grid-cols-2"></div>`
+      : `<p class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center text-zinc-400">${esc(emptyText)}</p>`;
+  return `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><div>` +
+    headHtml +
     (parts.extra || "") +
-    `<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">${cards}</div>${pager}</div>`;
+    listHtml +
+    pager +
+    `</div>${sidebar}</div>`;
+}
+
+function defaultShareButtons(title: string, url: string): string {
+  const wb = `http://service.weibo.com/share/share.php?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`;
+  const tw = `https://twitter.com/intent/tweet?url=${encodeURIComponent(url)}&text=${encodeURIComponent(title)}`;
+  const mail = `mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(url)}`;
+  const btn = "inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] px-3 py-1.5 text-xs text-zinc-300 transition hover:border-[var(--accent)] hover:text-[var(--accent)]";
+  return `<div class="mt-8 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-6">` +
+    `<span class="mr-1 inline-flex items-center gap-1 text-sm text-zinc-400">${lucideSvg("share-2", 15)}分享</span>` +
+    `<button type="button" title="复制链接 / 系统分享" class="${btn}">${lucideSvg("link", 13)}复制链接</button>` +
+    `<a href="${esc(wb)}" target="_blank" rel="noopener noreferrer" class="${btn}">微博</a>` +
+    `<a href="${esc(tw)}" target="_blank" rel="noopener noreferrer" class="${btn}">Twitter</a>` +
+    `<a href="${esc(mail)}" class="${btn}">${lucideSvg("mail", 13)}邮件</a>` +
+    `</div>`;
+}
+
+function defaultRelatedSection(posts: PostView[]): string {
+  if (!posts.length) return "";
+  const cards = posts.map((p) =>
+    `<a href="${esc(p.url)}" class="group rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 transition hover:border-[var(--accent)]">` +
+    `<h3 class="line-clamp-2 font-medium text-zinc-100 transition group-hover:text-[var(--accent)]">${esc(p.title)}</h3>` +
+    (p.publishedAt ? `<p class="mt-2 text-xs text-zinc-500">${fmtDate(p.publishedAt)}</p>` : "") +
+    `</a>`).join("");
+  return `<section class="mt-10">` +
+    `<h2 class="mb-4 flex items-center gap-2 text-lg font-bold text-zinc-100">${lucideSvg("folder-open", 18, "text-[var(--accent)]")}相关文章</h2>` +
+    `<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">${cards}</div></section>`;
 }
 
 function defaultPostPage(parts: PostPageParts): string {
   const p = parts.post;
   const cats = (p.categories || []).map(defaultCatPill).join("");
   const author = esc(p.author?.name ?? "未知作者");
-  const meta = parts.metaHtml || "";
-  const tags = parts.tagsHtml || "";
-  const crumb = `<nav class="mb-6 flex items-center gap-2 text-xs text-zinc-500">` +
-    `<a href="/" class="hover:text-[var(--accent)]">首页</a><span>›</span><a href="${esc(parts.blogIndex || "/blog")}" class="hover:text-[var(--accent)]">文章</a>` +
-    ((p.categories || [])[0] ? `<span>›</span><a href="${esc((p.categories as any)[0].url || "#")}" class="hover:text-[var(--accent)]">${esc((p.categories as any)[0].name)}</a>` : "") +
-    `<span>›</span><span class="text-zinc-300">${esc(p.title)}</span></nav>`;
-  return `<article class="mx-auto max-w-3xl">` +
+  const meta = parts.defMetaHtml || "";
+  const tags = parts.defTagsHtml || "";
+  const firstCat = (p.categories || [])[0];
+  const crumb = defaultBreadcrumb([
+    { label: "首页", href: "/" },
+    { label: "文章", href: parts.blogIndex || "/blog" },
+    ...(firstCat ? [{ label: firstCat.name, href: firstCat.url }] : []),
+    { label: p.title },
+  ]);
+  return `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><article>` +
     `<header class="mb-6">` +
-    `<a href="/" class="mb-4 inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-[var(--accent)]">← 返回首页</a>` +
+    `<a href="/" class="mb-4 inline-flex items-center gap-1 text-sm text-[var(--muted)] hover:text-[var(--accent)]">${lucideSvg("arrow-left", 14)}返回首页</a>` +
     crumb +
     (cats ? `<div class="mb-3 mt-3 flex flex-wrap gap-2 text-xs">${cats}</div>` : "") +
-    `<h1 class="text-3xl font-bold leading-tight text-zinc-100">${esc(p.title)}</h1>` +
-    `<div class="mt-3 flex flex-wrap items-center gap-4 text-sm text-zinc-500">` +
-    `<span class="inline-flex items-center gap-1">${author}</span>` +
-    `<span class="inline-flex items-center gap-1">${fmtDate(p.publishedAt)}</span>` +
-    `<span class="inline-flex items-center gap-1">${p.views} 阅读</span>` +
-    (p.commentsCount > 0 ? `<span class="inline-flex items-center gap-1">${p.commentsCount} 评论</span>` : "") +
-    `</div>${meta ? `<div class="mt-2 flex flex-wrap items-center gap-4 text-sm text-zinc-500">${meta}</div>` : ""}` +
-    `</header>` +
+    `<h1 class="text-3xl font-bold leading-tight text-[var(--text)]">${esc(p.title)}</h1>` +
+    `<div class="mt-3 flex flex-wrap items-center gap-4 text-sm text-[var(--muted)]">` +
+    `<span class="inline-flex items-center gap-1">${lucideSvg("user", 14)}${author}</span>` +
+    `<span class="inline-flex items-center gap-1">${lucideSvg("calendar", 14)}${fmtDate(p.publishedAt)}</span>` +
+    `<span class="inline-flex items-center gap-1">${lucideSvg("eye", 14)}${p.views} 阅读</span>` +
+    (p.commentsCount > 0 ? `<span class="inline-flex items-center gap-1">${lucideSvg("message-circle", 14)}${p.commentsCount} 评论</span>` : "") +
+    `</div>${meta}</header>` +
     (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="mb-6 w-full rounded-2xl border border-[var(--border)] object-cover">` : "") +
     `<div class="prose-cms">${parts.bodyHtml}</div>` +
-    (tags ? `<div class="mt-8 border-t border-[var(--border)] pt-6">${tags}</div>` : "") +
-    `<div class="mt-8">${parts.shareHtml}</div>` +
-    `<div class="mt-8">${parts.commentsHtml}</div>` +
-    `</article>`;
+    (tags || "") +
+    defaultShareButtons(p.title, parts.canonical || p.url) +
+    defaultRelatedSection(parts.relatedTaxonomy || []) +
+    (parts.postBottom || "") +
+    parts.commentsHtml +
+    `</article>` +
+    `<div class="space-y-6">` +
+
+    (parts.sidebarData
+      ? defaultAside(parts.sidebarData.cats, parts.sidebarData.tags, parts.sidebarData.posts, parts.settings || {}, parts.sidebarData.showCatIcons === true)
+      : "") +
+    (parts.sidebarWidgets || "") +
+    `</div></div>`;
 }
 
 function defaultPagePage(parts: PagePageParts): string {
   const p = parts.page;
-  return `<article class="mx-auto max-w-3xl">` +
-    `<h1 class="mb-6 text-3xl font-bold leading-tight text-zinc-100">${esc(p.title)}</h1>` +
-    `<div class="prose-cms">${parts.bodyHtml}</div>` +
-    `<div class="mt-8">${parts.commentsHtml}</div>` +
-    `</article>`;
+  return `<div class="mx-auto max-w-3xl"><article>` +
+    `<h1 class="text-3xl font-bold leading-tight text-[var(--text)]">${esc(p.title)}</h1>` +
+    `<div class="prose-cms mt-8">${parts.bodyHtml}</div>` +
+    `</article>${parts.commentsHtml}</div>`;
 }
 
 const defaultChrome: ThemeChrome = {
@@ -460,12 +654,39 @@ const defaultChrome: ThemeChrome = {
   pagePage: defaultPagePage,
 };
 
-const pseudoBodyFix = `<style id="rv-body-fix">body{background:#0c0d1a;color:#f3f1ff}</style>`;
+const pseudoBodyFix = `<style id="rv-body-fix">body, html { background: #0c0d1a !important; color: #f3f1ff !important; }</style>`;
+
+function plYmd(v: Date | string | null | undefined): string {
+  if (!v) return "—";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime())
+    ? "—"
+    : `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function plYmdDot(v: Date | string | null | undefined): string {
+  if (!v) return "";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
+}
+const plPad = (n: number, w = 3) => String(n).padStart(w, "0");
 
 function pseudoNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
-  const links = items
-    .map((it) => `<li><a href="${esc(it.url)}"${it.target ? ` target="${esc(it.target)}"` : ""}>${esc(it.label)}</a></li>`)
+
+  const list: MenuItem[] = items.length
+    ? items
+    : [{ id: "__index", label: "首页", url: "/" }, { id: "__archive", label: "全部文章", url: "/blog" }];
+  const path = String(settings.__pathname ?? "/");
+  const isActive = (url: string) => {
+    if (!url) return false;
+    if (url === "/") return path === "/";
+    return path.startsWith(url);
+  };
+  const links = list
+    .map((it) => `<li><a href="${esc(it.url)}"${it.target ? ` target="${esc(it.target)}"` : ""} data-active="${isActive(it.url) ? "true" : "false"}">${esc(it.label)}</a></li>`)
     .join("");
   return `<nav class="pl-nav"><div class="pl-nav-inner">` +
     `<a href="/" class="pl-brand"><span class="pl-brand-mark" aria-hidden="true"></span><span>${title}</span></a>` +
@@ -487,67 +708,268 @@ function pseudoFooter(settings: Record<string, any>): string {
     `</div></footer>`;
 }
 
-function pseudoPostCard(p: PostView, idx: number): string {
-  const thumb = p.featuredImage
-    ? `<div class="pl-thumb" style="background-image:url(${esc(p.featuredImage)})"></div>`
-    : "";
+function pseudoPostCard(p: PostView, idx: number, total: number): string {
+  const cover = (p as any).coverImage;
+  const thumb = cover ? `<div class="pl-thumb" style="background-image:url(${esc(cover)})"></div>` : "";
   const cat = (p.categories || [])[0];
-  const catHtml = cat ? `<span class="pl-cat">${esc(cat.name)}</span>` : "";
+  const catHtml = cat
+    ? `<span style="color:var(--pl-ink-3);opacity:0.5">·</span><span class="pl-cat">${esc(cat.name)}</span>`
+    : "";
   return `<article class="pl-card">${thumb}` +
-    `<div class="pl-card-meta"><span class="pl-num">${String(idx + 1).padStart(2, "0")}</span>${catHtml}</div>` +
+    `<div class="pl-card-meta"><span class="pl-num">N°${plPad(total - idx)}</span>` +
+    `<span style="color:var(--pl-ink-3);opacity:0.5">·</span><span>${plYmd(p.publishedAt)}</span>${catHtml}</div>` +
     `<h3><a href="${esc(p.url)}">${esc(p.title)}</a></h3>` +
     (p.excerpt ? `<p>${esc(p.excerpt)}</p>` : "") +
-    `<a href="${esc(p.url)}" class="pl-read">阅读全文 →</a>` +
+    `<a href="${esc(p.url)}" class="pl-read">阅读全文</a>` +
     `</article>`;
 }
 
-function pseudoHome(parts: HomeParts): string {
-  const all = [...parts.hero, ...parts.latest];
-  const featured = all[0];
-  const rest = all.slice(1);
-  let heroHtml = "";
-  if (featured) {
-    heroHtml = `<section class="pl-hero"><div class="pl-hero-card">` +
-      `<div class="pl-hero-eyebrow"><span class="pl-pill-dot"></span>Issue №01</div>` +
-      `<h1 class="pl-title">${esc(featured.title)}</h1>` +
-      (featured.excerpt ? `<p style="color:var(--pl-ink-2,#a8a3c4);font-size:16px;max-width:600px">${esc(featured.excerpt)}</p>` : "") +
-      `<a href="${esc(featured.url)}" class="pl-read" style="margin-top:24px">阅读此文 →</a>` +
-      `</div></section>`;
+function pseudoHomeCard(p: PostView, idx: number, total: number): string {
+  const cover = (p as any).coverImage || p.featuredImage;
+  const thumb = cover ? `<div class="pl-thumb" style="background-image:url(${esc(cover)})"></div>` : "";
+  const cat = (p.categories || [])[0];
+  const catHtml = cat
+    ? `<span style="color:var(--pl-ink-3);opacity:0.5">·</span><span class="pl-cat">${esc(cat.name)}</span>`
+    : "";
+  return `<article class="pl-card">${thumb}` +
+    `<div class="pl-card-meta"><span class="pl-num">N°${plPad(total - idx)}</span>` +
+    `<span style="color:var(--pl-ink-3);opacity:0.5">·</span><span>${plYmd(p.publishedAt)}</span>${catHtml}</div>` +
+    `<h3><a href="${esc(p.url)}">${esc(p.title)}</a></h3>` +
+    (p.excerpt ? `<p>${esc(p.excerpt)}</p>` : "") +
+    `<a href="${esc(p.url)}" class="pl-read">阅读全文</a>` +
+    `</article>`;
+}
+
+function pseudoRenderTitle(raw: string): string {
+  const words = raw.split(/(\s+)/);
+  const targets = [/(log|press|signal|cyber|neon|code|byte|wire|glass|blog|写|笔记|记录)/i];
+  const taken = new Set<number>();
+  const pick = Math.min(2, Math.max(1, Math.floor(words.filter((w) => !/^\s+$/.test(w)).length / 3)));
+  let found = 0;
+  return words
+    .map((w, i) => {
+      if (taken.has(i)) return w;
+      if (/^\s+$/.test(w)) return w;
+      if (found < pick && targets.some((re) => re.test(w))) {
+        taken.add(i);
+        found++;
+        return `<em>${esc(w)}</em>`;
+      }
+      return `<span>${esc(w)}</span>`;
+    })
+    .join("");
+}
+
+/** mirror ListPages.PageShell：mark + eyebrow + <small>title</small> + count。 */
+function plSection(eyebrow: string, small: string, count: string, inner: string, style = ""): string {
+  return `<section class="pl-section"${style ? ` style="${style}"` : ""}><div class="pl-section-head">` +
+    `<h2><span class="pl-section-mark"></span>${eyebrow} <small>${small}</small></h2>` +
+    (count ? `<span class="pl-count">${count}</span>` : "") +
+    `</div>${inner}</section>`;
+}
+
+function plPager(page: number, totalPages: number, hrefFor: (p: number) => string): string {
+  if (totalPages <= 1) return "";
+  const nums: string[] = [];
+  for (let i = 1; i <= totalPages; i++) {
+    nums.push(i === page ? `<span class="pl-pager-current">${i}</span>` : `<a href="${esc(hrefFor(i))}">${i}</a>`);
   }
-  const cards = rest.map((p, i) => pseudoPostCard(p, i)).join("");
-  return `${heroHtml}<div style="max-width:1280px;margin:0 auto;padding:0 22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:24px">${cards}</div>`;
+  return `<nav class="pl-pager">` +
+    (page > 1 ? `<a href="${esc(hrefFor(page - 1))}"><span>←</span><span>prev</span></a>` : "") +
+    nums.join("") +
+    (page < totalPages ? `<a href="${esc(hrefFor(page + 1))}"><span>next</span><span>→</span></a>` : "") +
+    `</nav>`;
+}
+
+function pseudoHome(parts: HomeParts): string {
+  const settings = parts.settings as Record<string, any>;
+  const ts = (parts.themeSettings ?? {}) as Record<string, any>;
+  const items = [...parts.hero, ...parts.latest];
+  const totalPublished = parts.total ?? items.length;
+  const widgets = parts.widgets || "";
+  const showHero = ts.showHero !== false;
+  const heroEyebrow = String(ts.heroEyebrow || "Issue № 2026");
+  const heroTitle = String(ts.heroTitle || settings.siteTitle);
+  const heroSub = String(
+    ts.heroSubtitle ||
+      settings.tagline ||
+      settings.siteDescription ||
+      "A quiet log of things noticed, built and written down.",
+  );
+  const hero = showHero
+    ? `<section class="pl-hero"><div class="pl-hero-card">` +
+      `<div class="pl-hero-eyebrow"><span class="pl-pill-dot"></span>` +
+      `<span>${esc(heroEyebrow)}</span><span style="opacity:0.5">·</span>` +
+      `<span>${items.length} entries</span></div>` +
+      `<h1 class="pl-title">${pseudoRenderTitle(heroTitle)}</h1>` +
+      `<p class="pl-sub">${esc(heroSub)}</p>` +
+      `<div class="pl-hero-actions">` +
+      `<a href="/blog" class="pl-btn pl-btn-primary">探索文章<span class="pl-btn-arrow">→</span></a>` +
+      `<a href="#index" class="pl-btn pl-btn-ghost">最近更新</a>` +
+      `</div>` +
+      `<div class="pl-hero-meta">` +
+      `<div class="pl-stat">total entries<b>${plPad(totalPublished)}</b></div>` +
+      `<div class="pl-stat">featured<b>${items[0] ? "N°" + plPad(items.length) : "—"}</b></div>` +
+      `<div class="pl-stat">last update<b>${plYmd(items[0]?.publishedAt)}</b></div>` +
+      `</div></div></section>`
+    : "";
+  const indexSection = `<section class="pl-section" id="index"><div class="pl-section-head">` +
+    `<h2><span class="pl-section-mark"></span>最新发布 <small>recent entries</small></h2>` +
+    `<span class="pl-count">count = ${items.length}</span></div>` +
+    (items.length === 0
+      ? `<div class="pl-empty">还没有文章。先去 admin 发布一篇吧。</div>`
+      : `<div class="pl-grid">${items.map((p, i) => pseudoHomeCard(p, i, items.length)).join("")}</div>`) +
+    (totalPublished > items.length
+      ? `<div style="margin-top:36px;text-align:center"><a href="/blog" class="pl-btn pl-btn-ghost">查看更多文章<span class="pl-btn-arrow">→</span></a></div>`
+      : "") +
+    `</section>`;
+  const widgetsSection = `<section class="pl-section" style="padding-top:0"><div class="pl-section-head">` +
+    `<h2><span class="pl-section-mark"></span>侧栏 <small>widgets</small></h2></div>` +
+    `<div class="pl-side-stack">${widgets}</div></section>`;
+  return `<div>${hero}${indexSection}${widgetsSection}</div>`;
 }
 
 function pseudoListPage(parts: ListParts): string {
-  const cards = parts.items.map((p, i) => pseudoPostCard(p, i)).join("");
-  const pager = parts.showPager !== false ? pagerHtml(parts.page, parts.totalPages, parts.hrefFor) : "";
-  return `<div style="max-width:1280px;margin:0 auto;padding:24px 22px">` +
-    `<h1 style="font-family:var(--pl-display);font-weight:800;font-size:36px;margin:0 0 8px">${esc(parts.title)}</h1>` +
-    `<p style="color:var(--pl-ink-3,#a8a3c4);margin:0 0 32px;font-size:14px">${esc(parts.sub)}</p>` +
+  const isBlog = parts.variant === "blog";
+  const isCategory = parts.variant === "category";
+  const isSearch = parts.variant === "search";
+  const cards = parts.items.length
+    ? `<div class="pl-grid">${parts.items.map((p, i) => pseudoPostCard(p, i, parts.items.length)).join("")}</div>`
+    : `<div class="pl-empty">// 暂无内容 //</div>`;
+  const pager = parts.showPager !== false ? plPager(parts.page, parts.totalPages, parts.hrefFor) : "";
+
+  let eyebrow: string;
+  let small: string;
+  let count: string;
+  let body: string;
+  if (isBlog) {
+    eyebrow = "全部文章";
+    small = "archive";
+    count = `page ${parts.page}/${parts.totalPages} · total = ${parts.total ?? parts.items.length}`;
+    body = cards + pager;
+  } else if (isCategory) {
+    eyebrow = "分类";
+    small = esc(parts.title);
+    count = `${parts.items.length} entries`;
+    body = cards;
+  } else if (isSearch) {
+    const cleaned = (parts.query ?? "").trim();
+    eyebrow = "搜索";
+    small = cleaned ? `"${esc(cleaned)}"` : "—";
+    count = cleaned ? `${parts.items.length} results` : "—";
+    body = cleaned ? cards : `<div class="pl-empty">// 在顶部搜索框输入关键词 //</div>`;
+  } else {
+    eyebrow = esc(parts.title);
+    small = "";
+    count = "";
+    body = cards;
+  }
+
+  const widgetsSection = isBlog
+    ? `<section class="pl-section" style="padding-top:0"><div class="pl-section-head">` +
+      `<h2><span class="pl-section-mark"></span>侧栏 <small>widgets</small></h2></div>` +
+      `<div class="pl-side-stack">${parts.widgets || ""}</div></section>`
+    : "";
+  return `<div>` +
+    plSection(eyebrow, small, count, body) +
+    widgetsSection +
     (parts.extra || "") +
-    `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:24px">${cards}</div>${pager}</div>`;
+    `</div>`;
 }
 
 function pseudoPostPage(parts: PostPageParts): string {
   const p = parts.post;
-  const cats = (p.categories || []).map((c) => `<a href="${esc(c.url)}" style="color:var(--pl-pink,#f0abfc);text-decoration:none;font-size:12px">${esc(c.name)}</a>`).join(" · ");
-  return `<article style="max-width:760px;margin:0 auto;padding:24px 22px">` +
-    `<header style="margin-bottom:32px">${cats ? `<div style="margin-bottom:12px">${cats}</div>` : ""}` +
-    `<h1 style="font-family:var(--pl-display);font-size:36px;font-weight:800;line-height:1.2;margin:0">${esc(p.title)}</h1>` +
-    `<div style="margin-top:16px;display:flex;gap:16px;font-size:13px;color:var(--pl-ink-3)">` +
-    `<span>${esc(p.author?.name ?? "未知作者")}</span><time>${fmtDate(p.publishedAt)}</time><span>${p.views} 阅读</span>` +
-    `</div>${parts.metaHtml}</header>` +
-    (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" style="width:100%;border-radius:var(--pl-radius,24px);margin-bottom:32px">` : "") +
-    `<div class="prose-cms">${parts.bodyHtml}</div>` +
-    parts.tagsHtml + parts.shareHtml + parts.commentsHtml +
-    `</article>`;
+  const firstCat = (p.categories || [])[0];
+
+  const headings: { id: string; text: string }[] = [];
+  const bodyHtml = parts.bodyHtml.replace(/<h([23])([^>]*)>([\s\S]*?)<\/h\1>/gi, (_m, lv, attrs, inner) => {
+    const text = inner.replace(/<[^>]+>/g, "").trim();
+    const id = `${p.slug}-h${headings.length}`;
+    if (text) headings.push({ id, text });
+    return `<h${lv} id="${id}">${inner}</h${lv}>`;
+  });
+  const tags = p.tags?.length
+    ? `<div class="pl-tags">${p.tags.map((t) => `<a href="${esc(t.url || "#")}" class="pl-tag"># ${esc(t.name)}</a>`).join("")}</div>`
+    : "";
+  const toc = headings.length
+    ? plSection("目录", "contents", `${headings.length} anchors`,
+        `<ol class="pl-list">${headings.map((h, i) =>
+          `<li class="pl-row" style="grid-template-columns:60px 1fr">` +
+          `<span class="pl-num">N°${plPad(i + 1, 2)}</span>` +
+          `<a href="#${h.id}" style="color:var(--pl-ink-2);font-size:14px;text-decoration:none">${esc(h.text)}</a></li>`).join("")}</ol>`,
+        "padding-top:0;margin-top:48px")
+    : "";
+  const related = parts.related.length
+    ? plSection("相关文章", "related entries", `count = ${parts.related.length}`,
+        `<div class="pl-grid" style="grid-template-columns:repeat(auto-fill, minmax(220px, 1fr))">${parts.related.map((r, i) =>
+          `<a href="${esc(r.url)}" class="pl-card" style="text-decoration:none;min-height:0">` +
+          `<div class="pl-card-meta"><span class="pl-num">N°${plPad(i + 1, 2)}</span>` +
+          `<span style="color:var(--pl-ink-3);opacity:0.5">·</span><span>${plYmdDot(r.publishedAt)}</span></div>` +
+          `<h3 style="font-size:15">${esc(r.title)}</h3></a>`).join("")}</div>`,
+        "padding-top:0;margin-top:32px")
+    : "";
+  const comments = `<section class="pl-section" style="padding-top:0;margin-top:32px"><div class="pl-section-head">` +
+    `<h2><span class="pl-section-mark"></span>评论 <small>response · ${p.commentsCount} reply</small></h2></div>` +
+    `${parts.commentsHtml}</section>`;
+  return `<div class="pl-article-wrap"><div class="pl-article-card">` +
+    `<a href="${esc(parts.blogIndex || "/blog")}" class="pl-back"><span>←</span><span>back to index</span></a>` +
+    `<header class="pl-article-head">` +
+    `<div class="pl-article-meta">` +
+    (firstCat ? `<span class="pl-cat">§ ${esc(firstCat.name)}</span>` : `<span class="pl-cat">§ ARTICLE</span>`) +
+    `<span>issue · <b class="pl-date">${plYmdDot(p.publishedAt)}</b></span>` +
+    `<span><b>${p.views}</b> reads</span>` +
+    `<span><b>${p.commentsCount}</b> reply</span>` +
+    `</div>` +
+    `<h1 class="pl-title">${esc(p.title)}</h1>` +
+    (p.excerpt ? `<p class="pl-sub">${esc(p.excerpt)}</p>` : "") +
+    `</header>` +
+    (p.featuredImage
+      ? `<div class="pl-cover" style="background-image:url(${esc(p.featuredImage)})" role="img" aria-label="${esc(p.title)}"></div>`
+      : "") +
+    `<div class="pl-content">${bodyHtml}</div>` +
+    tags +
+    toc +
+    related +
+    comments +
+    `<aside style="margin-top:48px">${parts.widgets || ""}</aside>` +
+    `</div></div>`;
 }
 
 function pseudoPagePage(parts: PagePageParts): string {
   const p = parts.page;
-  return `<article style="max-width:760px;margin:0 auto;padding:24px 22px">` +
-    `<h1 style="font-family:var(--pl-display);font-size:36px;font-weight:800;margin:0 0 24px">${esc(p.title)}</h1>` +
-    `<div class="prose-cms">${parts.bodyHtml}</div>${parts.commentsHtml}</article>`;
+  const recent = parts.recent.length
+    ? plSection("最新发布", "recent entries", `count = ${parts.recent.length}`,
+        `<div class="pl-grid" style="grid-template-columns:repeat(auto-fill, minmax(220px, 1fr))">${parts.recent.map((r, i) =>
+          `<a href="${esc(r.url)}" class="pl-card" style="text-decoration:none;min-height:0">` +
+          `<div class="pl-card-meta"><span class="pl-num">N°${plPad(i + 1, 2)}</span>` +
+          `<span style="color:var(--pl-ink-3);opacity:0.5">·</span><span>${plYmdDot(r.publishedAt)}</span></div>` +
+          `<h3 style="font-size:15">${esc(r.title)}</h3></a>`).join("")}</div>`,
+        "padding-top:0;margin-top:48px")
+    : "";
+  const comments = p.commentStatus === "open"
+    ? `<section class="pl-section" style="padding-top:0;margin-top:32px"><div class="pl-section-head">` +
+      `<h2><span class="pl-section-mark"></span>评论 <small>response</small></h2></div>` +
+      `${parts.commentsHtml}</section>`
+    : "";
+  return `<div class="pl-article-wrap"><div class="pl-article-card">` +
+    `<a href="/" class="pl-back"><span>←</span><span>back home</span></a>` +
+    `<header class="pl-article-head">` +
+    `<div class="pl-article-meta">` +
+    `<span class="pl-cat">§ PAGE</span>` +
+    (p.publishedAt ? `<span>issue · <b class="pl-date">${plYmdDot(p.publishedAt)}</b></span>` : "") +
+    `<span><b>${p.views}</b> reads</span>` +
+    `</div>` +
+    `<h1 class="pl-title">${esc(p.title)}</h1>` +
+    (p.excerpt ? `<p class="pl-sub">${esc(p.excerpt)}</p>` : "") +
+    `</header>` +
+    (p.featuredImage
+      ? `<div class="pl-cover" style="background-image:url(${esc(p.featuredImage)})" role="img" aria-label="${esc(p.title)}"></div>`
+      : "") +
+    `<div class="pl-content">${parts.bodyHtml}</div>` +
+    recent +
+    comments +
+    `<aside style="margin-top:48px">${parts.widgets || ""}</aside>` +
+    `</div></div>`;
 }
 
 const pseudolinearChrome: ThemeChrome = {
@@ -557,9 +979,9 @@ const pseudolinearChrome: ThemeChrome = {
   headExtra: () => "",
   nav: (settings, items) => pseudoNav(settings, items),
   bodyOpen: (settings, items) =>
-    `<div class="th-pseudo">` + pseudoNav(settings, items) + `<main id="sk-main">`,
+    `<div class="th-pseudo">` + pseudoNav(settings, items) + `<main id="sk-main"><div class="pl-frame">`,
   bodyClose: (settings, footerHtml) =>
-    `</main>${footerHtml}</div>`,
+    `</div></main>${footerHtml}</div>`,
   aside: () => "",
   footer: (settings) => pseudoFooter(settings),
   home: pseudoHome,
@@ -568,7 +990,16 @@ const pseudolinearChrome: ThemeChrome = {
   pagePage: pseudoPagePage,
 };
 
-const cmBodyFix = `<style id="rv-body-fix">body{background:#050a06;color:#9bff7a}</style>`;
+const cmBodyFix = `<style id="rv-body-fix">body,html{background:#050a06 !important;color:#9bff7a !important}</style>`;
+
+function cmDate(v: Date | string | null | undefined): string {
+  if (!v) return "—";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime())
+    ? "—"
+    : `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+}
+const cmPad = (n: number, w = 3) => String(n).padStart(w, "0");
 
 function cmNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
@@ -594,49 +1025,224 @@ function cmFooter(settings: Record<string, any>): string {
     `</div></div></footer>`;
 }
 
-function cmPostCard(p: PostView, idx: number): string {
+function cmSection(eyebrow: string, small: string, count: string, inner: string): string {
+  return `<section class="cm-section"><div class="cm-section-head">` +
+    `<h2>${esc(eyebrow)} <small>${small}</small></h2>` +
+    (count ? `<span class="cm-count">${count}</span>` : "") +
+    `</div>${inner}</section>`;
+}
+
+function cmPostCard(p: PostView, idx: number, total: number): string {
   const cat = (p.categories || [])[0];
-  const catHtml = cat ? `<span class="cm-cat">${esc(cat.name)}</span>` : "";
+  const catHtml = cat ? `<span>·</span><span class="cm-cat">${esc(cat.name)}</span>` : "";
+  const slug = String(p.slug || p.url || "").replace(/^\/+|\/+$/g, "").split("/").pop() || "";
   return `<article class="cm-card">` +
-    `<div class="cm-card-meta"><span class="cm-num">${String(idx + 1).padStart(2, "0")}</span>${catHtml}<span>${fmtDate(p.publishedAt)}</span></div>` +
+    `<div class="cm-card-meta"><span class="cm-num">N°${cmPad(total - idx, 2)}</span><span>·</span><span>${cmDate(p.publishedAt)}</span>${catHtml}</div>` +
     `<h3><a href="${esc(p.url)}">${esc(p.title)}</a></h3>` +
     (p.excerpt ? `<p>${esc(p.excerpt)}</p>` : "") +
+    `<a href="${esc(p.url)}" class="cm-read">cat ${esc(slug)}</a>` +
     `</article>`;
 }
 
+function cmPostRow(p: PostView, idx: number, total: number): string {
+  return `<div class="cm-row">` +
+    `<span class="cm-num">N°${cmPad(total - idx, 2)}</span>` +
+    `<h3><a href="${esc(p.url)}">${esc(p.title)}</a></h3>` +
+    `<span class="cm-date">${cmDate(p.publishedAt)}</span></div>`;
+}
+
+function cmCardsHtml(items: PostView[]): string {
+  if (!items.length) return `<div class="cm-empty">// no entries</div>`;
+  return `<div class="cm-grid">${items.map((p, i) => cmPostCard(p, i, items.length)).join("")}</div>`;
+}
+
+function cmRowsHtml(items: PostView[]): string {
+  if (!items.length) return `<div class="cm-empty">// no entries</div>`;
+  return `<div class="cm-list">${items.map((p, i) => cmPostRow(p, i, items.length)).join("")}</div>`;
+}
+
+function cmPager(page: number, totalPages: number, hrefFor: (p: number) => string): string {
+  if (totalPages <= 1) return "";
+  const nums: string[] = [];
+  for (let i = 1; i <= totalPages; i++) {
+    nums.push(i === page ? `<span class="cm-pager-current">${i}</span>` : `<a href="${esc(hrefFor(i))}">${i}</a>`);
+  }
+  return `<nav class="cm-pager">` +
+    (page > 1 ? `<a href="${esc(hrefFor(page - 1))}"><span>&lt;</span><span>prev</span></a>` : "") +
+    nums.join("") +
+    (page < totalPages ? `<a href="${esc(hrefFor(page + 1))}"><span>next</span><span>&gt;</span></a>` : "") +
+    `</nav>`;
+}
+
+function cmWidgets(widgetsHtml: string, withSmall = true): string {
+  const h2 = withSmall
+    ? `<h2>widgets <small>// optional modules</small></h2>`
+    : `<h2>widgets</h2>`;
+  return `<section class="cm-section"><div class="cm-section-head">${h2}</div>` +
+    `<div class="cm-side">${widgetsHtml}</div></section>`;
+}
+
+function cmMiniCard(p: PostView, idx: number, total: number): string {
+  return `<a href="${esc(p.url)}" class="cm-card" style="min-height:0">` +
+    `<div class="cm-card-meta"><span class="cm-num">N°${cmPad(total - idx, 2)}</span>` +
+    `<span>·</span><span>${cmDate(p.publishedAt)}</span></div>` +
+    `<h3 style="font-size:15">${esc(p.title)}</h3></a>`;
+}
+
 function cmHome(parts: HomeParts): string {
+  const settings = parts.settings as Record<string, any>;
   const all = [...parts.hero, ...parts.latest];
-  const cards = all.map((p, i) => cmPostCard(p, i)).join("");
-  return `<div class="cm-hero"><h1 style="font-size:20px;color:var(--cm-accent)">> ls -la /blog</h1>` +
-    `<p style="color:var(--cm-ink-3);font-size:13px">总共有 ${all.length} 篇文章</p></div>` +
-    `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px">${cards}</div>`;
+  const total = parts.total ?? all.length;
+  const cats = parts.cats || [];
+  const widgets = parts.widgets || "";
+  const year = new Date().getFullYear();
+  const blogIndex = parts.blogIndex || "/blog";
+  const tagline = settings.tagline || settings.siteDescription || "a quiet log of things noticed, built and written down.";
+  const sub = settings.siteDescription || "Running a small TTY session of the web. Type a command, read a post, exit cleanly.";
+  const hero = `<section class="cm-hero">` +
+    `<pre class="cm-boot">[ OK ]  codeman-os v1.0.0 .............. loaded
+[ OK ]  tty1 ........................... online
+[ OK ]  mount /var/log/articles ........ ${cmPad(total, 4)} entries
+[ OK ]  network ......................... ${esc(String(settings.siteTitle ?? ""))}
+[ OK ]  uptime ........................ ${year}-Q${Math.ceil((new Date().getMonth() + 1) / 3)}</pre>` +
+    `<div class="cm-prompt-line"><span>cat</span><b>${esc(String(settings.siteTitle ?? ""))}.log</b><span>| less</span></div>` +
+    `<h1 class="cm-title">// <b>${esc(String(settings.siteTitle ?? ""))}</b><br />${esc(String(tagline))}</h1>` +
+    `<p class="cm-sub">${esc(String(sub))}</p>` +
+    `<div class="cm-actions">` +
+    `<a href="${esc(blogIndex)}" class="cm-btn cm-btn-primary"><span>$</span> ls ./posts --all</a>` +
+    `<a href="${esc(blogIndex)}?sort=recent" class="cm-btn cm-btn-ghost"><span>$</span> tail -f ./recent.log</a>` +
+    `</div>` +
+    `<div class="cm-meta">` +
+    `<div>entries<b>${cmPad(total, 3)}</b></div>` +
+    `<div>categories<b>${cmPad(cats.length, 3)}</b></div>` +
+    `<div>uptime<b>${year - 2020}+y</b></div>` +
+    `</div></section>`;
+  const recentItems = all.slice(0, 9);
+  const recent = cmSection("recent log", `// last ${recentItems.length} writes`, "$ ls -lt ./posts | head -9", cmCardsHtml(recentItems));
+  const catSection = cats.length
+    ? cmSection("categories", "// dirs under /blog", `$ ls /blog | wc -l = ${cats.length}`,
+        `<div class="cm-grid">${cats.slice(0, 6).map((c) =>
+          `<a href="${esc(c.url)}" class="cm-card" style="min-height:0"><div class="cm-card-meta">` +
+          `<span class="cm-num">DIR</span><span>·</span><span>${(c as any).postCount ?? 0} files</span></div>` +
+          `<h3 style="font-size:15">./${esc(c.slug)}/</h3></a>`).join("")}</div>`)
+    : "";
+  return `<div>${hero}${recent}${catSection}${cmWidgets(widgets)}</div>`;
 }
 
 function cmListPage(parts: ListParts): string {
-  const cards = parts.items.map((p, i) => cmPostCard(p, i)).join("");
-  const pager = parts.showPager !== false ? pagerHtml(parts.page, parts.totalPages, parts.hrefFor) : "";
-  return `<div><div class="cm-hero"><h1 style="font-size:18px;color:var(--cm-accent)">> ${esc(parts.title)}</h1>` +
-    `<p style="color:var(--cm-ink-3);font-size:13px">${esc(parts.sub)}</p></div>` +
+  const isBlog = parts.variant === "blog";
+  const isCategory = parts.variant === "category";
+  const isSearch = parts.variant === "search";
+  const pager = parts.showPager !== false ? cmPager(parts.page, parts.totalPages, parts.hrefFor) : "";
+  let small: string;
+  let count: string;
+  let body: string;
+  if (isBlog) {
+    small = `// archive, page ${parts.page}/${parts.totalPages}`;
+    count = `total = ${parts.total ?? parts.items.length}`;
+    body = cmRowsHtml(parts.items) + pager;
+  } else if (isCategory) {
+    small = `/${esc(parts.title)}`;
+    count = `${parts.items.length} files`;
+    body = cmCardsHtml(parts.items);
+  } else if (isSearch) {
+    const cleaned = (parts.query ?? "").trim();
+    small = cleaned ? `"${esc(cleaned)}"` : "—";
+    count = cleaned ? `${parts.items.length} matches` : "—";
+    body = cleaned ? cmCardsHtml(parts.items) : `<div class="cm-empty">// type a query in the top bar</div>`;
+  } else {
+    small = `/${esc(parts.title)}`;
+    count = "";
+    body = cmCardsHtml(parts.items);
+  }
+  const eyebrow = isBlog ? "$ ls /blog" : isCategory ? "$ cd /blog" : "$ grep -ri";
+
+  return `<div>` +
+    cmSection(eyebrow, small, count, body) +
+    (isBlog ? cmWidgets(parts.widgets || "", false) : "") +
     (parts.extra || "") +
-    `<div class="cm-list">${cards}</div>${pager}</div>`;
+    `</div>`;
 }
 
 function cmPostPage(parts: PostPageParts): string {
   const p = parts.post;
-  return `<article><div class="cm-hero">` +
-    `<h1 style="font-size:20px;color:var(--cm-accent-2)">> cat ${esc(p.slug)}.md</h1>` +
-    `<div style="display:flex;gap:12px;font-size:12px;color:var(--cm-ink-3);margin-top:8px">` +
-    `<span>${esc(p.author?.name ?? "unknown")}</span><time>${fmtDate(p.publishedAt)}</time><span>${p.views} reads</span>` +
-    `</div>${parts.metaHtml}</div>` +
-    `<div class="prose-cms">${parts.bodyHtml}</div>` +
-    parts.tagsHtml + parts.shareHtml + parts.commentsHtml +
+  const blogIndex = parts.blogIndex || "/blog";
+  const cat = (p.categories || [])[0];
+  const catTag = cat ? `[${esc(cat.name)}]` : "[ARTICLE]";
+
+  const headings: { id: string; text: string }[] = [];
+  const bodyHtml = parts.bodyHtml.replace(/<h([23])([^>]*)>([\s\S]*?)<\/h\1>/gi, (_m, lv, attrs, inner) => {
+    const text = inner.replace(/<[^>]+>/g, "").trim();
+    const id = `${p.slug}-h${headings.length}`;
+    if (text) headings.push({ id, text });
+    return `<h${lv} id="${id}">${inner}</h${lv}>`;
+  });
+  const toc = headings.length
+    ? cmSection("table of contents", `// ${headings.length} anchors`, "",
+        `<div class="cm-list">${headings.map((h, i) =>
+          `<div class="cm-row" style="grid-template-columns:60px 1fr">` +
+          `<span class="cm-num">N°${cmPad(i + 1, 2)}</span>` +
+          `<a href="#${h.id}" style="color:var(--cm-ink-2);font-size:13px;text-decoration:none">${esc(h.text)}</a></div>`).join("")}</div>`)
+    : "";
+  const related = parts.related.length
+    ? cmSection("related", "// other reads", `count = ${parts.related.length}`,
+        `<div class="cm-grid">${parts.related.map((r, i) =>
+          `<a href="${esc(r.url)}" class="cm-card" style="min-height:0"><div class="cm-card-meta">` +
+          `<span class="cm-num">N°${cmPad(parts.related.length - i, 2)}</span><span>·</span><span>${cmDate(r.publishedAt)}</span></div>` +
+          `<h3 style="font-size:15">${esc(r.title)}</h3></a>`).join("")}</div>`)
+    : "";
+  const tags = p.tags?.length
+    ? `<div class="cm-tags">${p.tags.map((t) => `<a href="${esc(t.url || "#")}" class="cm-tag">${esc(t.name)}</a>`).join("")}</div>`
+    : "";
+  return `<article class="cm-article">` +
+    `<a href="${esc(blogIndex)}" class="cm-back">cd ..</a>` +
+    `<div class="cm-article-meta">` +
+    `<span class="cm-cat">${catTag}</span>` +
+    `<span>date = <b>${cmDate(p.publishedAt)}</b></span>` +
+    `<span>views = <b>${p.views}</b></span>` +
+    `<span>replies = <b>${p.commentsCount}</b></span>` +
+    `</div>` +
+    `<h1 class="cm-title">${esc(p.title)}</h1>` +
+    (p.excerpt ? `<p class="cm-sub">${esc(p.excerpt)}</p>` : "") +
+    (p.featuredImage
+      ? `<div class="cm-cover" style="background-image:url(${esc(p.featuredImage)})" role="img" aria-label="${esc(p.title)}"></div>`
+      : "") +
+    `<div class="cm-content">${bodyHtml}</div>` +
+    tags +
+    toc +
+    related +
+    cmSection("log replies", `// ${p.commentsCount} response(s)`, "", parts.commentsHtml) +
+    cmWidgets(parts.widgets || "", false) +
     `</article>`;
 }
 
 function cmPagePage(parts: PagePageParts): string {
   const p = parts.page;
-  return `<article><h1 style="font-size:20px;color:var(--cm-accent-2);margin:0 0 24px">> ${esc(p.title)}</h1>` +
-    `<div class="prose-cms">${parts.bodyHtml}</div>${parts.commentsHtml}</article>`;
+  const meta = `<div class="cm-article-meta">` +
+    `<span class="cm-cat">[PAGE]</span>` +
+    (p.publishedAt ? `<span>date = <b>${cmDate(p.publishedAt)}</b></span>` : "") +
+    `<span>views = <b>${p.views}</b></span>` +
+    `</div>`;
+  const recent = parts.recent.length
+    ? cmSection("recent", `// last ${parts.recent.length} writes`, "",
+        `<div class="cm-grid">${parts.recent.map((r, i) => cmMiniCard(r, i, parts.recent.length)).join("")}</div>`)
+    : "";
+  const comments = p.commentStatus === "open"
+    ? `<section class="cm-section"><div class="cm-section-head"><h2>log replies</h2></div>${parts.commentsHtml}</section>`
+    : "";
+  return `<article class="cm-article">` +
+    `<a href="/" class="cm-back">cd ..</a>` +
+    meta +
+    `<h1 class="cm-title">${esc(p.title)}</h1>` +
+    (p.excerpt ? `<p class="cm-sub">${esc(p.excerpt)}</p>` : "") +
+    (p.featuredImage
+      ? `<div class="cm-cover" style="background-image:url(${esc(p.featuredImage)})" role="img" aria-label="${esc(p.title)}"></div>`
+      : "") +
+    `<div class="cm-content">${parts.bodyHtml}</div>` +
+    recent +
+    comments +
+    cmWidgets(parts.widgets || "", false) +
+    `</article>`;
 }
 
 const codemanChrome: ThemeChrome = {
@@ -645,11 +1251,12 @@ const codemanChrome: ThemeChrome = {
   bodyFix: () => cmBodyFix,
   headExtra: () => "",
   nav: (settings, items) => cmNav(settings, items),
+
   bodyOpen: (settings, items) =>
     `<div class="cm-crt">` + cmNav(settings, items) +
-    `<main id="sk-main"><div class="cm-window"><div class="cm-window-inner">`,
+    `<main id="sk-main"><div class="cm-window"><div class="cm-window-inner"><div class="cm-frame">`,
   bodyClose: (settings, footerHtml) =>
-    `</div></div></main>${footerHtml}</div>`,
+    `</div></div></div></main>${footerHtml}</div>`,
   aside: () => "",
   footer: (settings) => cmFooter(settings),
   home: cmHome,
@@ -681,35 +1288,42 @@ function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
   const logo = settings.logoUrl
     ? `<img src="${esc(settings.logoUrl)}" alt="${title}">`
     : `<span>${title}</span>`;
+
+  const activeIdx = items.findIndex(
+    (it) => bmixNavActive(settings, it.url) || (it.children || []).some((c) => bmixNavActive(settings, c.url)),
+  );
   const lis = items
     .map((it, i) => {
+      const ic = bmixIconFile(it.icon, 12);
       const kids = it.children?.length
         ? `<span class="bm-caret" aria-hidden="true"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>` +
           `<ul class="bm-submenu">${(it.children || [])
             .map(
-              (c) =>
-                `<li><a href="${esc(c.url)}"${c.target ? ` target="${esc(c.target)}" rel="noopener noreferrer"` : ""}>${esc(c.label)}</a></li>`,
+              (c) => {
+                const cAct = bmixNavActive(settings, c.url);
+                return `<li${cAct ? ' class="is-active"' : ""}><a href="${esc(c.url)}" target="${c.target === "_blank" ? "_blank" : "_self"}"${c.target === "_blank" ? ' rel="noopener noreferrer"' : ""}${cAct ? ' aria-current="page"' : ""}>${bmixIconFile(c.icon, 12) ? `<span class="bm-nav-icon">${bmixIconFile(c.icon, 12)}</span>` : ""}${esc(c.label)}</a></li>`;
+              },
             )
             .join("")}</ul>`
         : "";
-      const kidsActive = (it.children || []).some((c) => bmixNavActive(settings, c.url));
-      const selfActive = bmixNavActive(settings, it.url);
-      const active = selfActive || kidsActive;
+      const active = i === activeIdx;
       const cls = [kids ? "bm-has-sub" : "", active ? "is-active" : ""].filter(Boolean).join(" ");
       return `<li data-nav-index="${i}"${cls ? ` class="${cls}"` : ""}>` +
-        `<a href="${esc(it.url)}"${it.target ? ` target="${esc(it.target)}" rel="noopener noreferrer"` : ""} class="bm-nav-link"${active ? ' aria-current="page"' : ""}>${esc(it.label)}</a>${kids}</li>`;
+        `<a href="${esc(it.url)}" target="${it.target === "_blank" ? "_blank" : "_self"}"${it.target === "_blank" ? ' rel="noopener noreferrer"' : ""} class="bm-nav-link"${active ? ' aria-current="page"' : ""}>${ic ? `<span class="bm-nav-icon">${ic}</span>` : ""}${esc(it.label)}</a>${kids}</li>`;
     })
     .join("");
+  const onHome = String(settings.__pathname ?? "/").replace(/\/+$/, "") === "" || String(settings.__pathname ?? "/") === "/";
+  const logoCls = onHome ? "logo flex items-center router-link-active router-link-exact-active" : "logo flex items-center";
   return `<div class="nav-top">` +
     `<div class="nav at-top" data-rv-navbar>` +
-    `<div class="nav-content container-np flex items-center">` +
-    `<button type="button" class="mobile-menu-btn flex-col justify-center" aria-label="菜单" aria-expanded="false" data-rv-menu-btn><div></div><div></div><div></div></button>` +
-    `<a href="/" class="logo flex items-center">${logo}</a>` +
-    `<button type="button" class="mobile-sidebar-btn" aria-label="个人信息" style="margin-left:auto" data-rv-sidebar-btn><div class="sidebar-icon"><div class="sidebar-icon-sidebar"><div></div><div></div><div></div></div></div></button>` +
-    `<div class="menu flex-grow justify-end" data-rv-menunav>` +
-    `<div class="pf_scroller" data-rv-scroller>` +
+    `<div class="nav-content container-np flex items-center xxs:flex-wrap xs:flex-wrap">` +
+    `<button type="button" class="mobile-menu-btn sm:hidden md:hidden lg:hidden xl:hidden flex flex-col justify-center" aria-label="菜单" aria-expanded="false" data-rv-menu-btn><div></div><div></div><div></div></button>` +
+    `<a href="/" class="${logoCls}"${onHome ? ' aria-current="page"' : ""}>${logo}</a>` +
+    `<button type="button" class="mobile-sidebar-btn md:hidden lg:hidden xl:hidden" aria-label="个人信息" aria-expanded="false" style="margin-left:auto" data-rv-sidebar-btn><div class="sidebar-icon flex justify-end"><div class="sidebar-icon-sidebar"><div></div><div></div><div></div></div></div></button>` +
+    `<div class="menu flex-grow xxs:order-last xs:order-last flex justify-end xxs:justify-start xs:justify-start" data-rv-menunav>` +
+    `<div class="pf_scroller flex" data-rv-scroller>` +
     `<ul class="menu" data-level="0">` +
-    `<li class="anchor anchor-first" aria-hidden="true" data-rv-anchor style="transform:translateX(0px);width:0;opacity:0;left:0"></li>` +
+    `<li class="anchor${activeIdx === 0 ? " anchor-first" : ""}" aria-hidden="true" data-rv-anchor style="transform:translateX(0px);width:0;opacity:0;left:0"></li>` +
     lis +
     `</ul></div></div>` +
     `<div class="menu-funcs flex items-center">` +
@@ -718,8 +1332,8 @@ function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
       `<span class="theme-toggle-ic">${bmixIc("moon", 15)}</span>` +
     `</button>` +
     `</span>` +
-    `<span class="self-center sf-search">` +
-      `<button type="button" class="nav-search cursor-hand" aria-label="搜索" aria-expanded="false">${bmixIc("search", 16)}</button>` +
+    `<span class="self-center">` +
+      `<div class="sf-search"><button type="button" class="nav-search cursor-hand" aria-label="搜索" aria-expanded="false">${bmixIc("search", 16)}</button></div>` +
     `</span>` +
     `</div>` +
     `</div></div></div>`;
@@ -728,11 +1342,23 @@ function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
 function bmixFooter(settings: Record<string, any>, widgetsHtml: string): string {
   const year = new Date().getFullYear();
   const copyright = settings.footerText || `Designed &amp; Coded by oboext © ${year} ${settings.siteTitle}`;
-  return `<footer style="padding:64px 0;font-size:12px;position:relative">` +
-    (widgetsHtml ? `<div class="container-np" style="padding:0 40px;margin-bottom:24px">${widgetsHtml}</div>` : "") +
-    `<div class="container-np" style="padding:0 40px">` +
-    `<div style="text-align:right;color:var(--muted)">${copyright}</div>` +
-    (settings.icpNumber ? `<div style="margin-top:16px;text-align:right"><a href="https://beian.miit.gov.cn" target="_blank" rel="noopener noreferrer" style="color:var(--muted);text-decoration:none">${esc(settings.icpNumber as string)}</a></div>` : "") +
+  const links: any[] = Array.isArray(settings.footerLinks) ? settings.footerLinks : [];
+  const linkCls = 'class="flex gx-3 items-center text-embossed hover:text-primary-gray"';
+  const linksHtml = links.length
+    ? links
+        .map(
+          (l: any) =>
+            `<a ${linkCls} href="${esc(l.url || "#")}" target="_blank" rel="noopener noreferrer">${l.image ? `<img src="${esc(l.image)}" alt="">` : ""}<span>${String(l.text ?? "")}</span></a>`,
+        )
+        .join("")
+    : settings.icpNumber
+      ? `<a ${linkCls} href="https://beian.miit.gov.cn" target="_blank" rel="noopener noreferrer"><span>${esc(settings.icpNumber as string)}</span></a>`
+      : "";
+  return `<footer class="py-16 text-xs relative">` +
+    (widgetsHtml ? `<div class="container-np px-10">${widgetsHtml}</div>` : "") +
+    `<div class="container-np px-10" style="margin-inline:auto">` +
+    `<div class="text-right text-primary-gray text-bulge-primary-gray">${copyright}</div>` +
+    `<div class="mt-4 flex flex-wrap gx-8 gy-3 justify-end">${linksHtml}</div>` +
     `</div></footer>`;
 }
 
@@ -770,9 +1396,30 @@ function bmixSplitTitle(raw: string): { title1: string; title2: string } {
   return { title1: raw, title2: "" };
 }
 
+function bmixYmd(v: Date | string | null | undefined): string {
+  if (!v) return "";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? "" : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+const BMIX_ICON_ALIAS: Record<string, string> = {
+  comments: "message-square-text",
+  "bars-staggered": "layout-list",
+  more: "ellipsis",
+  "ranking-star": "award",
+  "right-to-bracket": "log-in",
+  "caret-down": "chevron-down",
+  "house-user": "house",
+};
+function bmixIconName(name: string): string {
+  return BMIX_ICON_ALIAS[name] || name;
+}
+
 function bmixIc(icon: string, size: number, marginRight = 0): string {
   const px = Math.round(size * 1.35);
   const mr = marginRight ? `margin-right:${marginRight}px` : "";
+  const fromFile = lucideSvg(bmixIconName(icon), px, "", mr);
+  if (fromFile) return fromFile;
   const common = `width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:inline-block;vertical-align:-0.125em;flex-shrink:0;${mr}"`;
   if (icon === "sun") {
     return `<svg ${common}><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
@@ -797,6 +1444,35 @@ function bmixIc(icon: string, size: number, marginRight = 0): string {
   };
   const circle = icon === "eye" ? `<circle cx="12" cy="12" r="3"/>` : "";
   return `<svg ${common}>${circle}<path d="${paths[icon] || paths.bookmark}"/></svg>`;
+}
+
+const iconFileCache = new Map<string, string | null>();
+
+const LUCIDE_CLASS_ALIAS: Record<string, string> = { "share-2": "share2" };
+
+function lucideSvg(name: string, px: number, cls = "", styleExtra = ""): string {
+  let svg = iconFileCache.get(name);
+  if (svg === undefined) {
+    try { svg = fs.readFileSync(path.join(process.cwd(), "oboext/public/icons", `${name}.svg`), "utf8"); }
+    catch { svg = null; }
+    iconFileCache.set(name, svg);
+  }
+  if (!svg) return "";
+  const c = cls ? ` ${cls}` : "";
+  const style = `display:inline-block;vertical-align:-0.125em;flex-shrink:0${styleExtra ? ";" + styleExtra : ""}`;
+  return svg
+    .replace(/\s(?:width|height)="\d+"/g, "")
+    .replace(/^<svg\b[^>]*?\bxmlns="[^"]*"/, (m) => `${m} width="${px}" height="${px}"`)
+    .replace(/stroke="#[0-9a-fA-F]{3,8}"/, 'stroke="currentColor"')
+    .replace(/class="lucide lucide-[^"]*"/, `class="lucide lucide-${LUCIDE_CLASS_ALIAS[name] || name}${c}"`)
+    .replace(/(<svg\b[^>]*)>/, `$1 style="${style}">`);
+}
+
+function bmixIconFile(name: string | null | undefined, size: number, cls = ""): string {
+  if (!name) return "";
+  const key = String(name).trim();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key)) return "";
+  return lucideSvg(key, Math.round(size * 1.35), cls);
 }
 
 function bmixPostCard(p: PostView, idx: number): string {
@@ -827,18 +1503,25 @@ function bmixSectionTitle(text: string): string {
 
 function bmixPager(page: number, total: number, hrefFor: (p: number) => string): string {
   if (total <= 1) return "";
-  const link = (href: string, label: string) => `<a href="${esc(href)}" style="color:var(--primary-color);text-decoration:none;padding:4px 11px;border-radius:6px;display:inline-block">${label}</a>`;
-  const nums: string[] = [];
-  for (let p = 1; p <= total; p++) {
-    nums.push(p === page
-      ? `<li style="background:var(--primary-color);color:#fff;border-radius:6px;padding:4px 11px">${p}</li>`
-      : `<li>${link(hrefFor(p), String(p))}</li>`);
-  }
-  return `<ul class="main-pagination" style="display:flex;gap:6px;list-style:none;padding:28px 0 8px;justify-content:center;align-items:center;flex-wrap:wrap">` +
-    (page > 1 ? `<li>${link(hrefFor(page - 1), "&laquo;")}</li>` : "") +
-    nums.join("") +
-    (page < total ? `<li>${link(hrefFor(page + 1), "&raquo;")}</li>` : "") +
-    `</ul>`;
+  const show = {
+    first: page > 3,
+    prev2: page >= 3,
+    prev1: page >= 2,
+    next1: page <= total - 1,
+    next2: page <= total - 2,
+    last: page <= total - 3,
+  };
+  const cells: string[] = [];
+  if (show.first) cells.push(`<li class="first" data-tip="第一页"><a href="${esc(hrefFor(1))}"><span>1</span>${bmixIc("chevrons-left", 12)}</a></li>`);
+  if (show.prev2) cells.push(`<li><a href="${esc(hrefFor(page - 2))}">${page - 2}</a></li>`);
+  if (show.prev1) cells.push(`<li><a href="${esc(hrefFor(page - 1))}">${page - 1}</a></li>`);
+  cells.push(`<li class="active"><a aria-current="page">${page}</a></li>`);
+  if (show.next1) cells.push(`<li><a href="${esc(hrefFor(page + 1))}">${page + 1}</a></li>`);
+  if (show.next2) cells.push(`<li><a href="${esc(hrefFor(page + 2))}">${page + 2}</a></li>`);
+  if (show.last) cells.push(`<li class="last" data-tip="最后一页"><a href="${esc(hrefFor(total))}">${bmixIc("chevrons-right", 12)}<span>${total}</span></a></li>`);
+  return `<div class="main-pagination-wrapper"><ul class="main-pagination">` +
+    `<li class="anchor" aria-hidden style="transform:translateX(0px);width:0px;transition-duration:0s"></li>` +
+    cells.join("") + `</ul></div>`;
 }
 
 function bmixHeroScene(p: PostView, i: number): string {
@@ -852,7 +1535,9 @@ function bmixHeroScene(p: PostView, i: number): string {
     : "";
   const meta = `<div class="metas"><span>${bmixIc("heart", 12)} ${p.likes ?? 0}</span>` +
     `<span class="ml-8">${bmixIc("comments", 12)} ${p.commentsCount ?? 0}</span>` +
-    `<span class="ml-8">${bmixIc("eye", 12)} ${p.views ?? 0}</span></div>`;
+    `<span class="ml-8">${bmixIc("eye", 12)} ${p.views ?? 0}</span>` +
+    (p.publishedAt ? `<span class="ml-8">${bmixIc("clock", 12)} ${bmixYmd(p.publishedAt)}</span>` : "") +
+    `</div>`;
   return `<div class="scene ${role}"><a href="${esc(p.url)}" class="card-container${darkCls}" style="${vars}" aria-label="${esc(p.title)}">` +
     `<div class="bg-wrapper">${img}</div>` +
     `<div class="card-wrapper"><div class="card flex"><div class="info flex flex-col justify-center">` +
@@ -879,7 +1564,12 @@ function bmixBanner(posts: PostView[], max: number): string {
 }
 
 function bmixCatNav(activeHref: string, cats: TaxRef[], blogIndex: string): string {
-  const isActive = (href: string) => activeHref === href;
+  const isActive = (href: string) => {
+    if (!activeHref) return false;
+    if (href === activeHref) return true;
+    if (href === "/" || href === blogIndex) return false;
+    return activeHref.startsWith(href);
+  };
   const parentIds = new Set(cats.filter((c) => (c as any).parentId != null).map((c) => (c as any).parentId));
   const roots = cats.filter((c) => (c as any).parentId == null || !parentIds.has((c as any).parentId));
   const items: string[] = [];
@@ -890,11 +1580,11 @@ function bmixCatNav(activeHref: string, cats: TaxRef[], blogIndex: string): stri
     const children = cats.filter((c) => (c as any).parentId === (root as any).id);
     if (children.length) {
       const sub = children
-        .map((c) => `<li class="${isActive(c.url) ? "is-active" : ""}"><a href="${esc(c.url)}" target="_self" aria-current="${isActive(c.url) ? "page" : ""}">${bmixIc("bookmark", 11, 6)}${esc(c.name)}</a></li>`)
+        .map((c) => `<li class="${isActive(c.url) ? "is-active" : ""}"><a href="${esc(c.url)}" target="_self" aria-current="${isActive(c.url) ? "page" : ""}">${c.icon ? bmixIconFile(c.icon, 11) : bmixIc("bookmark", 11, 6)}${esc(c.name)}</a></li>`)
         .join("");
-      items.push(`<li data-ai="${ai++}" class="has-submenu${isActive(root.url) || children.some((c) => isActive(c.url)) ? " is-active" : ""}"><span class="pill-toggle" role="link" aria-expanded="false">${bmixIc("book", 13, 6)}${esc(root.name)}<svg class="caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span><ul class="submenu" data-level="1">${sub}</ul></li>`);
+      items.push(`<li data-ai="${ai++}" class="has-submenu${isActive(root.url) || children.some((c) => isActive(c.url)) ? " is-active" : ""}"><span class="pill-toggle" role="link" aria-expanded="false">${root.icon ? bmixIconFile(root.icon, 13) : bmixIc("book", 13, 6)}${esc(root.name)}${lucideSvg("chevron-down", 10, "caret")}</span><ul class="submenu" data-level="1">${sub}</ul></li>`);
     } else {
-      items.push(`<li data-ai="${ai++}" class="${isActive(root.url) ? "is-active" : ""}"><a href="${esc(root.url)}" target="_self" aria-current="${isActive(root.url) ? "page" : ""}">${bmixIc("bookmark", 13, 6)}${esc(root.name)}</a></li>`);
+      items.push(`<li data-ai="${ai++}" class="${isActive(root.url) ? "is-active" : ""}"><a href="${esc(root.url)}" target="_self" aria-current="${isActive(root.url) ? "page" : ""}">${root.icon ? bmixIconFile(root.icon, 13) : bmixIc("bookmark", 13, 6)}${esc(root.name)}</a></li>`);
     }
   }
   return `<div class="nav-cat"><div class="pf_scroller flex"><ul class="menu" data-level="0">` +
@@ -958,12 +1648,12 @@ function bmixRankings(
   return `<div class="widget-rankings mb-20" data-boards="${esc(boardsJson)}" data-default-tab="${esc(defaultTab)}"><div class="cat-title flex items-center extra-large justify-center"><div class="custom-icon mr-5">${bmixIc("ranking-star", 15)}</div><div class="content text-primary-gray text-bulge-primary-gray">排行榜</div></div>` +
     `<div class="rankings-wrapper relative">` + bgLayer +
     `<div class="rankings-tabs"><div class="rankings-tab-row"><div class="tab-anchor" style="transform:translate(${tabIndex * 100}%)"></div>${tabsHtml}</div></div>` +
-    `<div class="card-container"><div class="rankings" data-shown="${defaultTab}">${bmRankPane(boards, defaultTab, labels, GOLD, SILVER, BRONZE)}</div></div></div></div>`;
+    `<div class="card-container">${bmRankPane(boards, defaultTab, labels, GOLD, SILVER, BRONZE)}</div></div></div>`;
 }
 
 function bmixHomeArticleRow(p: PostView): string {
   const img = p.featuredImage
-    ? `background-image:url("${p.featuredImage.replace(/"/g, "%22")}")`
+    ? `background-image:${cssUrl(p.featuredImage)}`
     : "background-image:linear-gradient(135deg,#dce8f7,#bcd6f3)";
   return `<div class="article mb-10 flex items-center g-8"><a href="${esc(p.url)}" class="thumbnail flex-shrink-0" style="${img}"></a>` +
     `<span class="info"><a href="${esc(p.url)}" class="title block">${esc(p.title)}</a>` +
@@ -982,7 +1672,7 @@ function bmixHomeSidebar(posts: PostView[], settings: Record<string, unknown>, t
     (items[0]?.featuredImage as string) ||
     "linear-gradient(135deg,#7ba3e0,#b59df0)";
   const isGradient = avatarRaw.startsWith("linear-gradient");
-  const avatarStyle = isGradient ? `background-image:${avatarRaw}` : `background-image:url("${avatarRaw.replace(/"/g, "%22")}")`;
+  const avatarStyle = isGradient ? `background-image:${avatarRaw}` : `background-image:${cssUrl(avatarRaw)}`;
   const avatarNode = `<div class="avatar" style="${avatarStyle}"></div>`;
   const bloggerDesc = String(settings.tagline ?? settings.siteDescription ?? "Design a colorful life");
   return `<div class="panel"><div class="wrapper"><aside class="bmx-blocks">` +
@@ -995,7 +1685,7 @@ function bmixHomeSidebar(posts: PostView[], settings: Record<string, unknown>, t
 function bmixSection(title: string, to: string, icon: string | null, posts: PostView[]): string {
   const cards = posts.map((p, i) => bmixPostCard(p, i)).join("");
   const titleHtml = `<div class="cat-title flex items-center large">` +
-    (icon ? `<div class="custom-icon mr-5">${bmixIc(icon, 15)}</div>` : `<div class="icon flex default mr-5 ml-2"></div>`) +
+    (icon ? `<div class="custom-icon mr-5">${bmixIconFile(icon, 15)}</div>` : `<div class="icon flex default mr-5 ml-2"></div>`) +
     `<div class="content text-primary-gray text-bulge-primary-gray">${esc(title)}</div>` +
     `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span>` +
     `<a href="${esc(to)}" class="more-btn flex items-center justify-center text-sm r-full text-embossed truncate"><span class="flex items-center justify-center"><span class="more-text">更多</span>${bmixIc("chevron-right", 7)}</span></a></div></div>`;
@@ -1010,14 +1700,16 @@ function bmixHome(parts: HomeParts): string {
   const recent = parts.recent && parts.recent.length ? parts.recent : [...parts.hero, ...parts.latest];
   const inner = recent.length === 0
     ? `<p class="text-primary-gray" style="padding:24px">还没有已发布的文章。去后台发布一篇，或先导入示例内容吧。</p>`
-    : `<div class="recent-articles">${recent.slice(0, recentCount).map((p, i) => bmixPostCard(p, i)).join("")}</div>`;
-  const catTitle = `<div class="cat-title flex items-center large"><div class="icon flex default mr-5 ml-2"></div><div class="content text-primary-gray text-bulge-primary-gray">近期文章</div></div>`;
+    : `<div class="bmx-reveal"><div class="recent-articles">${recent.slice(0, recentCount).map((p, i) => bmixPostCard(p, i)).join("")}</div></div>`;
+  const catTitle = `<div class="cat-title flex items-center large"><div class="icon flex default mr-5 ml-2"></div><div class="content text-primary-gray text-bulge-primary-gray">近期文章</div>` +
+    `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span>` +
+    `<a href="${esc(parts.blogIndex || "/blog")}" class="more-btn flex items-center justify-center text-sm r-full text-embossed truncate"><span class="flex items-center justify-center"><span class="more-text">更多</span>${bmixIc("chevron-right", 7)}</span></a></div></div>`;
   const mainContent = `${catTitle}${inner}`;
   const sidebar = bmixHomeSidebar(recent, parts.settings, ts as Record<string, unknown>);
   const catNav = bmixCatNav("/", parts.cats, parts.blogIndex || "/blog");
   const banner = showHero ? bmixBanner(recent, bannerMax) : "";
   const rankings = bmixRankings(parts.rankings, parts.rankTabs);
-  const sections = (parts.sections || []).map((s) => bmixSection(s.row.title, s.row.category.url, s.row.icon, s.posts)).join("");
+  const sections = (parts.sections || []).map((s) => `<div class="bmx-reveal">${bmixSection(s.row.title, s.row.category.url, s.row.icon, s.posts)}</div>`).join("");
   return `<div class="home">` +
     banner +
     `<div class="content-wrapper flex container-np line reverse">` +
@@ -1030,36 +1722,50 @@ function bmixHome(parts: HomeParts): string {
 }
 
 function bmixListPage(parts: ListParts): string {
-  const cards = parts.items.map((p, i) => bmixPostCard(p, i)).join("");
-  const pager = parts.showPager !== false ? bmixPager(parts.page, parts.totalPages, parts.hrefFor) : "";
   const isBlog = parts.variant === "blog";
   const isCategory = parts.variant === "category";
+  const isSearch = parts.variant === "search";
   const blogIndex = parts.blogIndex || "/blog";
-  const catNav = bmixCatNav(parts.activeHref || (isBlog ? blogIndex : "/"), parts.cats || [], blogIndex);
+  const catNav = isSearch ? "" : bmixCatNav(parts.activeHref || (isBlog ? blogIndex : "/"), parts.cats || [], blogIndex);
 
   const hero = (parts.hero || []).filter((p) => p && p.url);
-  const showBanner = hero.length > 0;
+  const showBanner = !isSearch && hero.length > 0;
   const banner = showBanner ? bmixBanner(hero, parts.bannerMax || 5) : "";
 
+  const contentInner = isCategory
+    ? `<span class="inline-flex items-center gap-2">${parts.titleIcon ? bmixIconFile(parts.titleIcon, 15) : ""}${esc(parts.title)}${parts.titleDesc ? ` · ${esc(parts.titleDesc)}` : ""}</span>`
+    : esc(parts.title);
   const catTitle =
     `<div class="cat-title flex items-center large">` +
     `<div class="icon flex default mr-5 ml-2"></div>` +
-    `<div class="content text-primary-gray text-bulge-primary-gray">${esc(parts.title)}</div>` +
+    `<div class="content text-primary-gray text-bulge-primary-gray">${contentInner}</div>` +
     `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span></div></div>`;
 
-  const gridCls = isBlog || isCategory ? "blog-grid" : "list-grid";
-  const inner =
-    `<div class="list-switch-anim"><div class="${gridCls}">${cards}</div>${pager}</div>`;
-
-  return `<div class="list">` +
+  const gridCls = isBlog ? "blog-grid" : isSearch ? "recent-articles" : "list-grid";
+  const cards = parts.items.map((p, i) => bmixPostCard(p, i)).join("");
+  const pager = !isCategory && parts.showPager !== false ? bmixPager(parts.page, parts.totalPages, parts.hrefFor) : "";
+  const emptyHtml = `<p class="text-primary-gray" style="padding:24px">${esc(
+    parts.emptyHint || (isCategory ? "该分类下还没有文章。" : isSearch ? "没有匹配的文章。" : "还没有已发布的文章。"),
+  )}</p>`;
+  const body = cards
+    ?
+      isCategory
+      ? `<div class="${gridCls}">${cards}</div>${pager}`
+      : `<div class="list-switch-anim"><div class="${gridCls}">${cards}</div>${pager}</div>`
+    : emptyHtml;
+  const contentCls = showBanner ? "list-content" : "list-content list-content--gapped";
+  const drawer = parts.drawerPosts && parts.drawerPosts.length
+    ? `<div class="sidebar list-drawer-sidebar"><div class="pf_scroller sidebar-sticky"><div class="sidebar-content">${bmixHomeSidebar(parts.drawerPosts, parts.settings || {}, parts.themeSettings || {})}</div></div></div>`
+    : "";
+  return `<div class="${isCategory ? "term" : "list"}">` +
     banner +
-    `<div class="list-content">` +
+    `<div class="${contentCls}">` +
     catNav +
     catTitle +
-    (parts.sub ? `<p class="text-primary-gray" style="padding:0 2px">${esc(parts.sub)}</p>` : "") +
-    (parts.extra || "") +
-    inner +
-    `</div></div>`;
+    body +
+    `</div>` +
+    drawer +
+    `</div>`;
 }
 
 /** Inject stable h2/h3 ids so the side TOC anchors match them; captures the
@@ -1079,7 +1785,7 @@ function bmixHeadings(html: string, slug: string): { html: string; toc: { id: st
 /** One thumbnail+title+heart/comment/view row, same markup as the theme widgets. */
 function bmixSideRow(p: PostView): string {
   const img = p.featuredImage
-    ? `background-image:url("${p.featuredImage.replace(/"/g, "%22")}")`
+    ? `background-image:${cssUrl(p.featuredImage)}`
     : "background-image:linear-gradient(135deg,#dce8f7,#bcd6f3)";
   return `<div class="article mb-10 flex items-center g-8">` +
     `<a href="${esc(p.url)}" class="thumbnail flex-shrink-0" style="${img}"></a>` +
@@ -1114,22 +1820,6 @@ function bmixCommentHead(count: number): string {
   return `<div class="cat-title flex items-center large"><div class="custom-icon mr-5">${bmixIc("comments", 14)}</div>` +
     `<div class="content text-primary-gray text-bulge-primary-gray">${count} 条回应</div>` +
     `<div class="line flex-grow ml-8 flex items-center justify-end"></div></div>`;
-}
-
-function bmixThemeComments(html: string): string {
-  if (!html) return "";
-  let out = html;
-  out = out.replace(/<section class="sk-section sk-comments">/g, `<section class="bmx-blocks bmx-comments">`);
-  out = out.replace(/<section class="sk-section">/g, `<section class="bmx-blocks">`);
-  out = out.replace(
-    /<h2 class="title_style_01">评论<\/h2>/g,
-    `<div class="cat-title flex items-center large"><div class="custom-icon mr-5">${bmixIc("comments", 14)}</div>` +
-      `<div class="content text-primary-gray text-bulge-primary-gray">评论</div>` +
-      `<div class="line flex-grow ml-8 flex items-center justify-end"></div></div>`,
-  );
-  out = out.replace(/<h2 class="title_style_01">([^<]*)<\/h2>/g, (_, t) => `<div class="cat-title flex items-center large"><div class="content text-primary-gray text-bulge-primary-gray">${t}</div></div>`);
-  out = out.replace(/var\(--sk-primary\)/g, "var(--primary-color)");
-  return out;
 }
 
 function bmixPostSidebar(toc: { id: string; text: string; level: number }[], post: PostView, related: PostView[], popular: PostView[], randomPool: PostView[]): string {
@@ -1198,17 +1888,84 @@ function bmixPostPage(parts: PostPageParts): string {
     (parts.commentsHtml
       ? `<div class="model-wrapper"><div class="model">` +
         bmixCommentHead(p.commentsCount) +
-        bmixThemeComments(parts.commentsHtml) +
+        parts.commentsHtml +
         `</div></div>`
       : "") +
     `</div></div></div></div>`;
 }
 
+function bmixPageSideRow(p: PostView): string {
+  const img = p.featuredImage
+    ? `background-image:${cssUrl(p.featuredImage)}`
+    : "background-image:linear-gradient(135deg,#dce8f7,#bcd6f3)";
+  return `<div class="article mb-10 flex items-center g-8">` +
+    `<a href="${esc(p.url)}" class="thumbnail flex-shrink-0" style="${img}"></a>` +
+    `<span class="info"><a href="${esc(p.url)}" class="title block">${esc(p.title)}</a>` +
+    `<span class="metas flex gx-5 mt-1">` +
+    `<span class="text-primary">${bmixIc("comments", 10)} ${p.commentsCount ?? 0}</span>` +
+    `<span class="text-success">${bmixIc("eye", 10)} ${p.views ?? 0}</span>` +
+    `</span></span></div>`;
+}
+
 function bmixPagePage(parts: PagePageParts): string {
   const p = parts.page;
-  return `<article class="container-np" style="padding:24px 40px;max-width:860px">` +
-    `<h1 style="font-size:28px;font-weight:700;margin:0 0 24px">${esc(p.title)}</h1>` +
-    `<div class="prose-cms">${parts.bodyHtml}</div>${bmixThemeComments(parts.commentsHtml)}</article>`;
+  const { title1, title2 } = bmixSplitTitle(p.title);
+  const t = bmixCardTone(p.slug || p.url, 2, 0.8);
+  const vars = Object.entries(t.vars).map(([k, v]) => `${k}:${v}`).join(";");
+  const darkCls = t.dark ? " is-dark" : "";
+  const hasImage = !!p.featuredImage;
+  const imgUrl = hasImage ? esc(p.featuredImage!) : "";
+  const viewsInMeta = p.metas?.["bluemix_page_meta_views"] === "1";
+  const metas = viewsInMeta
+    ? `<div class="metas">` +
+      `<span>${bmixIc("heart", 12)} 0</span>` +
+      `<span class="ml-8">${bmixIc("comments", 12)} ${p.commentsCount ?? 0}</span>` +
+      `<span class="ml-8">${bmixIc("eye", 12)} ${p.views ?? 0}</span>` +
+      `</div>`
+    : "";
+  const heroCard = `<div class="card-container${darkCls} bg-blur" style="${vars}">` +
+    (hasImage
+      ? `<div class="bg-wrapper"><img class="bg" src="${imgUrl}" alt="${esc(title1)}" loading="eager"></div>`
+      : `<div class="bg-wrapper"></div>`) +
+    `<div class="card-wrapper"><div class="card flex">` +
+    `<div class="info flex flex-col justify-center">` +
+    `<div class="main-title ${title2 ? "type-2" : "type-1 truncate"}">` +
+    `<span class="block truncate">${esc(title1)}</span>` +
+    (title2 ? `<span class="block truncate">${esc(title2)}</span>` : "") +
+    `</div>${metas}</div>` +
+    (hasImage ? `<img src="${imgUrl}" alt="">` : "") +
+    `</div></div></div>`;
+  const recentRows = parts.recent.map(bmixPageSideRow).join("");
+  const sidebar = `<div class="panel"><div class="wrapper"><aside class="bmx-blocks">` +
+    `<div class="widget-title"><div class="title">最新文章</div></div>` +
+    `<div class="widget-articles mb-20">` +
+    (parts.recent.length === 0
+      ? `<div class="article mb-10 flex items-center g-8"><span class="info"><span class="title block text-primary-gray">暂无文章</span></span></div>`
+      : recentRows) +
+    `</div></aside></div></div>`;
+  const postview = !viewsInMeta
+    ? `<div class="single-postview text-right" style="display:flex;gap:16px;justify-content:flex-end;margin:4px 6px 26px;font-size:13px;color:var(--text-color-3)">` +
+      `<span class="meta">${bmixIc("eye", 13, 4)} ${p.views ?? 0} 阅读</span>` +
+      `<span class="meta">${bmixIc("comments", 13, 4)} ${p.commentsCount ?? 0} 回应</span>` +
+      `</div>`
+    : "";
+  const comments = p.commentStatus === "open" && parts.commentsHtml
+    ? `<div class="model-wrapper"><div class="model">` +
+      `<div class="cat-title flex items-center large"><div class="content text-primary-gray text-bulge-primary-gray">回应</div></div>` +
+      parts.commentsHtml +
+      `</div></div>`
+    : "";
+  return `<div class="single"><div data-post-type="page">` +
+    `<div class="coverflow-swiper" style="margin-bottom:8px"><div class="container-np"><div class="slider mx-10">` +
+    heroCard +
+    `</div></div></div>` +
+    `<div class="content-wrapper flex container-np line reverse">` +
+    `<div class="sidebar"><div class="pf_scroller sidebar-sticky"><div class="sidebar-content">${sidebar}</div></div></div>` +
+    `<div class="main-content">` +
+    `<div class="model-wrapper page"><div class="model"><article class="bmx-blocks">${parts.bodyHtml}</article></div></div>` +
+    postview +
+    comments +
+    `</div></div></div></div>`;
 }
 
 const BLUEMIX_VARS = `
@@ -1250,15 +2007,20 @@ const BLUEMIX_VARS = `
 const bluemixChrome: ThemeChrome = {
   slug: "bluemix",
   cssHref: () => themeCssHref("bluemix"),
-  bodyFix: () => `<style id="rv-body-fix">body{background:#e5e9ef;color:var(--text-color-2,#324057)}</style>`,
+  bodyFix: () => `<style id="rv-body-fix">body{background:#e5e9ef!important;color:var(--text-color-2)!important}html{background:#e5e9ef!important}</style>`,
   headExtra: () => `<style id="rv-theme-bluemix-vars">${BLUEMIX_VARS}</style>`,
   nav: (settings, items) => bmixNav(settings, items),
   bodyOpen: (settings, items) =>
-    `<div class="th-bluemix">` + bmixNav(settings, items) +
+    `<div class="th-bluemix">` +
+    `<svg width="0" height="0" aria-hidden="true" style="position:absolute"><defs><linearGradient id="bmx-cat-grad" x1="0" y1="0" x2="0" y2="1">` +
+    `<stop offset="20%" class="bmx-g-s" stop-color="#33bbff"></stop><stop offset="80%" class="bmx-g-e" stop-color="#1f8bff"></stop>` +
+    `</linearGradient></defs></svg>` +
+    bmixNav(settings, items) +
     `<main id="sk-main"><div class="pf-route-frame pf-init" data-bmx-frame>`,
   bodyClose: (settings, footerHtml) =>
     `</div></main>` +
-    `<div class="full-loading"><div class="lines"><div></div><div></div><div></div><div></div><div></div></div></div>` +
+    `<div class="full-loading show" aria-hidden="true"><div class="lines"><div></div><div></div><div></div><div></div><div></div></div></div>` +
+    `<noscript><style>.full-loading{display:none!important}.pf-route-frame{opacity:1!important;transform:none!important}</style></noscript>` +
     footerHtml + `</div>`,
   aside: () => "",
   footer: (settings, widgetsHtml) => bmixFooter(settings, widgetsHtml),

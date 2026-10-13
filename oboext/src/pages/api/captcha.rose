@@ -1,0 +1,16 @@
+<script>
+
+  import { apiGate, jsonFail } from "@server/admin";
+  import { getAdminSecurity, isEntryReferer } from "@server/security";
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const sec = await getAdminSecurity();
+      if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);
+      return {
+        enabled: sec.captchaEnabled,
+        mode: sec.captchaEnabled ? sec.captchaMode : null,
+      };
+    });
+  }
+</script>

@@ -1,0 +1,32 @@
+<script>
+
+  import { apiGate, jsonFail } from "@server/admin";
+  import { getAdminSecurity, isEntryReferer } from "@server/security";
+  import { getMemberSettings, isRegisterReferer } from "@server/members";
+  import { CAPTCHA_COOKIE, captchaSvg, generateCaptchaCode, signCaptchaToken } from "@server/captcha";
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const [sec, member] = await Promise.all([getAdminSecurity(), getMemberSettings()]);
+      if (!isEntryReferer(request, sec) && !isRegisterReferer(request, member)) {
+        return jsonFail("接口不存在", 404);
+      }
+      const builtinWanted =
+        sec.captchaMode === "builtin" &&
+        (sec.captchaEnabled || (member.registerEnabled && member.captchaEnabled));
+
+      if (!builtinWanted) return jsonFail("接口不存在", 404);
+
+      const code = generateCaptchaCode();
+      const token = await signCaptchaToken(code);
+      return new Response(captchaSvg(code), {
+        status: 200,
+        headers: {
+          "content-type": "image/svg+xml; charset=utf-8",
+          "cache-control": "no-store",
+          "set-cookie": `${CAPTCHA_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`,
+        },
+      });
+    });
+  }
+</script>

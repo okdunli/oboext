@@ -139,7 +139,7 @@
 
     // ------------------------------------------- theme static assets
     // /theme-assets/<slug>/<path> serves themes/<slug>/assets/<path> from disk
-    // (rankings medals, fonts, vendor scripts). Mirrors the original
+    // (rankings medals, fonts, vendor scripts). Mirrors the original app
     // /theme-assets route. GET/HEAD only, traversal-protected.
     if (rp.indexOf("/theme-assets/") === 0) {
       const rel = rp.slice("/theme-assets/".length);

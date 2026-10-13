@@ -4,7 +4,7 @@
  * Syncs plugins/ on disk into the `plugins` table (new folders are inserted
  * DISABLED — third-party code is never auto-executed), serves the admin list,
  * and makes sure every enabled plugin is imported and registered before a
- * request renders content. Differences from the original: no
+ * request renders content. Differences from the original app: no
  * ensureBootstrap (ensureMigrations covers it) and no public-cache bump (this
  * app renders per request with no cross-response cache).
  */

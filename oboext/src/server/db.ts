@@ -1,5 +1,5 @@
 /**
- * Dual-driver lazy database client — ported from the original
+ * Dual-driver lazy database client — ported from the original app
  * (db/index.ts), adapted for rosezm's server bundle.
  *
  * IMPORTANT: rosezm builds dist/server.js with esbuild `bundle: true` and
@@ -10,7 +10,7 @@
  * exactly as the target architecture requires).
  *
  *  - Local:  DB_DRIVER=pglite (default), data dir ./.data/pglite_live
- *  - Prod:   DB_DRIVER=postgres + DATABASE_URL (Neon / Vercel Postgres)
+ *  - Prod:   DB_DRIVER=postgres + DATABASE_URL (managed Postgres)
  */
 import fs from "fs";
 import path from "path";
@@ -28,7 +28,7 @@ const globalForDb = globalThis as unknown as {
 
 /**
  * Minimal .env.local loader. The rosezm CLI does not auto-load env files
- * (unlike the original), so the installer-written config would otherwise only
+ * (unlike the original runtime), so the installer-written config would otherwise only
  * apply to the process that received the POST. Real process env wins.
  */
 function loadEnvLocal(): void {
@@ -207,7 +207,7 @@ async function createDb(): Promise<any> {
   return drvMod.drizzle(client, { schema });
 }
 
-/** Resolve (once) the lazily-created drizzle instance. */
+/** Resolve (once) the lazily-created DB instance. */
 export function ensureDb(): Promise<any> {
   if (!globalForDb.__oboeReady) {
     globalForDb.__oboeReady = createDb()
@@ -279,7 +279,7 @@ export function ensureMigrations(): Promise<void> {
 }
 
 /**
- * Drizzle handle. Only valid after ensureDb()/ensureMigrations() resolved —
+ * DB handle. Only valid after ensureDb()/ensureMigrations() resolved —
  * the middleware awaits that before any render.
  */
 export const db = new Proxy({} as any, {

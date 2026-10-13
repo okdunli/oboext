@@ -69,7 +69,7 @@ export interface CompileResult {
    */
   buffer?: boolean;
   /**
-   * The script calls `redirect()` or `notFound()` (the control-flow pair).
+   * The script calls `redirect()` or `notFound()` (the parity pair).
    * Both are thrown signals whose answer is the RESPONSE's status - a 30x
    * with a Location, or a real 404 - and a streamed response has committed
    * its status before the render runs. Such a route is therefore buffered
@@ -1245,7 +1245,7 @@ const EXPORT_RE = /^[ \t]*export\s+(?:(const|let|var)|(?:async\s+)?function)\s+(
  * body. They must be self-contained (no references to state or template
  * scope) - they exist for build-time consumers like dynamic-route `params`.
  *
- * Every exported ASYNC function is a SERVER-ONLY action (server-action semantics:
+ * Every exported ASYNC function is a SERVER-ONLY action (framework semantics:
  * `export const params` and sync helpers stay shared, async exports are
  * server code). `action` is the conventional name a <form method="POST">
  * posts to; any other name is reachable from an event handler
@@ -2994,7 +2994,7 @@ export async function renderPage(pathname, form) {
       try {
         rendered = extractHead(await route.render([], ''));
       } catch (err) {
-        // The control-flow pair: redirect() and notFound() are THROWN from inside the render (a $data body resolving a slug that no longer exists).
+        // The parity pair: redirect() and notFound() are THROWN from inside the render (a $data body resolving a slug that no longer exists is the whole).
         const signal = err && err.__rosezm;
         if (signal === 'redirect') {
           return { redirect: err.path, status: err.status ?? 307, ...docAttrs(pathname) };
@@ -3055,7 +3055,7 @@ export async function handleApi(method, pathname, request) {
       try {
         return toResponse(await fn(request));
       } catch (err) {
-        // The control-flow pair, api flavor: redirect() answers a 30x with a Location, notFound() a JSON 404 - the same signals a page throws.
+        // The parity pair, api flavor: redirect() answers a 30x with a Location, notFound() a JSON 404 - the same signals a page throws.
         const signal = err && err.__rosezm;
         if (signal === 'redirect') {
           return new Response(JSON.stringify({ error: 'redirect', location: err.path }), {
@@ -3460,7 +3460,7 @@ ${langDirBlock}
           const render = await getRender(route); // split mode: loads the route's chunk here
           html = await render(closes, '');
         } catch (err) {
-          // The control-flow pair, client half: notFound() paints the 404 route (the server already answered 404 for this URL; a client-side navigation).
+          // The parity pair, client half: notFound() paints the 404 route (the server already answered 404 for this URL; a client-side navigation).
           if (err && err.__rosezm === 'notFound') { signal = 'notFound'; return; }
           if (err && err.__rosezm === 'redirect') { signal = err.path; return; }
           // the route itself is broken: degrade to pages/500.rose (or the

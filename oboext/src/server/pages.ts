@@ -8,10 +8,11 @@
  */
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "./db.js";
-import { pages as pagesTable, pageMetas, type Block, type Page } from "./schema.js";
+import { pages as pagesTable, type Block, type Page } from "./schema.js";
 import type { SessionUser } from "./auth.js";
 import { can, requireCap, requireUser, ServiceError, slugify } from "./admin.js";
 import { blocksToPlainText } from "./admin.js";
+import { getPageMetas, setPageMetas } from "./metas.js";
 import { getPermalinkConfig, pageUrlFor } from "./links.js";
 
 export type PageView = Page & {
@@ -34,23 +35,6 @@ export type PageInput = {
   publishedAt?: string | null;
   metas?: { key: string; value: string }[];
 };
-
-async function getPageMetas(pageId: number): Promise<Record<string, string>> {
-  const rows = await db.select().from(pageMetas).where(eq(pageMetas.pageId, pageId));
-  const out: Record<string, string> = {};
-  for (const r of rows) out[r.key] = r.value ?? "";
-  return out;
-}
-
-async function setPageMetas(pageId: number, metas: { key: string; value: string }[]): Promise<void> {
-  await db.delete(pageMetas).where(eq(pageMetas.pageId, pageId));
-  const clean = metas
-    .map((m) => ({ key: String(m.key ?? "").trim(), value: String(m.value ?? "") }))
-    .filter((m) => m.key.length > 0);
-  if (clean.length) {
-    await db.insert(pageMetas).values(clean.map((m) => ({ pageId, key: m.key.slice(0, 100), value: m.value })));
-  }
-}
 
 function excerptFrom(text: string, max = 160): string {
   const clean = text.replace(/\s+/g, " ").trim();

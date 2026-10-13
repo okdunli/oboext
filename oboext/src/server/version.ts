@@ -6,7 +6,7 @@
  * Pure constants, safe for plugins to import.
  */
 export const APP_NAME = "oboext";
-export const APP_VERSION = "0.1.8";
+export const APP_VERSION = "0.1.9";
 
 export const APP_BRAND = `${APP_NAME} v${APP_VERSION}`;
 

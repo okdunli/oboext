@@ -1,12 +1,13 @@
 <script>
-  // GET /api/auth/me — the current session user, or 401.
-  import { apiGate, jsonFail } from "@server/admin";
+  // GET /api/auth/me — the current session user, or { user: null } for
+  // guests. The site comment box / OAuth buttons call this unauthenticated
+  // to decide which UI to show, so a guest must NOT be a 401.
+  import { apiGate } from "@server/admin";
 
   export async function GET() {
     return apiGate(async () => {
       const user = getContext().user;
-      if (!user) return jsonFail("未认证", 401);
-      return { user };
+      return { user: user ?? null };
     });
   }
 </script>

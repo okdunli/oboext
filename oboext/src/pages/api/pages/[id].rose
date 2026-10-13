@@ -19,6 +19,7 @@
       const id = pathId(request);
       const user = getContext().user;
       if (user && can(user.role, "content:read")) return adminGetPage(user, id);
+      if (!Number.isInteger(id) || id <= 0) return jsonFail("页面不存在", 404);
       const page = await getPublishedPageById(id);
       if (!page) return jsonFail("页面不存在", 404);
       return page;

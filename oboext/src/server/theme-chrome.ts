@@ -2107,7 +2107,8 @@ function bmixPostPage(parts: PostPageParts): string {
   const bg = p.featuredImage
     ? `<div class="bg-wrapper"><img class="bg" src="${imgUrl}" alt="${esc(p.title)}" loading="eager"></div>`
     : `<div class="bg-wrapper"></div>`;
-  const heroCard = `<div class="card-container${darkCls} bg-blur" data-bmix-hero style="${vars}">` +
+  const presetAttr = bmixThemeColorFromMeta(p.metas?.[BMIX_CARD_THEME_META_KEY]) ? ' data-bmix-preset="1"' : "";
+  const heroCard = `<div class="card-container${darkCls} bg-blur" data-bmix-hero${presetAttr} style="${vars}">` +
     bg +
     `<div class="card-wrapper"><div class="card flex">` +
     `<div class="info flex flex-col justify-center">` +

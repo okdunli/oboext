@@ -1,13 +1,12 @@
 <script>
-  // /api/settings — GET the singleton row, PATCH whitelisted columns.
+  // /api/settings — GET the singleton row (public read, mirrors the original:
+  // the site theme/login screens read it unauthenticated), PATCH whitelisted
+  // columns (settings:manage).
   import { apiGate, readBody, requireCap, updateSettings } from "@server/admin";
   import { getSettings } from "@server/queries";
 
   export async function GET() {
-    return apiGate(async () => {
-      requireCap(getContext().user, "settings:manage");
-      return getSettings();
-    });
+    return apiGate(async () => getSettings());
   }
 
   export async function PATCH(request) {

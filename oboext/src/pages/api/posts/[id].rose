@@ -1,6 +1,8 @@
 <script>
-  // /api/posts/:id — GET one post for the editor, PUT update, DELETE remove.
-  import { apiGate, readBody, adminGetPost, updatePost, deletePost } from "@server/admin";
+  // /api/posts/:id — GET one post (any session sees unpublished; guests get
+  // published only), PUT update, DELETE remove.
+  import { apiGate, readBody, jsonFail, adminGetPost, updatePost, deletePost } from "@server/admin";
+  import { getPublishedPostById } from "@server/queries";
 
   function pathId(request) {
     const seg = new URL(request.url).pathname.split("/").filter(Boolean); // api posts 12
@@ -8,7 +10,15 @@
   }
 
   export async function GET(request) {
-    return apiGate(async () => adminGetPost(getContext().user, pathId(request)));
+    return apiGate(async () => {
+      const id = pathId(request);
+      const user = getContext().user;
+      if (user) return adminGetPost(user, id);
+      if (!Number.isInteger(id) || id <= 0) return jsonFail("文章不存在", 404);
+      const post = await getPublishedPostById(id);
+      if (!post) return jsonFail("文章不存在", 404);
+      return post;
+    });
   }
 
   export async function PUT(request) {

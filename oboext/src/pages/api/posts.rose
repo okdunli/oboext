@@ -1,25 +1,33 @@
 <script>
   // /api/posts
-  //   GET    admin post list (?status=&search=&limit=&offset=)
+  //   GET    public post list (?status=&authorId=&categoryId=&tagId=&search=
+  //          &limit=&offset=). Unauthenticated callers only ever see published
+  //          content (the site search popover uses this hot path to decide
+  //          "unique hit → jump straight to the post").
   //   POST   create a post
   //   PATCH  bulk action { ids, action: publish|draft|archive|delete }
   import {
     apiGate,
     readBody,
-    adminListPosts,
     createPost,
     bulkPosts,
   } from "@server/admin";
+  import { listPosts } from "@server/queries";
 
   export async function GET(request) {
     return apiGate(async () => {
       const user = getContext().user;
       const q = new URL(request.url).searchParams;
-      return adminListPosts(user, {
-        status: q.get("status") || undefined,
-        search: q.get("search") || undefined,
-        limit: q.get("limit") ? Number(q.get("limit")) : undefined,
-        offset: q.get("offset") ? Number(q.get("offset")) : undefined,
+      // Guests are pinned to published, exactly like the original GET.
+      const status = user ? q.get("status") || undefined : "published";
+      return listPosts({
+        status,
+        authorId: q.get("authorId") ? Number(q.get("authorId")) : undefined,
+        categoryId: q.get("categoryId") ? Number(q.get("categoryId")) : undefined,
+        tagId: q.get("tagId") ? Number(q.get("tagId")) : undefined,
+        search: q.get("search")?.trim() || undefined,
+        limit: q.get("limit") ? Number(q.get("limit")) : 20,
+        offset: q.get("offset") ? Number(q.get("offset")) : 0,
       });
     });
   }

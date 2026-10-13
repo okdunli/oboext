@@ -1,9 +1,20 @@
 <script>
-  // /api/tags/:id — PUT update, DELETE remove
-  import { apiGate, readBody, updateTag, deleteTag } from "@server/admin";
+  // /api/tags/:id — GET one (public, mirrors the original), PUT update,
+  // DELETE remove.
+  import { apiGate, readBody, jsonFail, updateTag, deleteTag } from "@server/admin";
+  import { getTag } from "@server/queries";
 
   function pathId(request) {
-    return Number(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+    const n = Number(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+    return Number.isInteger(n) && n > 0 ? n : 0;
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const id = pathId(request);
+      if (!id) return jsonFail("标签不存在", 404);
+      return getTag(id);
+    });
   }
 
   export async function PUT(request) {

@@ -1,0 +1,53 @@
+
+
+import { desc, eq, sql } from "drizzle-orm";
+import { db, ensureMigrations } from "./db.js";
+import { securityEvents } from "./schema.js";
+
+export interface SecurityEventView {
+  id: number;
+  eventType: string;
+  userId: number | null;
+  account: string | null;
+  ip: string | null;
+  userAgent: string | null;
+  detail: unknown;
+  createdAt: Date | null;
+}
+
+export async function listSecurityEvents(opts: {
+  limit?: number;
+  offset?: number;
+  eventType?: string;
+} = {}): Promise<{ items: SecurityEventView[]; total: number }> {
+  await ensureMigrations();
+  const limit = Math.min(100, Math.max(1, Number(opts.limit) || 30));
+  const offset = Math.max(0, Number(opts.offset) || 0);
+  const where = opts.eventType ? eq(securityEvents.eventType, opts.eventType) : undefined;
+  const [rows, countRow] = await Promise.all([
+    db
+      .select()
+      .from(securityEvents)
+      .where(where)
+      .orderBy(desc(securityEvents.id))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(securityEvents)
+      .where(where),
+  ]);
+  return {
+    items: rows.map((r: any) => ({
+      id: r.id,
+      eventType: r.eventType,
+      userId: r.userId ?? null,
+      account: r.account ?? null,
+      ip: r.ip ?? null,
+      userAgent: r.userAgent ?? null,
+      detail: r.detail ?? null,
+      createdAt: r.createdAt ?? null,
+    })),
+    total: Number(countRow?.[0]?.n ?? 0),
+  };
+}

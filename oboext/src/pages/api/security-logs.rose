@@ -1,0 +1,21 @@
+<script>
+
+  import { apiGate, requireCap } from "@server/admin";
+  import { listSecurityEvents } from "@server/security-events";
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const url = new URL(request.url);
+      const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
+      const type = (url.searchParams.get("type") || "").trim();
+      const limit = 30;
+      const out = await listSecurityEvents({
+        limit,
+        offset: (page - 1) * limit,
+        eventType: type || undefined,
+      });
+      return { ...out, page, pages: Math.max(1, Math.ceil(out.total / limit)) };
+    });
+  }
+</script>

@@ -1,0 +1,109 @@
+<script>
+
+  let d = $data(() => __rvLoad("admin.security-logs", {}));
+  function items() { return d().items || []; }
+  function total() { return d().total || 0; }
+  function page() { return d().page || 1; }
+  function pages() { return d().pages || 1; }
+  function curType() { return d().type || ""; }
+  function href(p) {
+    return "/admin/security-logs?page=" + p + (curType() ? "&type=" + encodeURIComponent(curType()) : "");
+  }
+  const EVENT_LABEL = {
+    "login.success": "登录成功",
+    "login.fail": "登录失败",
+    "login.locked": "登录锁定",
+    "password.reset.request": "申请重置密码",
+    "password.reset.done": "密码已重置",
+  };
+  function eventLabel(t) {
+    return EVENT_LABEL[t] || t;
+  }
+  function eventStyle(t) {
+    if (t === "login.success") return "background:rgba(22,163,74,.14);color:#4ade80;";
+    if (t === "login.fail") return "background:rgba(220,38,38,.14);color:#f87171;";
+    if (t === "login.locked") return "background:rgba(217,119,6,.15);color:#fbbf24;";
+    return "background:rgba(120,120,130,.18);color:#d4d4d8;";
+  }
+  function fmt(iso) {
+    if (!iso) return "—";
+    const dt = new Date(iso);
+    if (isNaN(dt.getTime())) return "—";
+    const pad = (n) => String(n).padStart(2, "0");
+    return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes()) + ":" + pad(dt.getSeconds());
+  }
+  function detailText(e) {
+    const parts = [];
+    if (e.detail && typeof e.detail === "object") {
+      const stage = e.detail.stage;
+      if (stage) parts.push("阶段：" + stage);
+    }
+    if (e.userAgent) parts.push(e.userAgent);
+    return parts.join(" · ");
+  }
+  function emptyHint() { return items().length ? [] : [1]; }
+</script>
+
+<head>
+  <title>安全日志 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="adm-ic" style="--i:url(/public/icons/scroll-text.svg);width:20px;height:20px;color:#818cf8;"></span>
+    <strong style="font-size:16px">安全日志</strong>
+    <span class="adm-hint" style="margin:0;">共 {total()} 条</span>
+  </div>
+</div>
+
+<form method="get" class="adm-toolbar" style="gap:8px;">
+  <select class="adm-select" name="type" data-val={curType()} style="max-width:220px;">
+    <option value="">全部事件</option>
+    <option value="login.success">登录成功</option>
+    <option value="login.fail">登录失败</option>
+    <option value="login.locked">登录锁定</option>
+    <option value="password.reset.request">申请重置密码</option>
+    <option value="password.reset.done">密码已重置</option>
+  </select>
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" type="submit">筛选</button>
+</form>
+
+<div class="adm-card adm-table-wrap">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th style="width:170px">时间</th>
+        <th style="width:130px">事件</th>
+        <th style="width:140px">账号</th>
+        <th style="width:130px">IP</th>
+        <th>User-Agent / 详情</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each items() as e}
+      <tr>
+        <td class="adm-hint">{fmt(e.createdAt)}</td>
+        <td><span class="adm-tag" style="{eventStyle(e.eventType)}">{eventLabel(e.eventType)}</span></td>
+        <td>{e.account || (e.userId ? "用户 #" + e.userId : "—")}</td>
+        <td class="adm-hint">{e.ip || "—"}</td>
+        <td class="adm-hint">{detailText(e)}</td>
+      </tr>
+      {/each}
+    </tbody>
+  </table>
+  {#each emptyHint() as _}
+  <div class="adm-card-bd adm-empty">没有符合条件的安全事件。</div>
+  {/each}
+</div>
+
+{#if pages() > 1}
+<div class="adm-toolbar" style="gap:6px;">
+  {#if page() > 1}
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() - 1)}>上一页</a>
+  {/if}
+  <span class="adm-hint" style="margin:0;">第 {page()} / {pages()} 页</span>
+  {#if page() < pages()}
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() + 1)}>下一页</a>
+  {/if}
+</div>
+{/if}

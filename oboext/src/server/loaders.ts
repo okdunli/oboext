@@ -36,7 +36,7 @@ import * as admin from "./admin-loaders.js";
 import { getMenuByLocation } from "./menus.js";
 import { getAreaWidgets } from "./widgets.js";
 import { getActiveThemeSlug, getActiveThemeRenderConfig, getActiveThemeSettings, getThemeManifest } from "./themes.js";
-import { themeToCss } from "./theme-tokens.js";
+import { themeToCss, resolveThemeConfig } from "./theme-tokens.js";
 import { skyscraperBridgeRoot, skyscraperBridgeDark } from "./theme-bridge.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
@@ -46,7 +46,7 @@ import { maintenanceGate, type MaintenanceSettings } from "./maintenance.js";
 import { renderUserCenter, renderUserCenterGuest } from "./account.js";
 import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
 import { getAdminSecurity } from "./security.js";
-import { getThemeChrome, publicAssetHref, type MenuItem } from "./theme-chrome.js";
+import { getThemeChrome, publicAssetHref, bluemixNotFoundPage, type MenuItem } from "./theme-chrome.js";
 
 export type Ctx = {
   query: URLSearchParams;
@@ -1076,14 +1076,67 @@ async function robots(ctx: Ctx): Promise<string> {
   return `${payload.lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
 }
 
+function guessImageType(url: string): string {
+  const ext = url.split("?")[0].split(".").pop()?.toLowerCase();
+  switch (ext) {
+    case "svg": return "image/svg+xml";
+    case "png": return "image/png";
+    case "jpg":
+    case "jpeg": return "image/jpeg";
+    case "webp": return "image/webp";
+    case "gif": return "image/gif";
+    case "ico": return "image/x-icon";
+    default: return "";
+  }
+}
+
+async function manifest(_ctx: Ctx): Promise<string> {
+  const [settings, renderConfig] = await Promise.all([
+    getSettings(),
+    getActiveThemeRenderConfig(),
+  ]);
+  const accent = resolveThemeConfig(renderConfig).accent;
+  const icons: Array<{ src: string; sizes: string; type?: string }> = [];
+  for (const src of [settings.faviconUrl, settings.logoUrl]) {
+    if (!src || icons.some((i) => i.src === src)) continue;
+    const icon: { src: string; sizes: string; type?: string } = { src, sizes: "any" };
+    const type = guessImageType(String(src));
+    if (type) icon.type = type;
+    icons.push(icon);
+  }
+  return JSON.stringify({
+    name: settings.siteTitle || "oboext",
+    short_name: (settings.siteTitle || "oboext").slice(0, 12),
+    description: settings.tagline || settings.siteDescription || "",
+    start_url: "/",
+    scope: "/",
+    display: "standalone",
+    lang: settings.language || "zh-CN",
+    background_color: "#ffffff",
+    theme_color: accent,
+    icons,
+  });
+}
+
 async function notFound(_p: unknown, _ctx: Ctx) {
-  const settings = await getNotFoundSettings();
+  const [settings, site, themeSlug] = await Promise.all([
+    getNotFoundSettings(),
+    getSettings(),
+    getActiveThemeSlug(),
+  ]);
+  const themed = themeSlug === "bluemix";
   let recent: Array<{ url: string; title: string }> = [];
   if (settings.showRecent) {
-    const result = await listPosts({ status: "published", limit: 6 });
+    const result = await listPosts({ status: "published", limit: themed ? 5 : 6 });
     recent = (result.items || []).map((p: PostView) => ({ url: p.url, title: p.title }));
   }
-  return { settings, recent };
+  return {
+    settings,
+    recent,
+    siteTitle: site.siteTitle ?? "",
+    themeSlug,
+    skin: themed ? bluemixNotFoundPage({ settings, recent }) : "",
+  };
 }
 
 function virtualRouteView(route: VirtualSiteRoute, ctx: Ctx) {
@@ -1360,5 +1413,5 @@ export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unk
 }
 
 /** Raw document builders for middleware-intercepted XML/txt routes. */
-export const documents = { feed, robots };
+export const documents = { feed, robots, manifest };
 

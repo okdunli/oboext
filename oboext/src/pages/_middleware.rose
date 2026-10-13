@@ -217,6 +217,12 @@
       });
     }
 
+    if (rp === "/manifest.webmanifest") {
+      return new Response(await reg.documents.manifest(ctx), {
+        headers: { "content-type": "application/manifest+json" },
+      });
+    }
+
     if (request.method !== "GET" && request.method !== "HEAD") return;
 
     // ------------------------------------- unique-hit search jumps to the post

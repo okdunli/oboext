@@ -30,7 +30,7 @@ import {
 import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, resolveSitePath, paginate, type PermalinkConfig } from "./links.js";
 import { resolveVirtualRoute, type VirtualSiteRoute } from "./virtual-routes.js";
 import { resolveCommentConfig } from "./comments-config.js";
-import { getPublishedPage } from "./pages.js";
+import { getPublishedPage, listPublishedPages } from "./pages.js";
 import * as R from "./render.js";
 import * as admin from "./admin-loaders.js";
 import { getMenuByLocation } from "./menus.js";
@@ -1059,15 +1059,19 @@ function escXml(s: string): string {
 async function feed(ctx: Ctx): Promise<string> {
   const settings = await getSettings();
   const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
-  const { items } = await listPosts({ status: "published", limit: feedItems, pinned: false });
+  const [{ items }, { items: pageItems }] = await Promise.all([
+    listPosts({ status: "published", limit: feedItems, pinned: false }),
+    listPublishedPages({ limit: feedItems }),
+  ]);
   const full = settings.feedContent === "full";
   const cdata = (html: string) =>
     `<![CDATA[${html.replace(/]]>/g, "]]]]><![CDATA[>")}]]>`;
   const xmlItems = (
     await Promise.all(
-      items.map(async (p) => {
+      [...items, ...pageItems].map(async (p) => {
+        const kind = "author" in p ? "post" : "page";
         const extra = full
-          ? `\n      <content:encoded>${cdata(await R.buildPostBody(p, "post"))}</content:encoded>`
+          ? `\n      <content:encoded>${cdata(await R.buildPostBody(p, kind))}</content:encoded>`
           : "";
         return (
           `    <item>\n      <title>${escXml(p.title)}</title>\n      <link>${escXml(ctx.origin)}${escXml(p.url)}</link>` +

@@ -51,15 +51,30 @@
     document.body.classList.toggle("bmx-nav-done", state === "done");
   }
 
+  
+  
+  
   let initialDone = false;
   function initialPaint() {
     if (initialDone) return true;
     resolveRefs();
     if (!isBluemix || !frame) return false;
     initialDone = true;
-    requestAnimationFrame(() => {
-      setTimeout(() => frameCls("pf-enter"), INITIAL_MIN_MS);
-    });
+    const reduced =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const finish = () => {
+      setTimeout(() => {
+        overlayShow(false);
+        frameCls(reduced ? "" : "pf-enter");
+      }, INITIAL_MIN_MS);
+    };
+    if (reduced || document.readyState === "complete") {
+      finish();
+    } else {
+      window.addEventListener("load", finish, { once: true });
+      setTimeout(finish, 1800);
+    }
     return true;
   }
   if (!initialPaint()) {

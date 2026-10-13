@@ -227,6 +227,182 @@ const GLOBALS_BODY_UTILITIES = `.min-h-screen{min-height:100vh}
 .antialiased{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 .py-16{padding-block:64px}
 .mt-4{margin-top:16px}
+.hidden{display:none}
+.group:hover .group-hover\\:block{display:block}
+@media (min-width:640px){.sm\\:block{display:block}.sm\\:hidden{display:none}.sm\\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (min-width:768px){.md\\:block{display:block}.md\\:hidden{display:none}}
+@media (min-width:1024px){.lg\\:hidden{display:none}.lg\\:grid-cols-\\[1fr_300px\\]{grid-template-columns:1fr 300px}}
+@media (min-width:1280px){.xl\\:hidden{display:none}}
+`;
+
+const SHARED_FORM_BASELINE = `
+/* ===========================================================================
+   Built-in comment form — shared structural baseline
+   Markup: src/server/render.ts builtinCommentsHtml (.comment-form). Selectors
+   stay low-specificity on purpose: bluemix / codeman / pseudolinear ship their
+   own higher-specificity overrides; this block only guarantees a usable form
+   (bordered .input box, icon guest row, right-aligned submit) in themes
+   without form CSS — default / skyscraper —
+   using the generic theme tokens (--surface, --border, --accent, …).
+   =========================================================================== */
+.comment-form{ display:block; margin:20px 0; }
+.comment-form .input{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+.comment-form .input:hover{ border-color:var(--accent); }
+.comment-form .input.is_focused{
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.comment-form textarea{
+  display:block; width:100%; height:7em;
+  padding:12px 16px; font-size:16px; font-family:inherit; line-height:1.6;
+  resize:vertical; outline:none; border:0; background:transparent;
+  color:var(--text);
+}
+.comment-form textarea::-moz-placeholder{ color:var(--muted); }
+.comment-form textarea::placeholder{ color:var(--muted); }
+.comment-form .funcs{ display:flex; margin-top:8px; position:relative; }
+/* >button: direct trigger only; the emoji popover is nested inside .funcs
+   and its inner buttons must keep the verbatim .emoji-panel styles */
+.comment-form .funcs>button{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:36px; height:32px; padding:0; border:0; cursor:pointer;
+  background:transparent; color:var(--muted); transition:color .15s ease;
+}
+.comment-form .funcs>button:hover{ color:var(--accent); }
+
+.comment-form .guest-info{ display:flex; gap:8px; }
+.comment-form .guest-info .item{ position:relative; flex:1 1 0; min-width:0; }
+.comment-form .comment-field{
+  width:100%; height:34px; padding:0 10px 0 34px;
+  font-size:13px; font-family:inherit; outline:none;
+  background:var(--surface, #fff);
+  border:1px solid var(--border, rgba(144,147,153,.35)); border-left:0;
+  border-radius:0 8px 8px 0; color:var(--text, #1f2937);
+  box-shadow:inset 0 1px 2px rgba(31,45,61,.05);
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+.comment-form .comment-field:focus{
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), inset 0 1px 2px rgba(31,45,61,.05);
+}
+.comment-form .comment-field::-moz-placeholder{ color:var(--muted); }
+.comment-form .comment-field::placeholder{ color:var(--muted); }
+.comment-form .guest-info .item i{
+  position:absolute; left:0; top:0; bottom:0; width:34px;
+  display:flex; align-items:center; justify-content:center;
+  font-style:normal; pointer-events:none; color:var(--muted);
+  background:color-mix(in srgb, var(--muted, #909399) 8%, var(--surface, #fff));
+  border:1px solid var(--border, rgba(144,147,153,.35)); border-right:0;
+  border-radius:8px 0 0 8px;
+}
+.comment-form .comment-field:focus + i{
+  color:var(--accent); border-color:var(--accent);
+}
+@media (max-width:650.5px){
+  .comment-form .guest-info{ flex-direction:column; }
+}
+.comment-form .form-actions{
+  display:flex; justify-content:flex-end; align-items:center; gap:8px;
+}
+.comment-form .cancel{
+  display:inline-flex; align-items:center; gap:4px;
+  padding:8px 10px; border:0; background:transparent; cursor:pointer;
+  font-size:14px; font-family:inherit; color:var(--muted);
+  animation:sf-cancel-in .2s cubic-bezier(.34,1.4,.64,1);
+}
+@keyframes sf-cancel-in{ from{ opacity:0; transform:translateX(8px);} to{ opacity:1; transform:none; } }
+.comment-form .cancel:hover{ color:var(--text); }
+.comment-form .btn-submit{
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  padding:9px 18px; border:0; border-radius:var(--radius);
+  background:var(--accent); color:var(--accent-text, #fff);
+  font-size:14px; font-weight:600; font-family:inherit; cursor:pointer;
+  transition:filter .15s ease;
+}
+.comment-form .btn-submit:hover{ filter:brightness(1.08); }
+.comment-form .btn-submit:disabled{ opacity:.6; cursor:default; }
+.sf-comment-close{ color:var(--muted); font-size:14px; padding:8px 0; }
+
+/* Logged-in account bar shown above the comment box (guest inputs hidden) */
+.sf-comment-me{ display:flex; align-items:center; gap:10px; margin:0 0 10px; width:-moz-fit-content; width:fit-content; max-width:100%; }
+.sf-comment-me-avatar{
+  width:34px; height:34px; border-radius:50%; flex-shrink:0;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:var(--accent); color:var(--accent-text, #fff); font-size:15px; font-weight:600;
+}
+.sf-comment-me-meta{ display:flex; flex-direction:column; min-width:0; }
+.sf-comment-me-name{ font-size:14px; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sf-comment-me-email{ font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+.comment-form .funcs button.is-active{ color:var(--accent); }
+.emoji-panel{
+  position:absolute; left:0; bottom:calc(100% + 6px); z-index:30;
+  padding:1em; font-size:15px; border-radius:10px;
+  background:var(--surface, #fff);
+  border:1px solid var(--border, rgba(0,0,0,.12));
+  box-shadow:0 10px 28px rgba(0,0,0,.18);
+}
+.emoji-panel:before{ content:none; }
+.emoji-panel .panel{
+  width:290px; height:300px; margin:0 -10px;
+  overflow-y:auto; scroll-behavior:smooth; position:relative;
+}
+.emoji-panel .emoji-grid{ display:grid; grid-template-columns:repeat(7,1fr); }
+.emoji-panel .tabs{
+  display:flex;
+  border-top:1px solid var(--border, rgba(0,0,0,.1));
+  margin:1px -14px -14px;
+}
+.emoji-panel .tabs button{
+  flex:1; padding:10px 0; font-size:20.5px; line-height:1; color:inherit;
+  border:none; background:transparent; cursor:pointer;
+  opacity:.4; transition:.35s; filter:grayscale(1);
+  margin-top:-1px; position:relative;
+}
+.emoji-panel .tabs button.active{
+  opacity:1; box-shadow:0 2px var(--primary-color,var(--accent)) inset; filter:none;
+}
+.emoji-panel .tabs button.active:before{
+  content:""; display:block; width:0; height:0; position:absolute; top:1px; left:calc(50% - 4px);
+  border-top:4px solid var(--primary-color,var(--accent));
+  border-left:4px solid transparent; border-right:4px solid transparent;
+}
+.emoji-panel .tabs button:hover{ opacity:1; filter:none; }
+.emoji-panel .title{
+  padding:3px 10px; color:var(--muted, #666);
+  font-size:12px; font-weight:600;
+  background:color-mix(in srgb, var(--muted, #888) 8%, var(--surface, #fff));
+  border-radius:6px;
+  margin:6px; position:sticky; top:0;
+}
+.emoji-panel .emoji{
+  height:42px; border:none; padding:0; font-size:22px; line-height:1;
+  background:transparent; border-radius:.25em; cursor:pointer; transition:.35s;
+}
+.emoji-panel .emoji:hover{
+  background:var(--primary-opacity-2,color-mix(in srgb,var(--accent) 20%,transparent));
+  text-shadow:0 3px 3px var(--gray-opacity-2,rgba(0,0,0,.2)); transition:0s;
+}
+@media (max-width:650.5px){
+  .emoji-panel .panel{ width:min(290px, calc(100vw - 78px)); }
+}
+
+.emoji-panel-wrap{ display:contents; }
+.emoji-panel-wrap .emoji-panel{
+  transform-origin:0 100%;
+  transition:opacity .18s ease, transform .22s cubic-bezier(.34,1.56,.64,1);
+  will-change:opacity, transform;
+}
+.emoji-panel-wrap:not(.is-in) .emoji-panel{
+  opacity:0;
+  transform:translateY(10px) scale(.88);
+  pointer-events:none;
+}
 `;
 
 export function themeCssContent(slug: string): string {
@@ -237,7 +413,9 @@ export function themeCssContent(slug: string): string {
     const extra = readThemeCss(slug, slug + "-extra.css");
     if (extra.css) css += "\n" + extra.css;
   } catch { /* no extra */ }
-  return GLOBALS_BODY_UTILITIES + css;
+  
+  
+  return SHARED_FORM_BASELINE + GLOBALS_BODY_UTILITIES + css;
 }
 
 export function serveThemeAsset(urlPath: string, method = "GET"): Response {
@@ -519,10 +697,14 @@ function defaultBreadcrumb(items: { label: string; href?: string }[]): string {
 function defaultListPage(parts: ListParts): string {
   const cards = parts.items.map((p, i) => defaultPostCard(p, i)).join("");
   const pager = parts.showPager !== false ? defaultPager(parts.page, parts.totalPages, parts.hrefFor) : "";
+  
+  
   const isBlog = parts.variant === "blog";
   const isCategory = parts.variant === "category";
   const isSearch = parts.variant === "search";
+  
   const isTerm = !isBlog && !isCategory && !isSearch;
+  
   const backLink = isTerm || parts.variant === "category"
     ? `<div class="mb-6"><a href="/" class="text-sm text-zinc-400 hover:text-[var(--accent)]">← 首页</a>`
     : `<div class="mb-6"><a href="/" class="inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-[var(--accent)]">${lucideSvg("arrow-left", 14)}首页</a>`;
@@ -542,6 +724,8 @@ function defaultListPage(parts: ListParts): string {
   const sidebar = parts.sidebarData
     ? defaultAside(parts.sidebarData.cats, parts.sidebarData.tags, parts.sidebarData.posts, parts.settings || {}, parts.sidebarData.showCatIcons === true)
     : "";
+  
+  
   const emptyText = isCategory
     ? "该分类下还没有文章。"
     : isSearch
@@ -978,6 +1162,9 @@ const pseudolinearChrome: ThemeChrome = {
   bodyFix: () => pseudoBodyFix,
   headExtra: () => "",
   nav: (settings, items) => pseudoNav(settings, items),
+  
+  
+  
   bodyOpen: (settings, items) =>
     `<div class="th-pseudo">` + pseudoNav(settings, items) + `<main id="sk-main"><div class="pl-frame">`,
   bodyClose: (settings, footerHtml) =>
@@ -1117,6 +1304,8 @@ function cmHome(parts: HomeParts): string {
     `<div>categories<b>${cmPad(cats.length, 3)}</b></div>` +
     `<div>uptime<b>${year - 2020}+y</b></div>` +
     `</div></section>`;
+  
+  
   const recentItems = all.slice(0, 9);
   const recent = cmSection("recent log", `// last ${recentItems.length} writes`, "$ ls -lt ./posts | head -9", cmCardsHtml(recentItems));
   const catSection = cats.length
@@ -1134,6 +1323,7 @@ function cmListPage(parts: ListParts): string {
   const isCategory = parts.variant === "category";
   const isSearch = parts.variant === "search";
   const pager = parts.showPager !== false ? cmPager(parts.page, parts.totalPages, parts.hrefFor) : "";
+  
   let small: string;
   let count: string;
   let body: string;
@@ -1342,6 +1532,7 @@ function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
 function bmixFooter(settings: Record<string, any>, widgetsHtml: string): string {
   const year = new Date().getFullYear();
   const copyright = settings.footerText || `Designed &amp; Coded by oboext © ${year} ${settings.siteTitle}`;
+  
   const links: any[] = Array.isArray(settings.footerLinks) ? settings.footerLinks : [];
   const linkCls = 'class="flex gx-3 items-center text-embossed hover:text-primary-gray"';
   const linksHtml = links.length
@@ -1358,6 +1549,7 @@ function bmixFooter(settings: Record<string, any>, widgetsHtml: string): string 
     (widgetsHtml ? `<div class="container-np px-10">${widgetsHtml}</div>` : "") +
     `<div class="container-np px-10" style="margin-inline:auto">` +
     `<div class="text-right text-primary-gray text-bulge-primary-gray">${copyright}</div>` +
+    
     `<div class="mt-4 flex flex-wrap gx-8 gy-3 justify-end">${linksHtml}</div>` +
     `</div></footer>`;
 }
@@ -1396,6 +1588,8 @@ function bmixCardTone(
   bgAlpha = 1,
   metas?: Record<string, string> | null,
 ): { vars: Record<string, string>; dark: boolean } {
+  
+  
   const preset = bmixThemeColorFromMeta(metas ? metas[BMIX_CARD_THEME_META_KEY] : null);
   const base = preset ?? BMIX_PALETTE[_hash(seed || String(fallbackIndex)) % BMIX_PALETTE.length];
   const [pr, pg, pb] = _hex2rgb(base);
@@ -1441,6 +1635,8 @@ function bmixIconName(name: string): string {
 function bmixIc(icon: string, size: number, marginRight = 0): string {
   const px = Math.round(size * 1.35);
   const mr = marginRight ? `margin-right:${marginRight}px` : "";
+  
+  
   const fromFile = lucideSvg(bmixIconName(icon), px, "", mr);
   if (fromFile) return fromFile;
   const common = `width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:inline-block;vertical-align:-0.125em;flex-shrink:0;${mr}"`;
@@ -1483,6 +1679,10 @@ function lucideSvg(name: string, px: number, cls = "", styleExtra = ""): string 
   if (!svg) return "";
   const c = cls ? ` ${cls}` : "";
   const style = `display:inline-block;vertical-align:-0.125em;flex-shrink:0${styleExtra ? ";" + styleExtra : ""}`;
+  
+  
+  
+  
   return svg
     .replace(/\s(?:width|height)="\d+"/g, "")
     .replace(/^<svg\b[^>]*?\bxmlns="[^"]*"/, (m) => `${m} width="${px}" height="${px}"`)
@@ -1500,6 +1700,7 @@ function bmixIconFile(name: string | null | undefined, size: number, cls = ""): 
 
 function bmixPostCard(p: PostView, idx: number): string {
   const t = bmixCardTone(p.slug || p.url, idx, 1, p.metas);
+  
   const preset = bmixThemeColorFromMeta(p.metas?.[BMIX_CARD_THEME_META_KEY]) ? ' data-bmx-preset="1"' : "";
   const darkCls = t.dark ? " is-dark" : "";
   const vars = Object.entries(t.vars).map(([k, v]) => `${k}:${v}`).join(";");
@@ -1544,12 +1745,14 @@ function bmixPager(page: number, total: number, hrefFor: (p: number) => string):
   if (show.next2) cells.push(`<li><a href="${esc(hrefFor(page + 2))}">${page + 2}</a></li>`);
   if (show.last) cells.push(`<li class="last" data-tip="最后一页"><a href="${esc(hrefFor(total))}">${bmixIc("chevrons-right", 12)}<span>${total}</span></a></li>`);
   return `<div class="main-pagination-wrapper"><ul class="main-pagination">` +
+    
     `<li class="anchor" aria-hidden style="transform:translateX(0px);width:0px;transition-duration:0s"></li>` +
     cells.join("") + `</ul></div>`;
 }
 
 function bmixHeroScene(p: PostView, i: number): string {
   const { title1, title2 } = bmixSplitTitle(p.title);
+  
   const t = bmixCardTone(p.slug || p.url, i, 0.8, p.metas);
   const preset = bmixThemeColorFromMeta(p.metas?.[BMIX_CARD_THEME_META_KEY]) ? ' data-bmx-preset="1"' : "";
   const vars = Object.entries(t.vars).map(([k, v]) => `${k}:${v}`).join(";");
@@ -1561,6 +1764,7 @@ function bmixHeroScene(p: PostView, i: number): string {
   const meta = `<div class="metas"><span>${bmixIc("heart", 12)} ${p.likes ?? 0}</span>` +
     `<span class="ml-8">${bmixIc("comments", 12)} ${p.commentsCount ?? 0}</span>` +
     `<span class="ml-8">${bmixIc("eye", 12)} ${p.views ?? 0}</span>` +
+    
     (p.publishedAt ? `<span class="ml-8">${bmixIc("clock", 12)} ${bmixYmd(p.publishedAt)}</span>` : "") +
     `</div>`;
   return `<div class="scene ${role}"><a href="${esc(p.url)}" class="card-container${darkCls}" style="${vars}" aria-label="${esc(p.title)}"${preset}>` +
@@ -1589,6 +1793,8 @@ function bmixBanner(posts: PostView[], max: number): string {
 }
 
 function bmixCatNav(activeHref: string, cats: TaxRef[], blogIndex: string): string {
+  
+  
   const isActive = (href: string) => {
     if (!activeHref) return false;
     if (href === activeHref) return true;
@@ -1601,6 +1807,7 @@ function bmixCatNav(activeHref: string, cats: TaxRef[], blogIndex: string): stri
   items.push(`<li data-ai="0" class="${isActive("/") ? "is-active" : ""}"><a href="/" target="_self" aria-current="${isActive("/") ? "page" : ""}">${bmixIc("lightbulb", 13, 6)}智能推荐</a></li>`);
   items.push(`<li data-ai="1" class="${isActive(blogIndex) ? "is-active" : ""}"><a href="${esc(blogIndex)}" target="_self" aria-current="${isActive(blogIndex) ? "page" : ""}">${bmixIc("pen-line", 13, 6)}最新文章</a></li>`);
   let ai = 2;
+  
   for (const root of roots) {
     const children = cats.filter((c) => (c as any).parentId === (root as any).id);
     if (children.length) {
@@ -1661,14 +1868,17 @@ function bmixRankings(
   const GOLD = "/theme-assets/bluemix/rankings/873a161a.svg";
   const SILVER = "/theme-assets/bluemix/rankings/b31ba85e.svg";
   const BRONZE = "/theme-assets/bluemix/rankings/661ec968.svg";
+  
   const tabsHtml = order
     .map((k) => `<div class="tab${k === defaultTab ? " active" : ""}" data-tab="${k}">${bmixIc(bmRankIcon(k), 14)}${esc(labels[k] || DEF[k] || k)}</div>`)
     .join("");
+  
   const bgSrc = (boards as any)[defaultTab]?.[0]?.thumbnail || "";
   const bgLayer = bgSrc
     ? `<div class="bg-layer absolute inset-0"><div class="bg absolute inset-0"><img class="full absolute" src="${esc(bgSrc)}" alt=""><img class="thumbnail absolute bottom-0 right-0" src="${esc(bgSrc)}" alt=""></div></div>`
     : `<div class="bg-layer absolute inset-0"></div>`;
   const tabIndex = order.indexOf(defaultTab);
+  
   const boardsJson = JSON.stringify(boards).replace(/</g, "\\u003c");
   return `<div class="widget-rankings mb-20" data-boards="${esc(boardsJson)}" data-default-tab="${esc(defaultTab)}"><div class="cat-title flex items-center extra-large justify-center"><div class="custom-icon mr-5">${bmixIc("ranking-star", 15)}</div><div class="content text-primary-gray text-bulge-primary-gray">排行榜</div></div>` +
     `<div class="rankings-wrapper relative">` + bgLayer +
@@ -1709,6 +1919,8 @@ function bmixHomeSidebar(posts: PostView[], settings: Record<string, unknown>, t
 
 function bmixSection(title: string, to: string, icon: string | null, posts: PostView[]): string {
   const cards = posts.map((p, i) => bmixPostCard(p, i)).join("");
+  
+  
   const titleHtml = `<div class="cat-title flex items-center large">` +
     (icon ? `<div class="custom-icon mr-5">${bmixIconFile(icon, 15)}</div>` : `<div class="icon flex default mr-5 ml-2"></div>`) +
     `<div class="content text-primary-gray text-bulge-primary-gray">${esc(title)}</div>` +
@@ -1726,6 +1938,7 @@ function bmixHome(parts: HomeParts): string {
   const inner = recent.length === 0
     ? `<p class="text-primary-gray" style="padding:24px">还没有已发布的文章。去后台发布一篇，或先导入示例内容吧。</p>`
     : `<div class="bmx-reveal"><div class="recent-articles">${recent.slice(0, recentCount).map((p, i) => bmixPostCard(p, i)).join("")}</div></div>`;
+  
   const catTitle = `<div class="cat-title flex items-center large"><div class="icon flex default mr-5 ml-2"></div><div class="content text-primary-gray text-bulge-primary-gray">近期文章</div>` +
     `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span>` +
     `<a href="${esc(parts.blogIndex || "/blog")}" class="more-btn flex items-center justify-center text-sm r-full text-embossed truncate"><span class="flex items-center justify-center"><span class="more-text">更多</span>${bmixIc("chevron-right", 7)}</span></a></div></div>`;
@@ -1751,12 +1964,16 @@ function bmixListPage(parts: ListParts): string {
   const isCategory = parts.variant === "category";
   const isSearch = parts.variant === "search";
   const blogIndex = parts.blogIndex || "/blog";
+  
   const catNav = isSearch ? "" : bmixCatNav(parts.activeHref || (isBlog ? blogIndex : "/"), parts.cats || [], blogIndex);
 
+  
   const hero = (parts.hero || []).filter((p) => p && p.url);
   const showBanner = !isSearch && hero.length > 0;
   const banner = showBanner ? bmixBanner(hero, parts.bannerMax || 5) : "";
 
+  
+  
   const contentInner = isCategory
     ? `<span class="inline-flex items-center gap-2">${parts.titleIcon ? bmixIconFile(parts.titleIcon, 15) : ""}${esc(parts.title)}${parts.titleDesc ? ` · ${esc(parts.titleDesc)}` : ""}</span>`
     : esc(parts.title);
@@ -1766,19 +1983,25 @@ function bmixListPage(parts: ListParts): string {
     `<div class="content text-primary-gray text-bulge-primary-gray">${contentInner}</div>` +
     `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span></div></div>`;
 
+  
+  
   const gridCls = isBlog ? "blog-grid" : isSearch ? "recent-articles" : "list-grid";
   const cards = parts.items.map((p, i) => bmixPostCard(p, i)).join("");
+  
   const pager = !isCategory && parts.showPager !== false ? bmixPager(parts.page, parts.totalPages, parts.hrefFor) : "";
+  
   const emptyHtml = `<p class="text-primary-gray" style="padding:24px">${esc(
     parts.emptyHint || (isCategory ? "该分类下还没有文章。" : isSearch ? "没有匹配的文章。" : "还没有已发布的文章。"),
   )}</p>`;
   const body = cards
-    ?
+    ? 
       isCategory
       ? `<div class="${gridCls}">${cards}</div>${pager}`
       : `<div class="list-switch-anim"><div class="${gridCls}">${cards}</div>${pager}</div>`
     : emptyHtml;
+  
   const contentCls = showBanner ? "list-content" : "list-content list-content--gapped";
+  
   const drawer = parts.drawerPosts && parts.drawerPosts.length
     ? `<div class="sidebar list-drawer-sidebar"><div class="pf_scroller sidebar-sticky"><div class="sidebar-content">${bmixHomeSidebar(parts.drawerPosts, parts.settings || {}, parts.themeSettings || {})}</div></div></div>`
     : "";
@@ -1841,6 +2064,7 @@ function bmixPostToc(toc: { id: string; text: string; level: number }[]): string
 /** Sidebar article-section tabs: bookmark (TOC + related) by default, bars
  *  switches to popular/random. Both panes render server-side; theme-bluemix.js
  *  toggles visibility with a light slide-in animation. */
+
 function bmixCommentHead(count: number): string {
   return `<div class="cat-title flex items-center large"><div class="custom-icon mr-5">${bmixIc("comments", 14)}</div>` +
     `<div class="content text-primary-gray text-bulge-primary-gray">${count} 条回应</div>` +
@@ -1852,6 +2076,8 @@ function bmixPostSidebar(toc: { id: string; text: string; level: number }[], pos
   const random: PostView[] = [];
   for (const p of randomPool) { if (random.length >= 4) break; if (!busy.has(p.id)) random.push(p); }
   for (const p of randomPool) { if (random.length >= 4) break; if (!random.some((r) => r.id === p.id)) random.push(p); }
+  
+  
   const paneBookmark = bmixPostToc(toc) + bmixArticleGroup("相关文章", related, "暂无其它文章");
   const paneBars = bmixArticleGroup("大家喜欢", popular, "暂无其它文章") + bmixArticleGroup("随机文章", random, "暂无其它文章");
   const paneJson = JSON.stringify({ bookmark: paneBookmark, bars: paneBars }).replace(/</g, "\\u003c");
@@ -1899,6 +2125,9 @@ function bmixPostPage(parts: PostPageParts): string {
     (hasImage ? `<img src="${imgUrl}" alt="" >` : "") +
     `</div></div></div>`;
   const sidebar = bmixPostSidebar(toc, p, parts.related || [], parts.popular || [], parts.random || []);
+  
+  
+  
   return `<div class="single"><div data-post-type="article">` +
     `<div class="coverflow-swiper"><div class="container-np"><div class="slider mx-10">` +
     heroCard +
@@ -1940,6 +2169,7 @@ function bmixPagePage(parts: PagePageParts): string {
   const darkCls = t.dark ? " is-dark" : "";
   const hasImage = !!p.featuredImage;
   const imgUrl = hasImage ? esc(p.featuredImage!) : "";
+  
   const viewsInMeta = p.metas?.["bluemix_page_meta_views"] === "1";
   const metas = viewsInMeta
     ? `<div class="metas">` +
@@ -2066,16 +2296,20 @@ const BLUEMIX_VARS = `
 const bluemixChrome: ThemeChrome = {
   slug: "bluemix",
   cssHref: () => themeCssHref("bluemix"),
+  
   bodyFix: () => `<style id="rv-body-fix">body{background:#e5e9ef!important;color:var(--text-color-2)!important}html{background:#e5e9ef!important}</style>`,
   headExtra: () => `<style id="rv-theme-bluemix-vars">${BLUEMIX_VARS}</style>`,
   nav: (settings, items) => bmixNav(settings, items),
   bodyOpen: (settings, items) =>
+    
+    
     `<div class="th-bluemix">` +
     `<svg width="0" height="0" aria-hidden="true" style="position:absolute"><defs><linearGradient id="bmx-cat-grad" x1="0" y1="0" x2="0" y2="1">` +
     `<stop offset="20%" class="bmx-g-s" stop-color="#33bbff"></stop><stop offset="80%" class="bmx-g-e" stop-color="#1f8bff"></stop>` +
     `</linearGradient></defs></svg>` +
     bmixNav(settings, items) +
     `<main id="sk-main"><div class="pf-route-frame pf-init" data-bmx-frame>`,
+  
   bodyClose: (settings, footerHtml) =>
     `</div></main>` +
     `<div class="full-loading show" aria-hidden="true"><div class="lines"><div></div><div></div><div></div><div></div><div></div></div></div>` +

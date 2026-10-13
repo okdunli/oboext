@@ -130,6 +130,10 @@
     if (!host) return;
     var open = host.classList.toggle("is-in");
     host.setAttribute("aria-hidden", open ? "false" : "true");
+    
+    
+    var btn = form.querySelector("[data-comment-emoji]");
+    if (btn) btn.classList.toggle("is-active", open);
     if (open && !host.querySelector(".emoji-panel")) {
       var data = await loadEmoji();
       if (!data) { host.classList.remove("is-in"); return; }
@@ -316,6 +320,10 @@
     document.querySelectorAll("[data-emoji-panel].is-in").forEach(function (host) {
       host.classList.remove("is-in");
       host.setAttribute("aria-hidden", "true");
+      
+      var form = host.closest && host.closest("form[data-comment-form]");
+      var trigger = form && form.querySelector("[data-comment-emoji]");
+      if (trigger) trigger.classList.remove("is-active");
     });
   }
 

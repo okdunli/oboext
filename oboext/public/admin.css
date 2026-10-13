@@ -570,6 +570,8 @@ button { font-family: inherit; }
   background: rgba(0,0,0,.65); padding: 28px;
 }
 .adm-modal[hidden] { display: none; }
+/* the picker can be opened from inside another modal — keep it on top */
+.adm-modal[data-icp-modal] { z-index: 95; }
 .adm-modal-box {
   width: 100%; max-width: 460px; background: var(--adm-panel);
   border: 1px solid var(--adm-border); border-radius: 12px; overflow: hidden;
@@ -590,6 +592,61 @@ button { font-family: inherit; }
 }
 .adm-modal-x:hover { background: rgba(39,39,42,.9); }
 .adm-modal-preview { text-align: center; max-width: min(92vw, 880px); max-height: 88vh; overflow: auto; }
+
+/* ------------------------------------------------------------ icon picker
+   Searchable lucide grid (port of IconPicker.tsx). A `input[data-icon-picker]`
+   is turned into a hidden value holder plus a trigger button by admin.js. */
+.adm-iconpick {
+  display: inline-flex; align-items: center; gap: 8px; width: 100%;
+  min-height: 38px; padding: 7px 12px; cursor: pointer; text-align: left;
+  border: 1px solid var(--adm-border); border-radius: 8px;
+  background: var(--adm-panel-2); color: var(--adm-text); font-size: 13.5px;
+}
+.adm-iconpick:hover { border-color: var(--adm-accent); }
+.adm-iconpick.is-compact {
+  width: 34px; min-width: 34px; min-height: 34px;
+  padding: 0; justify-content: center; flex: 0 0 auto;
+}
+.adm-iconpick-name {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px; color: #a5b4fc;
+}
+.adm-iconpick-empty { color: var(--adm-faint); }
+.adm-iconpick-x {
+  margin-left: auto; padding: 2px 4px; border: none; border-radius: 6px;
+  background: none; color: var(--adm-faint); cursor: pointer; font-size: 14px; line-height: 1;
+}
+.adm-iconpick-x:hover { background: var(--adm-hover); color: var(--adm-text); }
+
+.adm-modal-box.adm-icp-box { max-width: 760px; display: flex; flex-direction: column; max-height: 82vh; }
+.adm-icp-search { position: relative; flex: 1; }
+.adm-icp-search .adm-input { padding-left: 32px; }
+.adm-icp-search .adm-ic { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--adm-faint); }
+.adm-icp-count { flex: 0 0 auto; font-size: 12px; color: var(--adm-faint); }
+.adm-icp-grid {
+  flex: 1; overflow-y: auto; padding: 16px 18px;
+  display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px;
+}
+@media (max-width: 900px) { .adm-icp-grid { grid-template-columns: repeat(6, 1fr); } }
+.adm-icp-cell {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; aspect-ratio: 1; padding: 4px; cursor: pointer;
+  border: 1px solid var(--adm-border); border-radius: 9px;
+  background: none; color: var(--adm-muted); overflow: hidden;
+}
+.adm-icp-cell:hover { border-color: #52525b; background: var(--adm-hover); color: var(--adm-text); }
+.adm-icp-cell.is-on { border-color: var(--adm-accent); background: var(--adm-accent-soft); color: #a5b4fc; }
+.adm-icp-cell b {
+  max-width: 100%; font-size: 9px; font-weight: 400; line-height: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--adm-faint);
+}
+.adm-icp-cell:hover b, .adm-icp-cell.is-on b { color: inherit; }
+.adm-icp-empty { grid-column: 1 / -1; padding: 40px 0; text-align: center; font-size: 13px; color: var(--adm-faint); }
+.adm-icp-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 18px; border-top: 1px solid var(--adm-border); background: var(--adm-panel-2);
+}
+.adm-icp-cur { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--adm-muted); }
 .adm-media-preview-img { max-width: 100%; max-height: 70vh; border-radius: 10px; display: block; margin: 0 auto 14px; }
 .adm-media-preview-open { display: inline-block; margin-bottom: 10px; }
 .adm-media-preview-meta { font-size: 12.5px; color: var(--adm-muted); line-height: 1.9; }

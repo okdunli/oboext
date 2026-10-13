@@ -18,10 +18,12 @@ export type FieldType =
   | "hidden"
   | "group";
 
-/** One row of a `categoryRows` field: a category plus optional title override. */
+/** One row of a `categoryRows` field: a category plus optional title and
+ *  lucide icon override (blank = the theme's default block icon). */
 export interface CategoryRow {
   slug: string;
   title: string;
+  icon?: string;
 }
 
 export interface SettingField {
@@ -110,10 +112,15 @@ export function coerceField(field: SettingField, raw: unknown): unknown {
       return Array.isArray(raw)
         ? raw
             .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
-            .map((r) => ({
-              slug: String(r.slug ?? ""),
-              title: String(r.title ?? ""),
-            }))
+            .map((r) => {
+              const row: CategoryRow = {
+                slug: String(r.slug ?? ""),
+                title: String(r.title ?? ""),
+              };
+              const icon = String(r.icon ?? "").trim();
+              if (icon) row.icon = icon;
+              return row;
+            })
         : [];
     case "verifications": {
 

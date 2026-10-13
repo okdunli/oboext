@@ -1,0 +1,64 @@
+<script>
+
+  import { apiGate, readBody, requireCap } from "@server/admin";
+  import { ServiceError } from "@server/errors";
+  import {
+    addCustomProvider,
+    listAdminProviders,
+    removeCustomProvider,
+    saveCustomProvider,
+    savePresetProvider,
+  } from "@server/oauth";
+
+  const PRESET_KEYS = [
+    "qq",
+    "wechat",
+    "weibo",
+    "dingtalk",
+    "douyin",
+    "github",
+    "linuxdo",
+  ] as const;
+
+  export async function GET() {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return listAdminProviders();
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const body = await readBody(request);
+      const key = await addCustomProvider(body);
+      return { key };
+    });
+  }
+
+  export async function PATCH(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const body = await readBody(request);
+      const key = String(body?.key || "");
+      const patch = body?.patch ?? {};
+      if (PRESET_KEYS.indexOf(key) >= 0) {
+        await savePresetProvider(key, patch);
+      } else if (key.startsWith("custom:")) {
+        await saveCustomProvider(key, patch);
+      } else {
+        throw new ServiceError("登录方式不存在", 404);
+      }
+      return listAdminProviders();
+    });
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const body = await readBody(request);
+      await removeCustomProvider(String(body?.key || ""));
+      return listAdminProviders();
+    });
+  }
+</script>

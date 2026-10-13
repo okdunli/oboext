@@ -1100,6 +1100,7 @@ export const loaders = {
   "admin.account": admin.adminAccount,
   "admin.security": admin.adminSecurity,
   "admin.security-public": admin.adminSecurityPublic,
+  "admin.oauth": admin.adminOAuth,
   "notFoundConfig": admin.notFoundConfig,
 };
 export type LoaderKey = keyof typeof loaders;

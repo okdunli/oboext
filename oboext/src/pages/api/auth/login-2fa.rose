@@ -16,6 +16,7 @@
     clientUa,
   } from "@server/auth";
   import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
+  import { getAdminSecurity, isEntryReferer } from "@server/security";
 
   export async function POST(request) {
     return apiGate(async () => {
@@ -23,6 +24,9 @@
       const ticket = String(body.ticket || "");
       const code = String(body.code || "").replace(/\s/g, "");
       if (!ticket || !code) return jsonFail("请输入动态码或恢复码", 422);
+
+      const sec = await getAdminSecurity();
+      if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);
 
       const user = await verifyChallengeTicket(ticket);
       if (!user) return jsonFail("验证已过期，请重新登录", 401);

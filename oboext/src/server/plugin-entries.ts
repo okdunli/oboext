@@ -15,4 +15,5 @@ export const PLUGIN_ENTRIES: Record<string, () => Promise<any>> = {
   "seo-schema": () => import("../../../plugins/seo-schema/index"),
   "sitemap-plus": () => import("../../../plugins/sitemap-plus/index"),
   "sticky-posts": () => import("../../../plugins/sticky-posts/index"),
+  "two-factor": () => import("../../../plugins/two-factor/index"),
 };

@@ -261,10 +261,12 @@ button { font-family: inherit; }
   border-radius: 999px; padding: 1px 7px; color: #fff; font-weight: 600;
 }
 .adm-side-foot { padding: 12px 14px; border-top: 1px solid var(--adm-border-soft); display: flex; align-items: center; gap: 10px; }
+.adm-side-foot a.adm-avatar { color: #fff; }
 .adm-avatar {
   width: 32px; height: 32px; border-radius: 50%;
   background: linear-gradient(135deg, #6366f1, #312e81);
   display: grid; place-items: center; font-size: 13px; font-weight: 700;
+  flex-shrink: 0;
 }
 .adm-side-foot .who { flex: 1; min-width: 0; }
 .adm-side-foot .who b { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

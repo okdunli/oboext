@@ -19,6 +19,14 @@ import { mimeFor } from "./storage.js";
 export interface ThemeChrome {
   slug: string;
   cssHref(): string;
+  /**
+   * Raw CSS that must apply as early as possible (the theme's base
+   * background/colour, before the external stylesheet lands). Contract: this
+   * returns CSS **declarations only** — it is wrapped in a `<style>` element by
+   * `bodyFixHtml()` before being injected via `{@html ...}`. Returning a bare
+   * CSS string straight into the layout renders it as a visible text node
+   * (every theme used to leak `body{background:…}` at the top of the page).
+   */
   bodyFix(): string;
   headExtra(): string;
   nav(settings: Record<string, any>, menuItems: MenuItem[]): string;
@@ -270,7 +278,7 @@ const skyscraperChrome: ThemeChrome = {
     R.pagePage(parts.page, parts.recent, parts.commentsHtml, parts.bodyHtml),
 };
 
-const defaultBodyFix = `body{background:var(--bg,#09090b);color:var(--text,#f4f4f5)}`;
+const defaultBodyFix = `<style id="rv-body-fix">body{background:var(--bg,#09090b);color:var(--text,#f4f4f5)}</style>`;
 
 function defaultMenuUl(items: MenuItem[], cls: string): string {
   if (!items.length) return "";
@@ -452,7 +460,7 @@ const defaultChrome: ThemeChrome = {
   pagePage: defaultPagePage,
 };
 
-const pseudoBodyFix = `body{background:#0c0d1a;color:#f3f1ff}`;
+const pseudoBodyFix = `<style id="rv-body-fix">body{background:#0c0d1a;color:#f3f1ff}</style>`;
 
 function pseudoNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
@@ -560,7 +568,7 @@ const pseudolinearChrome: ThemeChrome = {
   pagePage: pseudoPagePage,
 };
 
-const cmBodyFix = `body{background:#050a06;color:#9bff7a}`;
+const cmBodyFix = `<style id="rv-body-fix">body{background:#050a06;color:#9bff7a}</style>`;
 
 function cmNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
@@ -1242,7 +1250,7 @@ const BLUEMIX_VARS = `
 const bluemixChrome: ThemeChrome = {
   slug: "bluemix",
   cssHref: () => themeCssHref("bluemix"),
-  bodyFix: () => `body{background:#e5e9ef;color:var(--text-color-2,#324057)}`,
+  bodyFix: () => `<style id="rv-body-fix">body{background:#e5e9ef;color:var(--text-color-2,#324057)}</style>`,
   headExtra: () => `<style id="rv-theme-bluemix-vars">${BLUEMIX_VARS}</style>`,
   nav: (settings, items) => bmixNav(settings, items),
   bodyOpen: (settings, items) =>

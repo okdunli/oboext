@@ -40,6 +40,7 @@ import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { getNotFoundSettings } from "./not-found-config.js";
 import { getPublicRegisterConfig } from "./members.js";
+import { renderUserCenter, renderUserCenterGuest } from "./account.js";
 import { getThemeChrome, publicAssetHref, type MenuItem } from "./theme-chrome.js";
 
 export type Ctx = {
@@ -960,6 +961,20 @@ function registerView(config: {
   return { head, main };
 }
 
+function userCenterView(route: VirtualSiteRoute, ctx: Ctx) {
+  const title = route.seoTitle || route.title;
+  const canonical = `${ctx.origin ?? ""}${route.path}`;
+  const head =
+    `<title>${R.esc(title)}</title>` +
+    `<meta name="robots" content="noindex, nofollow">` +
+    `<link rel="canonical" href="${R.esc(canonical)}">`;
+  const main =
+    `<div class="container-np" style="padding:40px 16px 64px;max-width:1200px;margin-inline:auto">` +
+    `<div>${route.html}</div>` +
+    `</div>`;
+  return { head, main };
+}
+
 async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
   const raw = (payload.segments ?? []).map((s) => String(s));
   const res = await resolveSitePath(raw);
@@ -980,6 +995,14 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
       registerCfg.path === "/" + decoded.join("/")
     ) {
       return { kind: "register", ...registerView(registerCfg) };
+    }
+
+    if (decoded.length === 1 && decoded[0] === "me") {
+      const me = ctx.user as any;
+      const route = me
+        ? await renderUserCenter(me)
+        : await renderUserCenterGuest();
+      return { kind: "usercenter", ...userCenterView(route, ctx) };
     }
     const virtual = await resolveVirtualRoute(decoded);
     if (!virtual) return null;
@@ -1045,6 +1068,7 @@ export const loaders = {
   "admin.settings": admin.adminSettings,
   "admin.notify": admin.adminNotify,
   "admin.members": admin.adminMembers,
+  "admin.account": admin.adminAccount,
   "notFoundConfig": admin.notFoundConfig,
 };
 export type LoaderKey = keyof typeof loaders;

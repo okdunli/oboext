@@ -12,6 +12,7 @@ import { getOption, setOption } from "./options.js";
 import { getNotifySettings } from "./notify.js";
 import { verifyCode } from "./verify-codes.js";
 import { getPermalinkConfig } from "./links.js";
+import { addPasswordlessMark } from "./passwordless.js";
 import { ServiceError } from "./errors.js";
 
 const OPTION_KEY = "memberSettings";
@@ -316,6 +317,8 @@ export async function registerMember(input: RegisterInput): Promise<SessionUser>
       phoneVerified: phoneVerifiedFlag,
     })
     .returning();
+
+  if (!passwordRaw) await addPasswordlessMark(row.id);
 
   return {
     id: row.id,

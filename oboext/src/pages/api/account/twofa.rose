@@ -1,0 +1,53 @@
+<script>
+
+  import { apiGate, jsonFail, readBody } from "@server/admin";
+  import {
+    beginEnrollment,
+    confirmEnrollment,
+    disableTwoFa,
+    getTwoFaStatus,
+    isTwoFactorPluginEnabled,
+    regenerateRecoveryCodes,
+  } from "@server/twofa";
+
+  export async function GET() {
+    return apiGate(async () => {
+      const user = getContext().user;
+      if (!user) return jsonFail("未认证", 401);
+      if (!(await isTwoFactorPluginEnabled())) return jsonFail("接口不存在", 404);
+      return getTwoFaStatus(user);
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const user = getContext().user;
+      if (!user) return jsonFail("未认证", 401);
+      if (!(await isTwoFactorPluginEnabled())) return jsonFail("接口不存在", 404);
+      const body = await readBody(request);
+      const action = String(body?.action || "");
+      if (action === "begin") {
+        return beginEnrollment(user);
+      }
+      if (action === "confirm") {
+        const code = String(body?.code || "").trim();
+        if (!/^\d{6}$/.test(code)) return jsonFail("请输入 6 位动态码", 422);
+        const recoveryCodes = await confirmEnrollment(user, code);
+        return { enabled: true, recoveryCodes };
+      }
+      if (action === "regen") {
+        const code = String(body?.code || "").trim();
+        if (!/^\d{6}$/.test(code)) return jsonFail("请输入 6 位动态码", 422);
+        const recoveryCodes = await regenerateRecoveryCodes(user, code);
+        return { recoveryCodes };
+      }
+      if (action === "disable") {
+        const password = String(body?.password || "");
+        if (!password) return jsonFail("请输入登录密码", 422);
+        await disableTwoFa(user, password);
+        return { enabled: false };
+      }
+      return jsonFail("不支持的操作", 422);
+    });
+  }
+</script>

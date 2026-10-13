@@ -1,0 +1,19 @@
+<script>
+
+  import { apiGate, readBody, requireCap } from "@server/admin";
+  import { getAdminSecurity, saveAdminSecurity } from "@server/security";
+
+  export async function GET() {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return getAdminSecurity();
+    });
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return saveAdminSecurity(await readBody(request));
+    });
+  }
+</script>

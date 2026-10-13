@@ -1,0 +1,19 @@
+<script>
+
+  import { apiGate, readBody, requireCap, jsonOk } from "@server/admin";
+  import { getMemberSettings, saveMemberSettings } from "@server/members";
+
+  export async function GET() {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return getMemberSettings();
+    });
+  }
+
+  export async function PUT(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return saveMemberSettings(await readBody(request));
+    });
+  }
+</script>

@@ -1,0 +1,33 @@
+<script>
+
+  import { jsonFail, readBody, apiGate } from "@server/admin";
+  import { sessionCookieValue, hasAnyUser } from "@server/auth";
+  import { getMemberSettings, registerMember } from "@server/members";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+
+      if (!(await hasAnyUser())) return jsonFail("接口不存在", 404);
+      const member = await getMemberSettings();
+      if (!member.registerEnabled) return jsonFail("接口不存在", 404);
+
+      const body = await readBody(request);
+      const user = await registerMember({
+        name: body.name,
+        email: body.email,
+        phone: body.phone,
+        password: body.password,
+        emailCode: body.emailCode,
+        phoneCode: body.phoneCode,
+        inviteCode: body.inviteCode,
+      });
+      return new Response(JSON.stringify({ user }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "set-cookie": await sessionCookieValue(user),
+        },
+      });
+    });
+  }
+</script>

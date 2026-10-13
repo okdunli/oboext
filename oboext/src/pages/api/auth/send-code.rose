@@ -1,28 +1,42 @@
 <script>
   // POST /api/auth/send-code { channel: "email"|"sms", target, purpose }
   //
-  // purpose=login: the login page's passwordless login. Gated by the notify
-  // login switches; an unknown/inactive target still answers { sent: true }
-  // WITHOUT sending, so the endpoint can't enumerate accounts.
+
   //
-  // (register/bind purposes arrive with the member-registration and account
-  // -center batches; anything else is a flat 404, same anti-oracle stance.)
-  //
-  // Abuse control lives in the code service itself: 60s per target, 20/hour
-  // per IP, 5 wrong attempts, 10-minute TTL, single use.
+
   import { jsonOk, jsonFail, readBody, apiGate } from "@server/admin";
   import { clientIp, hasAnyUser, findUserByContact, normalizeContactTarget } from "@server/auth";
   import { getNotifySettings, sendVerificationCode } from "@server/notify";
+  import { getMemberSettings } from "@server/members";
 
   export async function POST(request) {
     return apiGate(async () => {
       const body = await readBody(request);
       const channel = body.channel === "sms" ? "sms" : "email";
       const purpose = String(body.purpose || "login");
-      if (purpose !== "login") return jsonFail("接口不存在", 404);
+      if (purpose !== "login" && purpose !== "register") return jsonFail("接口不存在", 404);
       if (!(await hasAnyUser())) return jsonFail("接口不存在", 404);
 
       const notify = await getNotifySettings();
+
+      if (purpose === "register") {
+        const member = await getMemberSettings();
+        if (!member.registerEnabled) return jsonFail("接口不存在", 404);
+        const ready =
+          channel === "email"
+            ? notify.email.enabled && notify.register.emailVerify
+            : notify.sms.enabled && notify.register.phoneVerify;
+        if (!ready) return jsonFail("接口不存在", 404);
+        const target = normalizeContactTarget(channel, String(body.target || ""));
+        const out = await sendVerificationCode({
+          channel,
+          target,
+          purpose: "register",
+          ip: clientIp(request),
+        });
+        return { sent: true, resendAfter: out.resendAfter };
+      }
+
       const ready =
         channel === "email"
           ? notify.email.enabled && notify.login.emailVerify

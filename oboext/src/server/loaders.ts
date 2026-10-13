@@ -39,7 +39,7 @@ import { skyscraperBridgeRoot, skyscraperBridgeDark } from "./theme-bridge.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { getNotFoundSettings } from "./not-found-config.js";
-import { getThemeChrome, type MenuItem } from "./theme-chrome.js";
+import { getThemeChrome, publicAssetHref, type MenuItem } from "./theme-chrome.js";
 
 export type Ctx = {
   query: URLSearchParams;
@@ -177,6 +177,11 @@ async function chromeData(pathname: string) {
   const menuItems: R.SkyItem[] =
     sideMenu && sideMenu.items.length ? (sideMenu.items as R.SkyItem[]) : sidebarFallback(cfg);
   const tc = getThemeChrome(themeSlug);
+  const themeScripts =
+    (themeSlug === "skyscraper" ? `<script src="/public/theme.js"></script>` : "") +
+    (themeSlug !== "skyscraper" ? `<script src="${publicAssetHref("theme-pjax.js")}"></script>` : "") +
+    (themeSlug === "bluemix" ? `<script src="${publicAssetHref("theme-bluemix.js")}"></script>` : "") +
+    `<script src="${publicAssetHref("comments.js")}"></script>`;
   const headerMenu = await getMenuByLocation("header");
   const headerItems: MenuItem[] = (headerMenu?.items ?? []) as MenuItem[];
   const footerHtml = tc.footer(
@@ -189,6 +194,7 @@ async function chromeData(pathname: string) {
     varsHtml,
     themeSlug,
     cssHref: tc.cssHref(),
+    themeScripts,
     bodyFix: tc.bodyFix(),
     headExtra: tc.headExtra(),
     navHtml: tc.nav({ ...settings, __pathname: pathname }, headerItems),
@@ -222,6 +228,7 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
     themeHead: d.varsHtml + d.headExtra,
     themeSlug: d.themeSlug,
     cssHref: d.cssHref,
+    themeScripts: d.themeScripts,
     bodyFix: d.bodyFix,
     nav: d.navHtml,
     bodyOpen: d.bodyOpen,

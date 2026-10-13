@@ -1,7 +1,12 @@
 <script>
-  // Admin login. Public (middleware-whitelisted); POST /api/auth/login sets
-  // the HttpOnly cms_session cookie, then we hard-navigate into the shell.
-  let session = $data(() => __rvLoad("admin.session", {}));
+  // Admin login — port of components/admin/AdminLogin.tsx. Four modes share
+  // one card: password login, email/SMS code login (gated by
+  // /api/auth/login-config), password reset (forgot → reset), and the
+  // second-factor step a two-factor plugin can demand after either login
+  // path (10-minute challenge ticket redeemed by /api/auth/login-2fa).
+  // All behaviour lives in admin.js (data-adm-act delegation); this page is
+  // server-rendered markup with no client state of its own. (Logged-in
+  // visitors never reach it: the /admin wall in _middleware.rose bounces.)
 </script>
 
 <head>
@@ -17,27 +22,72 @@
       <ul>
         <li>jose HS256 会话 + bcrypt 密码哈希</li>
         <li>登录失败滑动窗口限流</li>
-        <li>基于角色的内容权限（admin / editor / author）</li>
+        <li>邮箱 / 手机验证码登录与两步验证</li>
       </ul>
     </div>
     <div class="adm-hint">oboext on rosefd · Node runtime</div>
   </div>
   <div class="adm-auth-main">
-    <div class="adm-auth-card">
-      <h2>欢迎回来</h2>
-      <p class="adm-auth-sub">登录以管理你的站点内容</p>
-      <form data-adm-form="login">
-        <div class="adm-field">
+    <div class="adm-auth-card" data-login-root>
+      <h2 data-login-title>欢迎回来</h2>
+      <p class="adm-auth-sub" data-login-sub>登录以管理你的站点内容</p>
+
+      <form data-adm-form="login" data-login-mode="login">
+        <div class="adm-field" data-login-show="login forgot codelogin">
           <label>邮箱或昵称</label>
           <input class="adm-input" name="account" autocomplete="username" required autofocus>
         </div>
-        <div class="adm-field">
-          <label>密码</label>
+
+        <div class="adm-field" data-login-show="login">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <label>密码</label>
+            <button type="button" class="adm-auth-link" data-adm-act="login-forgot">忘记密码？</button>
+          </div>
           <input class="adm-input" type="password" name="password" autocomplete="current-password" required>
         </div>
-        <button class="adm-btn adm-btn-block" type="submit">登 录</button>
+
+        <div class="adm-field" data-login-show="codelogin" hidden>
+          <label data-login-target-label>登录邮箱</label>
+          <input class="adm-input" name="target" type="email" autocomplete="email" placeholder="账号绑定的邮箱">
+        </div>
+
+        <div class="adm-field" data-login-show="codelogin" hidden>
+          <label>登录验证码</label>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <input class="adm-input" name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位验证码" style="flex:1;">
+            <button type="button" class="adm-btn adm-btn-ghost" data-adm-act="login-send-code" style="flex-shrink:0;white-space:nowrap;">发送验证码</button>
+          </div>
+        </div>
+
+        <div class="adm-field" data-login-show="forgot" hidden>
+          <label>邮箱重置码</label>
+          <input class="adm-input" name="resetCode" inputmode="numeric" maxlength="8" placeholder="邮件中的 6 位验证码">
+        </div>
+
+        <div class="adm-field" data-login-show="forgot" hidden>
+          <label>新密码</label>
+          <input class="adm-input" type="password" name="resetPassword" minlength="8" autocomplete="new-password" placeholder="至少 8 位">
+        </div>
+
+        <div class="adm-field" data-login-show="twofa" hidden>
+          <label>动态码或恢复码</label>
+          <input class="adm-input" name="twoFaCode" autocomplete="one-time-code" placeholder="6 位动态码，或 XXXX-XXXX 恢复码" autofocus>
+          <p class="adm-hint" style="margin:6px 0 0;">打开验证器 App 获取当前 6 位动态码；手机不可用时可输入任一未使用的恢复码。</p>
+        </div>
+
+        <button class="adm-btn adm-btn-block" type="submit" data-login-submit>登 录</button>
         <p class="adm-auth-msg" data-adm-msg></p>
       </form>
+
+      <div data-login-links>
+        <button type="button" class="adm-auth-link" data-adm-act="login-codelogin" data-login-show="login" hidden>使用邮箱/手机验证码登录</button>
+        <button type="button" class="adm-auth-link" data-adm-act="login-back" data-login-show="codelogin forgot" hidden>返回账号密码登录</button>
+        <button type="button" class="adm-auth-link" data-adm-act="login-2fa-back" data-login-show="twofa" hidden>返回账号密码步骤</button>
+      </div>
+
+      <p class="adm-hint" style="margin-top:14px;text-align:center;">
+        可用邮箱或昵称登录 · <a class="adm-auth-link" href="/">返回站点首页</a>
+      </p>
     </div>
   </div>
 </div>

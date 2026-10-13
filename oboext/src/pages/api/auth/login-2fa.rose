@@ -1,0 +1,63 @@
+<script>
+  // POST /api/auth/login-2fa { ticket, code }
+  //
+  // Login step two: redeem the 10-minute challenge ticket issued by
+  // /api/auth/login (or login-code) and verify the second factor. The
+  // verdict comes from the auth.challenge.verify filter — a second-factor
+  // plugin (two-factor) owns TOTP/recovery-code checking; with no such
+  // plugin enabled nothing can set ok=true, so the endpoint fails closed.
+  import { jsonOk, jsonFail, readBody, apiGate } from "@server/admin";
+  import {
+    verifyChallengeTicket,
+    recordLoginEvent,
+    LOGIN_EVENTS,
+    sessionCookieValue,
+    clientIp,
+    clientUa,
+  } from "@server/auth";
+  import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const ticket = String(body.ticket || "");
+      const code = String(body.code || "").replace(/\s/g, "");
+      if (!ticket || !code) return jsonFail("请输入动态码或恢复码", 422);
+
+      const user = await verifyChallengeTicket(ticket);
+      if (!user) return jsonFail("验证已过期，请重新登录", 401);
+
+      const verdict = await applyAsyncFilters(HOOKS.authChallengeVerify, {
+        user,
+        code,
+        ok: false,
+      });
+      if (!verdict.ok) {
+        await recordLoginEvent({
+          eventType: LOGIN_EVENTS.FAIL,
+          userId: user.id,
+          account: user.name,
+          ip: clientIp(request),
+          userAgent: clientUa(request),
+        });
+        return jsonFail("动态码或恢复码不正确", 401);
+      }
+
+      await recordLoginEvent({
+        eventType: LOGIN_EVENTS.SUCCESS,
+        userId: user.id,
+        account: user.name,
+        ip: clientIp(request),
+        userAgent: clientUa(request),
+      });
+      doAction(HOOKS.userLoggedIn, { user });
+      return new Response(JSON.stringify({ user }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "set-cookie": await sessionCookieValue(user),
+        },
+      });
+    });
+  }
+</script>

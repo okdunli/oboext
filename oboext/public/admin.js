@@ -524,9 +524,17 @@
         });
       if (!ids.length) return toast("请先勾选项目");
       var op = t.getAttribute("data-op");
-      if (op === "delete" && !confirm("确认删除选中的 " + ids.length + " 篇文章？")) return;
+
+      var url = t.getAttribute("data-url") || "/api/posts";
+      if (op === "delete" && !confirm("确认删除选中的 " + ids.length + " 项？")) return;
       try {
-        await api("PATCH", "/api/posts", { ids: ids, action: op });
+        if (url === "/api/comments/bulk") {
+          await api("POST", url, op === "delete"
+            ? { action: "delete", ids: ids }
+            : { action: "status", ids: ids, status: op });
+        } else {
+          await api("PATCH", url, { ids: ids, action: op });
+        }
         toast("批量操作完成", "ok");
         setTimeout(admRefresh, 500);
       } catch (err) { toast(err.message, "err"); }

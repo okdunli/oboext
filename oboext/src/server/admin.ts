@@ -714,6 +714,42 @@ export async function deleteComment(user: SessionUser | null, id: number) {
   return { id };
 }
 
+export async function setCommentsStatus(
+  user: SessionUser | null,
+  ids: number[],
+  status: string,
+) {
+  const u = requireUser(user);
+  if (!can(u.role, "content:update:any")) throw new ServiceError("权限不足", 403);
+  const ok: number[] = [];
+  for (const id of ids) {
+    const [existing] = await db.select().from(comments).where(eq(comments.id, id));
+    if (!existing) continue;
+    await db.update(comments).set({ status }).where(eq(comments.id, id));
+    if (status === "published" && existing.status !== "published")
+      await bumpCommentCount(existing.postType, existing.postId, 1);
+    if (existing.status === "published" && status !== "published")
+      await bumpCommentCount(existing.postType, existing.postId, -1);
+    ok.push(id);
+  }
+  return ok;
+}
+
+export async function deleteComments(user: SessionUser | null, ids: number[]) {
+  const u = requireUser(user);
+  if (!can(u.role, "content:delete:any")) throw new ServiceError("权限不足", 403);
+  const ok: number[] = [];
+  for (const id of ids) {
+    const [existing] = await db.select().from(comments).where(eq(comments.id, id));
+    if (!existing) continue;
+    if (existing.status === "published")
+      await bumpCommentCount(existing.postType, existing.postId, -1);
+    await db.delete(comments).where(eq(comments.id, id));
+    ok.push(id);
+  }
+  return ok;
+}
+
 function cleanOpt(v: string | null | undefined): string | null | undefined {
   if (v === undefined) return undefined;
   return v === "" || v === null ? null : v;

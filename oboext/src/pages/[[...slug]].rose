@@ -20,13 +20,13 @@
   });
 </script>
 
-{#if view().head}
-<head>{@html view().head}</head>
-{/if}
-{#if view().headTitle}
+{#if view().head || view().headTitle}
 <head>
+  {#if view().head}{@html view().head}{/if}
+  {#if view().headTitle}
   <title>{view().headTitle}</title>
   {@html view().pluginHead ?? ""}
+  {/if}
 </head>
 {/if}
 

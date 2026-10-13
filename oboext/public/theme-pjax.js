@@ -1,14 +1,17 @@
 /**
- * Pjax navigation for non-skyscraper oboext themes (default / pseudolinear /
- * codeman / bluemix). Mirrors the original RouteFrame: intercept internal
- * link clicks, fetch the target page, and swap only the #sk-main container so
- * cross-page navigation happens without a full reload. Thick chrome (head nav,
- * footer) stays mounted.
+ * Pjax navigation for oboext themes (skyscraper / default / pseudolinear /
+ * codeman / bluemix). Intercepts internal link clicks, fetches the target page
+ * and swaps only <main id="sk-main"> so cross-page navigation happens without a
+ * full reload; the thick chrome (nav, footer) stays mounted.
  *
- * Each theme's route container is <main id="sk-main">; the theme's root class
- * (.th-pseudo / .cm-crt / .th-bluemix / .theme-root) scrolls itself into view
- * after a swap so the entrance animation (pl-rise / cm-typein / pf-enter)
- * replays the way a hard reload would.
+ * bluemix choreography is a 1:1 port of themes/bluemix/RouteFrame.tsx:
+ *   click → frame.pf-leave (content sinks 1.5em + fades, LEAVE_MS=300)
+ *         → body.bmx-nav-loading (nav progress sweep) + .full-loading.show
+ *           (5 bouncing bars) while the fetch is in flight (OVERLAY_MIN_MS=450)
+ *         → swap innerHTML, frame.pf-enter (content descends from above)
+ *         → body.bmx-nav-done then cleared.
+ * Other themes keep the previous simple swap (their own entrance keyframe —
+ * pl-rise / cm-typein — still replays because the root scrolls itself in).
  */
 (function () {
   "use strict";
@@ -17,6 +20,35 @@
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   let seq = 0;
   let key = location.pathname + location.search;
+
+  const LEAVE_MS = 300;
+  const OVERLAY_MIN_MS = 450;
+  const INITIAL_MIN_MS = 420;
+  const isBluemix = !!document.querySelector(".th-bluemix");
+
+  const frame = isBluemix ? document.querySelector("[data-bmx-frame]") : null;
+  const overlay = isBluemix ? document.querySelector(".full-loading") : null;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function frameCls(cls) {
+    if (!frame) return;
+    frame.classList.remove("pf-init", "pf-leave", "pf-enter");
+    if (cls) frame.classList.add(cls);
+  }
+  function overlayShow(on) {
+    if (overlay) overlay.classList.toggle("show", !!on);
+  }
+  function navProgress(state) {
+    if (!isBluemix) return;
+    document.body.classList.toggle("bmx-nav-loading", state === "start");
+    document.body.classList.toggle("bmx-nav-done", state === "done");
+  }
+
+  if (isBluemix) {
+    requestAnimationFrame(() => {
+      setTimeout(() => frameCls("pf-enter"), INITIAL_MIN_MS);
+    });
+  }
 
   function eligible(a) {
     if (!a || !a.getAttribute("href")) return false;
@@ -30,9 +62,7 @@
     return url;
   }
 
-  async function go(raw, push) {
-    const s = ++seq;
-    const want = new URL(raw, location.href);
+  async function fetchDoc(want) {
     let res;
     try {
       res = await fetch(want.pathname + want.search, { credentials: "same-origin" });
@@ -44,29 +74,61 @@
         if (retry.ok) res = retry;
       }
     } catch {
-      if (s === seq) location.href = want.href;
-      return;
+      return null;
     }
+    if (!res.ok || (res.headers.get("content-type") || "").indexOf("text/html") < 0) return null;
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const next = doc.getElementById("sk-main");
+    if (!next) return null;
+    return { doc, next, url: new URL(res.url || want.href) };
+  }
+
+  async function go(raw, push) {
+    const s = ++seq;
+    const want = new URL(raw, location.href);
+    const t0 = Date.now();
+
+    if (isBluemix) {
+      frameCls("pf-leave");
+      navProgress("start");
+      await wait(LEAVE_MS);
+      if (s !== seq) return;
+      overlayShow(true);
+    }
+
+    const got = await fetchDoc(want);
     if (s !== seq) return;
-    if (!res.ok || (res.headers.get("content-type") || "").indexOf("text/html") < 0) {
+    if (!got) {
+      if (isBluemix) { overlayShow(false); frameCls("pf-enter"); navProgress("done"); }
       location.href = want.href;
       return;
     }
-    const html = await res.text();
-    if (s !== seq) return;
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    const next = doc.getElementById("sk-main");
-    if (!next) { location.href = res.url || want.href; return; }
+
+    if (isBluemix) {
+      const elapsed = Date.now() - t0 - LEAVE_MS;
+      if (elapsed < OVERLAY_MIN_MS) await wait(OVERLAY_MIN_MS - elapsed);
+      if (s !== seq) return;
+    }
+
     const main = document.getElementById("sk-main");
-    main.innerHTML = next.innerHTML;
-    const t = doc.querySelector("title");
+    main.innerHTML = got.next.innerHTML;
+    const t = got.doc.querySelector("title");
     if (t) document.title = t.textContent;
-    const final = new URL(res.url || want.href);
+    const final = got.url;
     if (push) {
       history.replaceState({ rv: 1, y: window.scrollY }, "");
       history.pushState({ rv: 1, y: 0 }, "", final.pathname + final.search + final.hash);
     }
     key = final.pathname + final.search;
+
+    if (isBluemix) {
+      overlayShow(false);
+      frameCls("pf-enter");
+      navProgress("done");
+      setTimeout(() => navProgress(null), 900);
+    }
+
     document.dispatchEvent(new CustomEvent("rv:nav"));
     if (final.hash) {
       const el = document.getElementById(final.hash.slice(1)) || document.querySelector(final.hash);

@@ -164,7 +164,8 @@ export function ensurePluginsLoaded(): Promise<void> {
     const rows = await db
       .select({ slug: plugins.slug, settings: plugins.settings, enabled: plugins.enabled })
       .from(plugins)
-      .where(eq(plugins.enabled, true));
+      .where(eq(plugins.enabled, true))
+      .orderBy(asc(plugins.slug));
     const manifests = new Map(discoverPlugins().map((m) => [m.slug, m]));
     const enabled = rows
       .filter((r: { slug: string }) => manifests.has(r.slug))

@@ -28,6 +28,7 @@ import {
   pageUrlFor,
   categoryUrlFor,
   tagUrlFor,
+  type PermalinkConfig,
 } from "./links.js";
 
 export type MenuNode = {
@@ -60,22 +61,67 @@ export type MenuItemInput = {
   icon?: string | null;
 };
 
+type LegacyKind = "category" | "tag" | "page";
+
+/** The unprefixed head a base may have been written as before ("blog/category" →
+ *  "category"). Empty when the configured base is already a single segment, in
+ *  which case a stored "/category/<slug>" is correct as-is. */
+function legacyHead(base: string): string {
+  const segs = base.split("/").filter(Boolean);
+  return segs.length > 1 ? segs[segs.length - 1] : "";
+}
+
+/** Menu rows carried over from an older install keep a URL snapshot taken before
+ *  the base changed, so "/category/<slug>" no longer sits under blog/category and
+ *  dead-ends on 404. Recognise the unprefixed form of a taxonomy/page route so it
+ *  can be re-based onto the live config; everything else stays untouched. */
+function legacyLinkTarget(
+  url: string,
+  cfg: PermalinkConfig,
+): { type: LegacyKind; slug: string } | null {
+  const segs = String(url || "")
+    .split(/[?#]/)[0]
+    .split("/")
+    .filter(Boolean);
+  if (segs.length !== 2) return null;
+  const routes: Array<[LegacyKind, string]> = [
+    ["category", cfg.categoryBase],
+    ["tag", cfg.tagBase],
+    ["page", cfg.pageBase],
+  ];
+  for (const [type, base] of routes) {
+    const head = legacyHead(base);
+    if (head && head === segs[0]) return { type, slug: segs[1] };
+  }
+  return null;
+}
+
 async function resolveMenuUrls(
   flat: MenuItem[],
   includeUnpublished: boolean,
 ): Promise<MenuItem[]> {
+  const cfg = await getPermalinkConfig();
   const groups: Record<string, string[]> = {};
+  const legacy = new Map<number, { type: LegacyKind; slug: string }>();
+
   for (const it of flat) {
     if (
       it.referenceSlug &&
       (it.type === "post" || it.type === "page" || it.type === "category" || it.type === "tag")
     ) {
       (groups[it.type] ??= []).push(it.referenceSlug);
+      continue;
+    }
+    if (it.type === "custom" && !it.referenceSlug) {
+      const t = legacyLinkTarget(it.url, cfg);
+      if (t) {
+        (groups[t.type] ??= []).push(t.slug);
+        legacy.set(it.id, t);
+      }
     }
   }
   if (!Object.keys(groups).length) return flat;
 
-  const cfg = await getPermalinkConfig();
   const resolved = new Map<string, string>();
   const keyOf = (type: string, slug: string) => `${type}:${slug}`;
 
@@ -124,9 +170,14 @@ async function resolveMenuUrls(
   }
 
   return flat.map((it) => {
-    if (!it.referenceSlug) return it;
-    const url = resolved.get(keyOf(it.type, it.referenceSlug));
-    return url ? { ...it, url } : it;
+    if (it.referenceSlug) {
+      const url = resolved.get(keyOf(it.type, it.referenceSlug));
+      return url ? { ...it, url } : it;
+    }
+    const t = legacy.get(it.id);
+    if (!t) return it;
+    const url = resolved.get(keyOf(t.type, t.slug));
+    return url && url !== it.url ? { ...it, url } : it;
   });
 }
 

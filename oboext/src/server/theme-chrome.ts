@@ -482,7 +482,7 @@ const skyscraperChrome: ThemeChrome = {
   slug: "skyscraper",
   cssHref: () => "/public/theme.css",
   bodyFix: () => "",
-  headExtra: () => "",
+  headExtra: () => `<script src="/public/noflash.js"></script>`,
   nav: (settings) => R.topNav(settings),
   bodyOpen: () =>
     `<div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">`,
@@ -1194,8 +1194,18 @@ const cmPad = (n: number, w = 3) => String(n).padStart(w, "0");
 
 function cmNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
-  const links = items
-    .map((it) => `<li><a href="${esc(it.url)}"${it.target ? ` target="${esc(it.target)}"` : ""}>${esc(it.label)}</a></li>`)
+  const list: MenuItem[] = items.length
+    ? items
+    : [
+        { id: "__index", label: "home", url: "/" },
+        { id: "__archive", label: "blog", url: "/blog" },
+      ];
+  const links = list
+    .map(
+      (it) =>
+        `<li><a href="${esc(it.url)}"${it.target ? ` target="${esc(it.target)}"` : ""}` +
+        ` data-active="${bmixNavActive(settings, it.url) ? "true" : "false"}">${esc(it.label)}</a></li>`,
+    )
     .join("");
   return `<nav class="cm-nav"><div class="cm-nav-inner">` +
     `<a href="/" class="cm-brand"><span>${title}</span><b>:~$</b></a>` +
@@ -1536,6 +1546,12 @@ function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
 function bmixFooter(settings: Record<string, any>, widgetsHtml: string): string {
   const year = new Date().getFullYear();
   const copyright = settings.footerText || `Designed &amp; Coded by oboext © ${year} ${settings.siteTitle}`;
+  const align =
+    settings.footerContainerAlign === "left"
+      ? "0 auto"
+      : settings.footerContainerAlign === "right"
+        ? "auto 0"
+        : "auto";
   
   const links: any[] = Array.isArray(settings.footerLinks) ? settings.footerLinks : [];
   const linkCls = 'class="flex gx-3 items-center text-embossed hover:text-primary-gray"';
@@ -1551,7 +1567,7 @@ function bmixFooter(settings: Record<string, any>, widgetsHtml: string): string 
       : "";
   return `<footer class="py-16 text-xs relative">` +
     (widgetsHtml ? `<div class="container-np px-10">${widgetsHtml}</div>` : "") +
-    `<div class="container-np px-10" style="margin-inline:auto">` +
+    `<div class="container-np px-10" style="margin-inline:${align}">` +
     `<div class="text-right text-primary-gray text-bulge-primary-gray">${copyright}</div>` +
     
     `<div class="mt-4 flex flex-wrap gx-8 gy-3 justify-end">${linksHtml}</div>` +
@@ -1611,7 +1627,7 @@ function bmixCardTone(
 
 function bmixSplitTitle(raw: string): { title1: string; title2: string } {
   const a = raw.split(" · ");
-  if (a.length === 2) return { title1: a[0], title2: a[1] };
+  if (a.length >= 2) return { title1: a[0], title2: a.slice(1).join(" · ") };
   const m = raw.match(/\[[^\]]+\]/);
   if (m) return { title1: raw.replace(m[0], ""), title2: m[0].slice(1, -1) };
   return { title1: raw, title2: "" };
@@ -1989,7 +2005,7 @@ function bmixListPage(parts: ListParts): string {
 
   
   
-  const gridCls = isBlog ? "blog-grid" : isSearch ? "recent-articles" : "list-grid";
+  const gridCls = isBlog || isCategory || isSearch ? "blog-grid" : "list-grid";
   const cards = parts.items.map((p, i) => bmixPostCard(p, i)).join("");
   
   const pager = !isCategory && parts.showPager !== false ? bmixPager(parts.page, parts.totalPages, parts.hrefFor) : "";

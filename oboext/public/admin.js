@@ -605,6 +605,20 @@
       return;
     }
 
+    if (act === "oauth-delete") {
+      e.preventDefault();
+      var card = t.closest("form[data-key]");
+      var key = card ? card.getAttribute("data-key") : "";
+      if (!key) return;
+      if (!confirm("确定删除该自定义登录方式？其全部绑定关系也会清除。")) return;
+      try {
+        await api("DELETE", "/api/oauth-config", { key: key });
+        toast("已删除", "ok");
+        setTimeout(admRefresh, 500);
+      } catch (err) { toast(err.message, "err"); }
+      return;
+    }
+
     if (act === "account-send") {
       e.preventDefault();
       var channel = t.getAttribute("data-channel");
@@ -718,6 +732,17 @@
 
         await api("PUT", "/api/security", formObject(form));
         toast("安全设置已保存并立即生效", "ok");
+        setTimeout(admRefresh, 600);
+      } else if (kind === "oauth") {
+
+        var key = form.getAttribute("data-key") || "";
+        await api("PATCH", "/api/oauth-config", { key: key, patch: formObject(form) });
+        toast("登录方式配置已保存", "ok");
+        setTimeout(admRefresh, 600);
+      } else if (kind === "oauth-add") {
+
+        await api("POST", "/api/oauth-config", formObject(form));
+        toast("自定义登录方式已创建", "ok");
         setTimeout(admRefresh, 600);
       } else if (kind === "account-profile") {
 
@@ -2336,6 +2361,91 @@
     updatePreview();
   }
 
+  function initOAuthBindings() {
+    var box = document.querySelector("[data-oauth-bindings]");
+    if (!box || box.__bound) return;
+    box.__bound = true;
+
+    function esc(s) {
+      return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+    function load() {
+      api("GET", "/api/account/oauth")
+        .then(function (d) {
+          render(d.identities || [], d.providers || [], !!d.passwordless);
+        })
+        .catch(function (err) {
+          box.innerHTML = '<p class="adm-hint" style="margin:0;color:#f87171;">' + esc(err.message) + "</p>";
+        });
+    }
+    function render(identities, providers, passwordless) {
+      var oauthNew = false;
+      try {
+        oauthNew = new URLSearchParams(window.location.search).get("oauth_new") === "1";
+      } catch (e) {}
+
+      var boundKeys = {};
+      identities.forEach(function (i) { boundKeys[i.key] = true; });
+      var bindable = providers.filter(function (p) { return !boundKeys[p.key]; });
+
+      var html = "";
+      if (oauthNew) {
+        html += '<p style="border:1px solid rgba(217,119,6,.4);background:rgba(217,119,6,.12);color:#fbbf24;border-radius:8px;padding:8px 12px;font-size:12px;margin:0 0 12px;">已通过第三方登录创建账号。建议在上方补充昵称与邮箱，并在「登录密码」卡片设置密码，以免后续无法登录。</p>';
+      }
+      if (passwordless) {
+        html += '<p style="border:1px solid rgba(217,119,6,.4);background:rgba(217,119,6,.12);color:#fbbf24;border-radius:8px;padding:8px 12px;font-size:12px;margin:0 0 12px;">当前账号尚未设置独立密码，只能通过第三方登录。请先设置密码，再解绑最后一个第三方账号。</p>';
+      }
+      if (!identities.length) {
+        html += '<p class="adm-hint" style="margin:0 0 10px;">尚未绑定任何第三方账号。</p>';
+      } else {
+        html += '<div style="display:grid;gap:8px;margin-bottom:12px;">';
+        identities.forEach(function (it) {
+          var av = it.avatarUrl
+            ? '<img src="' + esc(it.avatarUrl) + '" alt="" referrerpolicy="no-referrer" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">'
+            : '<span style="width:32px;height:32px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;background:' + esc(it.color || "#6366F1") + ';">' + esc(String(it.label || it.key).slice(0, 1)) + "</span>";
+          var last = it.lastLoginAt
+            ? "最近登录：" + new Date(it.lastLoginAt).toLocaleString("zh-CN", { hour12: false })
+            : "";
+          html +=
+            '<div style="display:flex;align-items:center;gap:10px;border:1px solid var(--adm-border);border-radius:8px;padding:8px 10px;">' +
+            av +
+            '<div style="flex:1;min-width:0;"><div style="font-size:13px;">' + esc(it.label) +
+            (it.nickname ? ' <span style="color:var(--adm-faint);">' + esc(it.nickname) + "</span>" : "") + "</div>" +
+            (last ? '<div style="font-size:11px;color:var(--adm-faint);">' + esc(last) + "</div>" : "") + "</div>" +
+            '<button type="button" class="adm-iconbtn" data-oauth-unbind="' + it.id + '" style="color:#f87171;">解绑</button>' +
+            "</div>";
+        });
+        html += "</div>";
+      }
+      if (bindable.length) {
+        html += '<div style="display:flex;align-items:center;gap:10px;margin:4px 0 10px;font-size:11px;color:var(--adm-faint);"><span style="flex:1;height:1px;background:currentColor;opacity:.25;"></span>绑定新账号<span style="flex:1;height:1px;background:currentColor;opacity:.25;"></span></div><div style="display:grid;gap:8px;">';
+        bindable.forEach(function (p) {
+          html +=
+            '<a class="adm-btn adm-btn-ghost adm-btn-block" style="display:flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;" href="/api/oauth/' +
+            encodeURIComponent(p.key) + '/start?bind=1">' +
+            '<span style="width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;background:' +
+            esc(p.color || "#6366F1") + ';">' + esc(String(p.label || p.key).slice(0, 1)) + "</span>" +
+            "使用 " + esc(p.label || p.key) + "绑定</a>";
+        });
+        html += "</div>";
+      }
+      if (!providers.length && !identities.length) {
+        html += '<p class="adm-hint" style="margin:0;">站点尚未启用任何第三方登录提供商。</p>';
+      }
+      box.innerHTML = html;
+    }
+    box.addEventListener("click", function (e) {
+      var btn = e.target.closest && e.target.closest("[data-oauth-unbind]");
+      if (!btn) return;
+      if (!confirm("确定解绑该第三方账号吗？")) return;
+      api("DELETE", "/api/account/oauth", { identityId: Number(btn.getAttribute("data-oauth-unbind")) })
+        .then(function () { toast("已解绑", "ok"); load(); })
+        .catch(function (err) { toast(err.message, "err"); });
+    });
+    load();
+  }
+
   function initPluginSettings() {
     if (window.__plgSetBound) return;
     window.__plgSetBound = true;
@@ -2515,6 +2625,33 @@
         if (cu) cu.hidden = builtin;
         cap.hidden = false;
         if (builtin) refreshCaptcha();
+      })
+      .catch(function () {});
+
+    try {
+      var oauthErr = new URLSearchParams(window.location.search).get("oauth_error");
+      if (oauthErr) say(oauthErr, false);
+    } catch (e) {}
+
+    api("GET", "/api/oauth/providers")
+      .then(function (list) {
+        var box = root.querySelector("[data-login-oauth]");
+        if (!box || !Array.isArray(list) || !list.length) return;
+        var html =
+          '<div style="display:flex;align-items:center;gap:10px;margin:16px 0 10px;font-size:11px;color:var(--adm-faint);">' +
+          '<span style="flex:1;height:1px;background:currentColor;opacity:.25;"></span>其他登录方式' +
+          '<span style="flex:1;height:1px;background:currentColor;opacity:.25;"></span></div>' +
+          '<div style="display:grid;gap:8px;">';
+        list.forEach(function (p) {
+          html +=
+            '<a class="adm-btn adm-btn-ghost adm-btn-block" style="display:flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;" href="/api/oauth/' +
+            encodeURIComponent(p.key) + '/start">' +
+            '<span style="width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;background:' +
+            (p.color || "#6366F1") + ';">' + String(p.label || p.key).slice(0, 1) + "</span>" +
+            "使用 " + String(p.label || p.key) + "登录</a>";
+        });
+        box.innerHTML = html + "</div>";
+        box.hidden = false;
       })
       .catch(function () {});
 
@@ -2809,6 +2946,7 @@
     initThemeManager();
     initThemePanel();
     initPluginSettings();
+    initOAuthBindings();
     initLogin();
     initTaxonomy();
   }

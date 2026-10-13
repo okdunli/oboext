@@ -63,6 +63,8 @@ export function loginCardHtml(): string {
     `<button type="button" class="adm-auth-link" data-adm-act="login-back" data-login-show="codelogin forgot" hidden>返回账号密码登录</button>` +
     `<button type="button" class="adm-auth-link" data-adm-act="login-2fa-back" data-login-show="twofa" hidden>返回账号密码步骤</button>` +
     `</div>` +
+
+    `<div data-login-oauth data-login-show="login codelogin" hidden></div>` +
     `<p class="adm-hint" style="margin-top:14px;text-align:center;">` +
     `可用邮箱或昵称登录 · <a class="adm-auth-link" href="/">返回站点首页</a>` +
     `</p>` +

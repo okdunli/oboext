@@ -42,6 +42,7 @@ import { getMemberSettings } from "./members.js";
 import { getAdminSecurity } from "./security.js";
 import { getOwnProfile } from "./account.js";
 import { isPasswordlessUser } from "./passwordless.js";
+import { listAdminProviders, type AdminProvider } from "./oauth.js";
 import { applyFilters, HOOKS } from "./hooks.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
@@ -233,6 +234,18 @@ export async function adminSecurity(_p: unknown, ctx: Ctx) {
 export async function adminSecurityPublic(_p: unknown, _ctx: Ctx) {
   const sec = await getAdminSecurity();
   return { entryEnabled: sec.entryEnabled };
+}
+
+export async function adminOAuth(_p: unknown, ctx: Ctx) {
+  const user = requireUser(ctx);
+  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
+  const providers = await listAdminProviders();
+  const origin = typeof ctx.origin === "string" ? ctx.origin : "";
+  const rows: Array<AdminProvider & { callbackUrl: string }> = providers.map((p) => ({
+    ...p,
+    callbackUrl: `${origin}/api/oauth/${encodeURIComponent(p.key)}/callback`,
+  }));
+  return { providers: rows };
 }
 
 /** Widget manager: areas, registered types and the selected theme's instances. */

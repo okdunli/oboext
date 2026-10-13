@@ -43,6 +43,8 @@
   <meta property="og:title" content={chrome().siteTitle}>
   <meta property="og:description" content={chrome().siteDescription}>
   <meta property="og:type" content="website">
+
+  <meta property="og:url" content={chrome().siteUrl}>
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content={chrome().siteTitle}>
   <meta name="twitter:description" content={chrome().siteDescription}>
@@ -54,6 +56,14 @@
   {@html chrome().themeScripts}
   {#if publicPath()}{@html chrome().pluginHead}{/if}
   <link rel="icon" href="data:,">
+
+  <html lang="zh-CN">
+  {#if publicPath()}
+  <body class="min-h-screen bg-[var(--bg)] text-[var(--text)] antialiased">
+  {/if}
+  {#if adminPath()}
+  <body class="min-h-screen bg-zinc-950 text-zinc-100 antialiased">
+  {/if}
 </head>
 
 {#if adminPath()}
@@ -70,8 +80,8 @@
 {@html chrome().aside}
 </div></main></div>
 {@html chrome().footer}
-{@html chrome().pluginFooter}
 </div>
+{@html chrome().pluginFooter}
 {/if}
 {#if isNotSkyscraper()}
 {@html chrome().bodyOpen}

@@ -232,6 +232,16 @@ export function applyHead(html: string): void {
   for (const el of Array.from(document.head.querySelectorAll(`[${HEAD_ATTR}]`))) el.remove();
   for (const el of Array.from(frag.children)) {
     if (el.tagName === 'TITLE') continue;
+    if (el.tagName === 'HTML' || el.tagName === 'BODY') {
+      const target = el.tagName === 'HTML' ? document.documentElement : document.body;
+      if (target) {
+        for (const a of Array.from(el.attributes)) {
+          if (a.name === HEAD_ATTR) continue;
+          target.setAttribute(a.name, a.value);
+        }
+      }
+      continue;
+    }
     const tag = el.tagName.toLowerCase();
     const identity = el.getAttribute('name')
       ?? el.getAttribute('property')

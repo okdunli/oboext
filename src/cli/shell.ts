@@ -315,9 +315,17 @@ export function buildShell(ssrHtml: string, stateJson: string, client: string | 
   const headStamped = nonce
     ? mergedHead.replace(/<script\b([^>]*)>/gi, (m, attrs: string) => (/\bnonce=/.test(attrs) ? m : `<script${attrs} nonce="${nonce}">`))
     : mergedHead;
+  let htmlAttrs = ` lang="${lang}"${dir ? ` dir="${dir}"` : ''}`;
+  let bodyAttrs = '';
+  const headClean = headStamped.replace(/<(html|body)\b([^>]*)>/gi, (_m, tag: string, attrs: string) => {
+    const clean = attrs.replace(/\s*data-rosefd-head="[^"]*"/, '');
+    if (tag === 'html') htmlAttrs = clean;
+    else bodyAttrs = clean;
+    return '';
+  });
   const titleTag = /<title>/i.test(mergedHead) ? '' : '<title>Rose Frame Driver</title>';
   const iconTag = /rel=["']?icon/i.test(mergedHead) ? '' : `\n  ${FAVICON}`;
-  const headTags = mergedHead ? `\n  ${headStamped}` : '';
+  const headTags = headClean ? `\n  ${headClean}` : '';
   const styleTag = styles ? `\n  <style>${styles}</style>` : '';
   const jsTail = js
     ? `\n  <script type="application/json" id="__rosefd_state">${stateJson}</script>\n  ${clientTag}`
@@ -327,13 +335,13 @@ export function buildShell(ssrHtml: string, stateJson: string, client: string | 
   const shellStyles = js ? `\n  <style>${STYLES_MIN}</style>` : '';
 
   return `<!DOCTYPE html>
-<html lang="${lang}"${dir ? ` dir="${dir}"` : ''}>
+<html${htmlAttrs}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">${headTags}${iconTag}
   ${titleTag}${shellStyles}${styleTag}
 </head>
-<body>
+<body${bodyAttrs}>
   ${open}${ssrHtml}${close}${jsTail}
 </body>
 </html>`;

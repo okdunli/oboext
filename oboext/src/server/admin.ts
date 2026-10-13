@@ -25,6 +25,7 @@ import {
   users,
   siteSettings,
   media,
+  commentStateEnum,
   type Block,
   type Role,
 } from "./schema.js";
@@ -315,7 +316,7 @@ type PostInput = {
   commentStatus?: "open" | "closed";
   pinned?: boolean;
   format?: string;
-
+  
   formatMeta?: Record<string, string>;
   template?: string | null;
   publishedAt?: string | null;
@@ -443,7 +444,7 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
       commentStatus: input.commentStatus ?? existing.commentStatus,
       publishedAt,
       format: (input.format as any) ?? existing.format,
-
+      
       formatMeta:
         input.formatMeta !== undefined ? normFormatMeta(input.formatMeta) : existing.formatMeta,
       pinned: input.pinned !== undefined ? input.pinned : existing.pinned,
@@ -471,12 +472,12 @@ export async function bulkPosts(
   ids: number[],
   action: "publish" | "draft" | "archive" | "delete",
 ) {
-  requireUser(user);
+  const u = requireUser(user);
   const rows = await db
     .select({ id: posts.id, authorId: posts.authorId })
     .from(posts)
     .where(inArray(posts.id, ids));
-  const allowed = rows.filter((p) => canModifyContent(user.role, p.authorId, user.id));
+  const allowed = rows.filter((p) => canModifyContent(u.role, p.authorId, u.id));
   if (!allowed.length) return { affected: 0 };
   const allowedIds = allowed.map((p) => p.id);
   if (action === "delete") {
@@ -759,7 +760,7 @@ export async function deleteComment(user: SessionUser | null, id: number) {
 export async function setCommentsStatus(
   user: SessionUser | null,
   ids: number[],
-  status: string,
+  status: (typeof commentStateEnum.enumValues)[number],
 ) {
   const u = requireUser(user);
   if (!can(u.role, "content:update:any")) throw new ServiceError("权限不足", 403);

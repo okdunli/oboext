@@ -97,19 +97,33 @@ export async function attachTaxonomies(ids: number[]) {
   return { categories: cats, tags: tg };
 }
 
-export async function listCategories(): Promise<Category[]> {
-  const rows = await db.select().from(categories);
-  return rows.sort(
-    (a, b) =>
-      (a.order ?? 0) - (b.order ?? 0) ||
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
-      a.id - b.id,
-  );
+/** Category/tag row plus its public URL under the current permalink config
+ *  (original parity: lib/services/taxonomies.ts CategoryWithUrl/TagWithUrl —
+ *  the sitemap and the sitemap-plus plugin both read .url). */
+export type CategoryWithUrl = Category & { url: string };
+export type TagWithUrl = Tag & { url: string };
+
+export async function listCategories(): Promise<CategoryWithUrl[]> {
+  const [rows, cfg] = await Promise.all([
+    db.select().from(categories),
+    getPermalinkConfig(),
+  ]);
+  return rows
+    .map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }))
+    .sort(
+      (a, b) =>
+        (a.order ?? 0) - (b.order ?? 0) ||
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
+        a.id - b.id,
+    );
 }
 
-export async function listTags(): Promise<Tag[]> {
-  const rows = await db.select().from(tags);
-  return rows.sort((a, b) => b.id - a.id);
+export async function listTags(): Promise<TagWithUrl[]> {
+  const [rows, cfg] = await Promise.all([
+    db.select().from(tags).orderBy(desc(tags.id)),
+    getPermalinkConfig(),
+  ]);
+  return rows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
 }
 
 export async function getCategoryBySlug(slug: string) {

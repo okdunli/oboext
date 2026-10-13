@@ -379,7 +379,7 @@ async function home(ctx?: Ctx) {
     }
   }
   const [recent, ...sectionLists] = await Promise.all([
-    listPosts({ status: "published", limit: Math.max(recentCount, bannerMax, 8), context: "home" }),
+    listPosts({ status: "published", limit: Math.max(recentCount, bannerMax, 8) }),
     ...rows.map((r) => listPosts({ status: "published", categorySlug: r.category.slug, limit: catCount })),
   ]);
   const sections = rows
@@ -760,7 +760,7 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     me,
     items,
     avatar: config.avatar,
-    config,
+    config: { ...config },
   });
   const metaPayload = applyFilters<{ post: unknown; items: R.MetaItem[] }>(HOOKS.postMeta, {
     post: { ...post, plainText: R.blocksToPlainText(post.content) },
@@ -822,6 +822,7 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
       commentsHtml,
       metaHtml,
       defMetaHtml,
+      metaBadges: metaPayload.items.map((m) => m.value),
       tagsHtml,
       defTagsHtml,
       shareHtml,
@@ -865,7 +866,7 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
     me,
     items,
     avatar: config.avatar,
-    config,
+    config: { ...config },
   });
   const headContext: HeadContext = {
     kind: "page",
@@ -876,7 +877,6 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
     image: page.featuredImage || undefined,
     publishedAt: page.publishedAt ? new Date(page.publishedAt).toISOString() : null,
     updatedAt: page.updatedAt ? new Date(page.updatedAt).toISOString() : null,
-    author: page.author?.name,
     url: `${ctx.origin}${page.url}`,
     breadcrumbs: [
       { label: "首页", href: "/" },

@@ -56,7 +56,12 @@ import { db } from "./db.js";
 import { users } from "./schema.js";
 import { can } from "./admin.js";
 
-type Ctx = { user?: SessionUser | null; [k: string]: unknown };
+type Ctx = {
+  user?: SessionUser | null;
+  /** Parsed query string (URLSearchParams), set per request by the middleware. */
+  query?: URLSearchParams;
+  [k: string]: unknown;
+};
 
 function requireUser(ctx: Ctx): SessionUser {
   if (!ctx.user) throw new ServiceError("未认证", 401);
@@ -123,7 +128,8 @@ export async function adminPost(p: any, ctx: Ctx) {
   const authors = can(user.role, "content:update:any")
     ? await db.select({ id: users.id, name: users.name }).from(users).orderBy(users.name)
     : [];
-
+  
+  
   if (p?.id === "new" || p?.id == null)
     return { post: null, categories, tags, authors, formats: POST_FORMATS };
   const post = await adminGetPost(user, Number(p.id));

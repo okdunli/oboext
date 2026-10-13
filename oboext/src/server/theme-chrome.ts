@@ -145,6 +145,10 @@ export type PostPageParts = {
   commentsHtml: string;
   metaHtml: string;
 
+  /** post.meta filter values for the bluemix hero badge row (original
+   *  parity: PostPage.tsx meta={{ ..., badges: metaItems.map(m => m.value) }}). */
+  metaBadges?: string[];
+
   defMetaHtml?: string;
   tagsHtml: string;
 
@@ -2103,7 +2107,7 @@ function bmixPostPage(parts: PostPageParts): string {
   const hasImage = !!p.featuredImage;
   const imgUrl = hasImage ? esc(p.featuredImage!) : "";
   const date = fmtDate(p.publishedAt);
-  const badges = [];
+  const badges = parts.metaBadges ?? [];
   const bg = p.featuredImage
     ? `<div class="bg-wrapper"><img class="bg" src="${imgUrl}" alt="${esc(p.title)}" loading="eager"></div>`
     : `<div class="bg-wrapper"></div>`;
@@ -2121,7 +2125,7 @@ function bmixPostPage(parts: PostPageParts): string {
     `<span class="ml-8">${bmixIc("comments", 12)} ${p.commentsCount ?? 0}</span>` +
     `<span class="ml-8">${bmixIc("eye", 12)} ${p.views ?? 0}</span>` +
     (date ? `<span class="ml-8">${bmixIc("clock", 12)} ${date}</span>` : "") +
-    (badges.length ? badges.map((b) => `<span class="ml-8">${bmixIc("clock", 12)} ${esc(b)}</span>`).join("") : "") +
+    (badges.length ? badges.map((b) => `<span class="ml-8">${esc(b)}</span>`).join("") : "") +
     `</div></div>` +
     (hasImage ? `<img src="${imgUrl}" alt="" >` : "") +
     `</div></div></div>`;

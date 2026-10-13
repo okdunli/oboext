@@ -86,7 +86,7 @@ function validate(input: Partial<PageInput>): ValidatedPage {
     if (!Array.isArray(input.content)) throw new ServiceError("正文区块格式不正确", 422);
     out.content = input.content;
   }
-  if (input.status !== undefined && input.status != null && input.status !== "") {
+  if (input.status !== undefined && input.status != null && String(input.status) !== "") {
     if (!STATUSES.includes(input.status as (typeof STATUSES)[number]))
       throw new ServiceError("状态不合法", 422);
     out.status = input.status;
@@ -116,7 +116,7 @@ function validate(input: Partial<PageInput>): ValidatedPage {
       (out as Record<string, unknown>)[k] = s || null;
     }
   }
-  if (input.commentStatus !== undefined && input.commentStatus != null && input.commentStatus !== "") {
+  if (input.commentStatus !== undefined && input.commentStatus != null && String(input.commentStatus) !== "") {
     if (input.commentStatus !== "open" && input.commentStatus !== "closed")
       throw new ServiceError("评论状态不合法", 422);
     out.commentStatus = input.commentStatus;

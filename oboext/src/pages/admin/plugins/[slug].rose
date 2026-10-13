@@ -1,0 +1,63 @@
+<script>
+  // Generic host for plugin-owned admin pages (original parity:
+  // app/admin/plugins/[slug]/page.tsx). A plugin opts in purely by
+  // convention: its index.ts fills the admin.panel filter with
+  // server-rendered html (+ optional inline script). The host guards
+  // existence + activation; a missing or disabled plugin answers the
+  // segment 404 (admin/_notfound.rose), exactly like the original.
+  let slug = $state("");
+  let d = $data(async () => {
+    const v = await __rvLoad("admin.plugin-panel", { slug: slug() });
+    if (!v.plugin) notFound();
+    return v;
+  });
+
+  function plugin() {
+    return d().plugin;
+  }
+  function panelHtml() {
+    return d().html || "";
+  }
+  function panelScriptSrc() {
+    return d().scriptSrc || "";
+  }
+  function version() {
+    const v = plugin().version;
+    return v ? "v" + v : "";
+  }
+</script>
+
+<head>
+  <title>{plugin().name} - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/plugins"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-left.svg)"></span>返回插件列表</a>
+</div>
+
+<div class="adm-card" style="margin-bottom:16px;">
+  <div class="adm-card-hd">
+    <strong style="font-size:15px;">{plugin().name}</strong>
+    <span class="spacer" style="flex:1"></span>
+    <span class="adm-tag published">已启用</span>
+  </div>
+  <div class="adm-card-bd">
+    <p style="margin:0;font-size:13px;color:var(--adm-muted);line-height:1.6;">{plugin().description}</p>
+    <p class="adm-hint" style="margin:6px 0 0;">plugins/{slug()} · {version()}</p>
+  </div>
+</div>
+
+{#if panelHtml() !== ""}
+{@html panelHtml()}
+{/if}
+{#if panelScriptSrc() !== ""}
+{@html '<script src="' + panelScriptSrc() + '" defer></script>'}
+{/if}
+{#if panelHtml() === ""}
+<div class="adm-card">
+  <div class="adm-card-bd adm-empty">
+    该插件没有自定义管理面板。<br>
+    <span class="adm-hint">其声明式设置项可在插件列表中直接编辑；自定义面板由插件通过 admin.panel 钩子提供。</span>
+  </div>
+</div>
+{/if}

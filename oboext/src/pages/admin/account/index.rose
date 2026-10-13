@@ -1,0 +1,86 @@
+<script>
+
+  let s = $data(() => __rvLoad("admin.account", {}));
+  function v(k) {
+    const x = s()[k];
+    return x == null ? "" : x;
+  }
+  function on(k) {
+    return s()[k] ? "1" : "0";
+  }
+</script>
+
+<head>
+  <title>我的账号 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <strong style="font-size:16px">我的账号</strong>
+</div>
+
+<div style="max-width:520px;display:grid;gap:16px;">
+  <div class="adm-card">
+    <div class="adm-card-hd"><strong style="font-size:14px;">个人信息</strong></div>
+    <div class="adm-card-bd">
+      <form data-adm-form="account-profile">
+        <div class="adm-field">
+          <label>昵称</label>
+          <input class="adm-input" name="name" value={v('name')} maxlength="100" autocomplete="name" required>
+        </div>
+        <div class="adm-field">
+          <label>邮箱（更换需验证码）</label>
+          <input class="adm-input" type="email" name="email" value={v('email')} maxlength="120" autocomplete="email" required>
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <input class="adm-input" name="emailCode" inputmode="numeric" maxlength="8" placeholder="邮箱验证码" style="flex:1;">
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="account-send" data-channel="email" style="flex-shrink:0;white-space:nowrap;">发送验证码</button>
+          </div>
+        </div>
+        <div class="adm-field">
+          <label>手机号（留空即解绑，换绑需验证码）</label>
+          <input class="adm-input" type="tel" name="phone" value={v('phone')} maxlength="20" autocomplete="tel">
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <input class="adm-input" name="phoneCode" inputmode="numeric" maxlength="8" placeholder="手机验证码" style="flex:1;">
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="account-send" data-channel="sms" style="flex-shrink:0;white-space:nowrap;">发送验证码</button>
+          </div>
+        </div>
+        <p class="adm-hint" style="margin:0 0 12px;" data-adm-msg></p>
+        <button class="adm-btn" type="submit">保存修改</button>
+      </form>
+      <p class="adm-hint" style="margin:12px 0 0;">角色：<b style="color:var(--adm-text);">{v('role')}</b></p>
+    </div>
+  </div>
+
+  <div class="adm-card">
+    <div class="adm-card-hd"><strong style="font-size:14px;">登录密码</strong></div>
+    <div class="adm-card-bd">
+      <form data-adm-form="account-password">
+        {#if (() => !s().passwordless)()}
+        <div class="adm-field">
+          <label>当前密码</label>
+          <input class="adm-input" type="password" name="currentPassword" autocomplete="current-password" required>
+        </div>
+        {/if}
+        <div class="adm-field">
+          <label>新密码</label>
+          <input class="adm-input" type="password" name="newPassword" minlength="8" maxlength="200" autocomplete="new-password" required>
+        </div>
+        <div class="adm-field">
+          <label>确认新密码</label>
+          <input class="adm-input" type="password" name="confirmPassword" minlength="8" maxlength="200" autocomplete="new-password" required>
+        </div>
+        <p class="adm-hint" style="margin:0 0 12px;" data-adm-msg></p>
+        <button class="adm-btn" type="submit">更新密码</button>
+        {#if (() => s().passwordless)()}
+        <p class="adm-hint" style="margin:10px 0 0;">当前账号尚未设置过密码（免密注册或第三方登录），直接设置新密码即可。</p>
+        {/if}
+      </form>
+    </div>
+  </div>
+
+  <div class="adm-card">
+    <div class="adm-card-hd"><strong style="font-size:14px;">第三方账号</strong></div>
+    <div class="adm-card-bd">
+      <p class="adm-hint" style="margin:0;">第三方登录（OAuth 绑定/解绑）将在后续版本提供；当前可使用邮箱或密码登录。</p>
+    </div>
+  </div>
+</div>

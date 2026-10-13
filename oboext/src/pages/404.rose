@@ -1,4 +1,7 @@
 <script>
+
+  export const shell = false;
+
   let d = $data(() => __rvLoad("notFound", {}));
   function settings() { return d().settings; }
   function recent() { return d().recent || []; }

@@ -41,9 +41,13 @@
 -- index, so two NULL rows would not collide anyway — it would cost an index
 -- write per insert to enforce nothing.
 CREATE INDEX IF NOT EXISTS "posts_status_published_idx" ON "posts" ("status", "published_at" DESC);
+--> statement-breakpoint
 
 -- listPosts({ orderBy: "views" | "likes" | "comments" }) (queries.ts ~308-313).
 -- Same reasoning: a filter-only index does nothing for an ORDER BY.
 CREATE INDEX IF NOT EXISTS "posts_views_idx" ON "posts" ("views" DESC, "published_at" DESC);
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "posts_likes_idx" ON "posts" ("likes" DESC, "published_at" DESC);
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "posts_comments_idx" ON "posts" ("comments_count" DESC, "published_at" DESC);
+--> statement-breakpoint

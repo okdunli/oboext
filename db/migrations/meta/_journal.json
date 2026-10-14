@@ -134,6 +134,13 @@
       "when": 1790586400000,
       "tag": "0018_query_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790672800000,
+      "tag": "0019_require_author_url",
+      "breakpoints": true
     }
   ]
 }

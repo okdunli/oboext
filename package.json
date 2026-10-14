@@ -1,6 +1,6 @@
 {
   "name": "oboext",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "license": "MIT",
   "description": "Fast & lightweight self-hosted dynamic content management system engine with tiny footprint, built-in admin panel and smooth content editing.",
   "type": "module",
@@ -8,12 +8,22 @@
     "gen": "node tools/gen.mjs",
     "dev": "node tools/serve.mjs dev",
     "build": "node tools/build.mjs build",
+    "test": "node scripts/smoke.mjs",
+    "test:static": "node scripts/smoke.mjs --static-only",
+    "test:csrf": "node --import tsx tools/csrf-check.mts && node --import tsx tools/csrf-pair-check.mts",
+    "test:cache": "node --import tsx tools/cache-evict-check.mts && node --import tsx tools/cache-invalidation-check.mts && node tools/cache-injection-check.mjs",
+    "test:fixes": "node tools/fix-injection-check.mjs",
+    "check:indexes": "node --import tsx tools/index-check.mts",
     "preview": "node tools/serve.mjs preview",
-    "build:go": "go build -o oboext-server ."
+    "build:go": "go build -o oboext-server .",
+    "optimize": "node tools/build-svg-sprite.mjs && node tools/database-optimizer.mjs && node tools/performance-monitor.mjs",
+    "deploy": "node tools/deploy-automation.mjs",
+    "analyze": "node tools/performance-monitor.mjs",
+    "db-optimize": "node tools/database-optimizer.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
-    "drizzle-orm": "^0.36.4",
+    "drizzle-orm": "^0.45.3",
     "esbuild": "^0.24.0",
     "graphql": "^17.0.2",
     "postgres": "^3.4.9"

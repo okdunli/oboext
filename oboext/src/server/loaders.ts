@@ -16,6 +16,7 @@ import {
   getSettings,
   getTagBySlug,
   incrementViews,
+  categoryPostCounts,
   listCategories,
   listPosts,
   listPostComments,
@@ -27,6 +28,7 @@ import {
   type PostView,
   type TaxRef,
 } from "./queries.js";
+import { dbStats } from "./db.js";
 import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, resolveSitePath, paginate, type PermalinkConfig } from "./links.js";
 import { resolveVirtualRoute, type VirtualSiteRoute } from "./virtual-routes.js";
 import { resolveCommentConfig } from "./comments-config.js";
@@ -47,7 +49,7 @@ import { renderUserCenter, renderUserCenterGuest } from "./account.js";
 import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
 import { getAdminSecurity } from "./security.js";
 import { can } from "./admin.js";
-import { getThemeChrome, publicAssetHref, bluemixNotFoundPage, type MenuItem } from "./theme-chrome.js";
+import { getThemeChrome, publicAssetHref, bluemixNotFoundPage, catIconName, type MenuItem } from "./theme-chrome.js";
 
 export type Ctx = {
   query: URLSearchParams;
@@ -185,6 +187,8 @@ async function chromeData(pathname: string) {
     themeSlug,
     renderConfig,
     themeSettings,
+    headerMenu,
+    footerMenu,
   ] = await Promise.all([
     getSettings(),
     listTags(),
@@ -195,6 +199,8 @@ async function chromeData(pathname: string) {
     getActiveThemeSlug(),
     getActiveThemeRenderConfig(),
     getActiveThemeSettings(),
+    getMenuByLocation("header"),
+    getMenuByLocation("footer"),
   ]);
   const [sideWidgets, footerWidgets] = await Promise.all([
     getAreaWidgets(themeSlug, "sidebar"),
@@ -228,10 +234,8 @@ async function chromeData(pathname: string) {
     (themeSlug !== "skyscraper" ? `<script src="${publicAssetHref("theme-pjax.js")}"></script>` : "") +
     (themeSlug === "bluemix" ? `<script src="${publicAssetHref("theme-bluemix.js")}"></script>` : "") +
     `<script src="${publicAssetHref("comments.js")}"></script>`;
-  const headerMenu = await getMenuByLocation("header");
   const headerItems: MenuItem[] = (headerMenu?.items ?? []) as MenuItem[];
 
-  const footerMenu = await getMenuByLocation("footer");
   const footerHtml = tc.footer(
     {
       ...settings,
@@ -259,6 +263,7 @@ async function chromeData(pathname: string) {
     siteBodyEnd,
     themeSlug,
     cssHref: tc.cssHref(),
+    cssInline: tc.cssInline ? tc.cssInline() : "",
     themeScripts,
     bodyFix: tc.bodyFix() + siteBodyOpen,
     headExtra: tc.headExtra(),
@@ -282,14 +287,27 @@ async function chromeData(pathname: string) {
 async function chrome(_payload: unknown, ctx?: Ctx) {
   const pathname = (ctx && ctx.pathname) || "/";
   const origin = (ctx && ctx.origin) || "";
+  const statsOn = process.env.OBOEXT_DB_STATS === "1";
+  const t0 = statsOn ? Date.now() : 0;
+  const before = statsOn ? dbStats() : null;
   const [d, cfg] = await Promise.all([chromeData(pathname), getPermalinkConfig()]);
   const isAdmin = pathname.indexOf("/admin") === 0;
   const blogIndex = blogIndexUrlFor(cfg);
-  const pluginFooter = isAdmin ? "" : (await pluginFooterHtml()) + d.siteBodyEnd;
-  const pluginHead =
+  const [pluginFooterRaw, pluginHead] = await Promise.all([
+    isAdmin ? "" : pluginFooterHtml(),
     isAdmin || chromeSkipsHead(pathname, cfg)
       ? ""
-      : await pluginHeadHtml(chromeHeadContext(pathname, d.siteTitle, origin, blogIndex));
+      : pluginHeadHtml(chromeHeadContext(pathname, d.siteTitle, origin, blogIndex)),
+  ]);
+  const pluginFooter = isAdmin ? "" : pluginFooterRaw + d.siteBodyEnd;
+  if (statsOn) {
+    const s = dbStats();
+    const ms = Date.now() - t0;
+    console.log(
+      `[stats] chrome(${pathname}) queries=${s.count - (before?.count ?? 0)} ` +
+        `dbTime=${s.total - (before?.total ?? 0)}ms wall=${ms}ms`,
+    );
+  }
   return {
     siteTitle: d.siteTitle,
     siteDescription: d.siteDescription,
@@ -299,6 +317,7 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
     themeHead: d.varsHtml + d.headExtra,
     themeSlug: d.themeSlug,
     cssHref: d.cssHref,
+    cssInline: d.cssInline,
     themeScripts: d.themeScripts,
     bodyFix: d.bodyFix,
     nav: d.navHtml,
@@ -329,32 +348,35 @@ async function bmixDrawerPosts(themeSlug: string): Promise<PostView[] | undefine
   return items;
 }
 
-async function defaultSidebarData(want: boolean, showCatIcons = false): Promise<{ posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons: boolean } | undefined> {
+async function defaultSidebarData(want: boolean, showCatIcons = false): Promise<{ posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons: boolean; catCounts: Map<number, number> } | undefined> {
   if (!want) return undefined;
   const kvS = (globalThis as any).__rosezmKvApi?.kv;
   const sKey = `sidebar:default:${showCatIcons}`;
-  const sHit = kvS?.get(sKey) as { items: PostView[]; tagRows: TaxRef[]; catRows: TaxRef[]; cfg: any } | undefined;
+  const sHit = kvS?.get(sKey) as { items: PostView[]; tagRows: TaxRef[]; catRows: TaxRef[]; cfg: any; catCounts: Map<number, number> } | undefined;
   if (sHit) {
-    const { items, tagRows, catRows, cfg } = sHit;
+    const { items, tagRows, catRows, cfg, catCounts } = sHit;
     return {
       posts: items,
       tags: tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
       cats: catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) })),
       showCatIcons,
+      catCounts: catCounts ?? new Map<number, number>(),
     };
   }
-  const [{ items }, tagRows, catRows, cfg] = await Promise.all([
+  const [{ items }, tagRows, catRows, cfg, catCounts] = await Promise.all([
     listPosts({ status: "published", limit: 5 }),
     listTags(),
     listCategories(),
     getPermalinkConfig(),
+    categoryPostCounts(),
   ]);
-  kvS?.set(sKey, { items, tagRows, catRows, cfg }, 60);
+  kvS?.set(sKey, { items, tagRows, catRows, cfg, catCounts }, 60);
   return {
     posts: items,
     tags: tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
     cats: catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) })),
     showCatIcons,
+    catCounts,
   };
 }
 
@@ -448,7 +470,8 @@ async function home(ctx?: Ctx) {
     const tagRows = await listTags();
     const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
 
-    const ts = themeSlug === "pseudolinear" || themeSlug === "default" ? await getActiveThemeSettings() : undefined;
+const ts = themeSlug === "pseudolinear" || themeSlug === "default" ? await getActiveThemeSettings() : undefined;
+    const catCounts = themeSlug === "default" ? await categoryPostCounts() : undefined;
     return {
       head: homeHead,
       main: tc.home({
@@ -458,7 +481,8 @@ async function home(ctx?: Ctx) {
         liked: popular.items,
         random,
         cats,
-        tags,
+tags,
+        catCounts,
         total: all.total,
         widgets: await sideWidgetsFor(themeSlug),
         settings,
@@ -683,8 +707,8 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
       themeSettings: ts,
 
       titleIcon: themeSlug === "bluemix"
-        ? (ts.useCustomIcons !== false ? category.icon : null)
-        : (ts.useCustomIcons === true ? category.icon : null),
+        ? (ts.useCustomIcons !== false ? catIconName(category) : null)
+        : (ts.useCustomIcons === true ? catIconName(category) : null),
       titleDesc: category.description || "",
     }),
   };
@@ -851,8 +875,11 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   };
 }
 
-async function postDetail(payload: { slug: string }, ctx: Ctx) {
-  let post = await getPost(payload.slug);
+async function postDetail(
+  payload: { slug: string; preloaded?: PostView | null },
+  ctx: Ctx,
+) {
+  let post = payload.preloaded ?? (await getPost(payload.slug));
   let previewing = false;
   if (!post && ctx?.user) {
     const u = ctx.user as { id: number; role: import("./schema.js").Role };
@@ -895,6 +922,10 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     enabled: config.enabled,
     provider: config.provider,
     requireNameEmail: settings.requireNameEmail ?? false,
+
+    requireAuthorUrl: settings.requireAuthorUrl ?? false,
+
+    authorUrlLabel: "链接",
     defaultContent: config.defaultContent,
     me,
     items,
@@ -925,6 +956,13 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
 
   const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
   const bodyHtml = await R.buildPostBody(post, "post", highlight);
+  {
+    const plain = bodyHtml.replace(/<[^>]+>/g, " ");
+    const cjk = (plain.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) ?? []).length;
+    const words = plain.replace(/[\u4e00-\u9fff\u3040-\u30ff]/g, " ").split(/\s+/).filter(Boolean).length;
+    const minutes = Math.max(1, Math.round(cjk / 400 + words / 200));
+    metaPayload.items.unshift({ label: "阅读时长", value: `约 ${minutes} 分钟` });
+  }
   const metaHtml = metaPayload.items.length
     ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--muted)">${metaPayload.items.map((m) => `<span>${R.esc(m.label)}：${R.esc(m.value)}</span>`).join("")}</div>`
     : "";
@@ -971,6 +1009,7 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
       metaHtml,
       defMetaHtml,
       metaBadges: metaPayload.items.map((m) => m.value),
+      metaItems: metaPayload.items,
       tagsHtml,
       defTagsHtml,
       shareHtml,
@@ -984,13 +1023,17 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
       canonical: `${ctx.origin}${post.url}`,
     }),
     head:
-      R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
+      R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl) +
       (await pluginHeadHtml(headContext)),
   };
 }
 
-async function pageDetail(payload: { slug: string }, ctx: Ctx) {
-  const page = await getPublishedPage(payload.slug);
+async function pageDetail(
+  payload: { slug: string; preloaded?: import("./pages.js").PageView | null },
+  ctx: Ctx,
+) {
+  const page =
+    payload.preloaded ?? (await getPublishedPage(payload.slug));
   if (!page) return { notFound: true };
 
   const recentLimit = (await getActiveThemeSlug()) === "bluemix" ? 4 : 5;
@@ -1010,6 +1053,10 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
     enabled: config.enabled,
     provider: config.provider,
     requireNameEmail: settings.requireNameEmail ?? false,
+
+    requireAuthorUrl: settings.requireAuthorUrl ?? false,
+
+    authorUrlLabel: "链接",
     defaultContent: config.defaultContent,
     me,
     items,
@@ -1044,7 +1091,7 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
       widgets: await sideWidgetsFor(themeSlug),
     }),
     head:
-      R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin) +
+      R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl) +
       (await pluginHeadHtml(headContext)),
   };
 }
@@ -1474,6 +1521,12 @@ function maintenanceView(settings: MaintenanceSettings) {
 }
 
 async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
+  if (process.env.OBOEXT_DEBUG_RESOLVE) {
+    const sm = (globalThis as any).__rosezm_signalMap as Map<string, unknown> | undefined;
+    console.log("[resolve-debug] payload:", JSON.stringify(payload), "pathname:", ctx?.pathname,
+      "signalMap.slug:", JSON.stringify((sm as any)?.get?.("slug")?.() ?? (sm as any)?.get?.("slug")),
+      "mapSize:", sm?.size);
+  }
   const raw = (payload.segments ?? []).map((s) => String(s));
   const res = await resolveSitePath(raw);
   if (!res) {
@@ -1491,7 +1544,10 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
       return {
         kind: "secret-entry",
         head: `<title>登录</title><meta name="robots" content="noindex, nofollow">`,
-        main: secretEntryPageHtml(),
+        main: secretEntryPageHtml({
+          enabled: sec.captchaEnabled,
+          mode: sec.captchaEnabled ? sec.captchaMode : null,
+        }),
       };
     }
     const registerCfg = await getPublicRegisterConfig();
@@ -1527,10 +1583,10 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
       out = await home();
       break;
     case "post":
-      out = await postDetail({ slug: res.post.slug }, ctx);
+      out = await postDetail({ slug: res.post.slug, preloaded: res.post }, ctx);
       break;
     case "page":
-      out = await pageDetail({ slug: res.page.slug }, ctx);
+      out = await pageDetail({ slug: res.page.slug, preloaded: res.page }, ctx);
       break;
     case "blogIndex":
       out = await blogList({ page }, ctx);
@@ -1543,18 +1599,28 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
       break;
   }
   if (out.notFound) return null;
-  const chrome = await loaders.chrome({}, ctx);
-
-  return { kind: res.kind === "blogIndex" ? "blog" : res.kind, ...out, bodyOpen: chrome.bodyOpen, bodyClose: chrome.bodyClose };
+  return { kind: res.kind === "blogIndex" ? "blog" : res.kind, ...out };
 }
 
 async function loginCard() {
-  return { html: loginCardHtml() };
+  const sec = await getAdminSecurity();
+  return {
+    html: loginCardHtml({
+      enabled: sec.captchaEnabled,
+      mode: sec.captchaEnabled ? sec.captchaMode : null,
+    }),
+  };
+}
+
+async function loginBrand() {
+  const settings = await getSettings();
+  return { siteTitle: settings.siteTitle ?? "" };
 }
 
 export const loaders = {
   chrome,
   loginCard,
+  loginBrand,
   home,
   blog: blogList,
   category: categoryList,
@@ -1620,4 +1686,3 @@ export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unk
 
 /** Raw document builders for middleware-intercepted XML/txt routes. */
 export const documents = { feed, robots, manifest };
-

@@ -6,14 +6,15 @@
  * has no runtime component loading, so a theme here is its on-disk folder:
  * manifest.json (metadata + design tokens + a declarative settings schema +
  * widget areas) plus its static assets. Discovery is a cheap process-memoised
- * fs scan invalidated by admin create/delete; every DB read stays per
- * request (no cross-response cache).
+ * fs scan invalidated by admin create/delete; DB reads go through the shared
+ * SWR memo (cache.ts) with explicit invalidation on every write below.
  */
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray, sql } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
 import { db } from "./db.js";
 import { siteSettings, themes, type Theme, type ThemeConfig } from "./schema.js";
+import { SIDEBAR_TTL, invalidatePrefix, memoQuery, memoStrict } from "./cache.js";
 import { ServiceError } from "./admin.js";
 import { rmSyncRetry } from "./fs-utils.js";
 import { installPackage } from "./package-install.js";
@@ -71,6 +72,15 @@ export const PORTED_PUBLIC_THEMES = new Set(["skyscraper", "default", "pseudolin
 export function isPublicThemePorted(slug: string): boolean {
   return PORTED_PUBLIC_THEMES.has(slug);
 }
+
+/**
+ * Hard TTL for the active-theme reads. Switching themes is a rare admin write
+ * while every public render reads the slug, so this only has to be short
+ * enough that a switch feels instant on the OTHER serverless instances (whose
+ * caches the invalidation cannot reach) and long enough to collapse the
+ * repeated reads within one render into a single query.
+ */
+const ACTIVE_THEME_TTL = 2_000;
 
 /** Areas every theme gets for free, so widgets work in minimal themes. */
 export const BASE_WIDGET_AREAS: ThemeWidgetArea[] = [
@@ -169,19 +179,25 @@ export function getThemeWidgetAreas(slug: string): ThemeWidgetArea[] {
 export async function syncThemes(): Promise<void> {
   const manifests = discoverThemes();
   const discovered = new Set(manifests.map((m) => m.slug));
-  for (const m of manifests) {
+  if (manifests.length > 0) {
     await db
       .insert(themes)
-      .values({ name: m.name, slug: m.slug, isDefault: m.isDefault, config: m.config })
+      .values(
+        manifests.map((m) => ({
+          name: m.name,
+          slug: m.slug,
+          isDefault: m.isDefault,
+          config: m.config,
+        })),
+      )
       .onConflictDoUpdate({
         target: themes.slug,
-        set: { name: m.name, isDefault: m.isDefault },
+        set: { name: sql`excluded."name"`, isDefault: sql`excluded."is_default"` },
       });
   }
   const rows = await db.select({ slug: themes.slug }).from(themes);
-  for (const r of rows) {
-    if (!discovered.has(r.slug)) await db.delete(themes).where(eq(themes.slug, r.slug));
-  }
+  const stale = rows.map((r) => r.slug).filter((s) => !discovered.has(s));
+  if (stale.length > 0) await db.delete(themes).where(inArray(themes.slug, stale));
   const [s] = await db
     .select({ activeThemeSlug: siteSettings.activeThemeSlug })
     .from(siteSettings)
@@ -213,7 +229,10 @@ export function ensureThemes(): Promise<void> {
       })
       .catch((e) => {
         syncPromise = null;
-        throw e;
+        console.warn(
+          "[themes] folder sync failed; serving reads from the existing rows: " +
+            (e instanceof Error ? e.message : String(e)),
+        );
       });
   }
   return syncPromise;
@@ -251,45 +270,61 @@ export async function getThemeById(id: number): Promise<Theme> {
   return row;
 }
 
+/** Drop the memoized active-theme reads; call after any write to
+ * themes/siteSettings.activeThemeSlug so the public chrome picks the change
+ * up immediately instead of waiting out the SWR TTL. */
+export function invalidateActiveThemeCache(): void {
+  invalidatePrefix("theme:active");
+}
+
 /** Current activeThemeSlug from site_settings ("default" when uninitialised). */
 export async function getActiveThemeSlug(): Promise<string> {
   await ensureThemes();
-  const [s] = await db
-    .select({ activeThemeSlug: siteSettings.activeThemeSlug })
-    .from(siteSettings)
-    .where(eq(siteSettings.id, 1));
-  return s?.activeThemeSlug || "default";
+  return memoStrict("theme:active:slug", ACTIVE_THEME_TTL, async () => {
+    const [s] = await db
+      .select({ activeThemeSlug: siteSettings.activeThemeSlug })
+      .from(siteSettings)
+      .where(eq(siteSettings.id, 1));
+    return s?.activeThemeSlug || "default";
+  });
 }
 
 /**
  * The site's active theme row. A missing active folder falls back to the
  * default discovered theme and rewrites the setting so it heals itself.
+ *
+ * Memoized (SWR, 30s): the chrome render path calls getActiveTheme two or
+ * three times per request (settings + render config + theme slug), each of
+ * which used to cost a fresh site_settings + themes round trip — painful
+ * where RTT is ~300ms (Neon on Vercel).
  */
 export async function getActiveTheme(): Promise<Theme> {
   await ensureThemes();
-  const [settings] = await db
-    .select()
-    .from(siteSettings)
-    .where(eq(siteSettings.id, 1));
-  let slug = settings?.activeThemeSlug || "default";
-  if (!getThemeManifest(slug)) {
-    const discovered = discoverThemes();
-    const fallback = discovered.find((t) => t.isDefault) ?? discovered[0] ?? null;
-    if (fallback) {
-      slug = fallback.slug;
-      await db
-        .update(siteSettings)
-        .set({ activeThemeSlug: slug })
-        .where(eq(siteSettings.id, 1));
+  return memoStrict("theme:active:row", ACTIVE_THEME_TTL, async (): Promise<Theme> => {
+    const [settings] = await db
+      .select()
+      .from(siteSettings)
+      .where(eq(siteSettings.id, 1));
+    let slug = settings?.activeThemeSlug || "default";
+    if (!getThemeManifest(slug)) {
+      const discovered = discoverThemes();
+      const fallback = discovered.find((t) => t.isDefault) ?? discovered[0] ?? null;
+      if (fallback) {
+        slug = fallback.slug;
+        await db
+          .update(siteSettings)
+          .set({ activeThemeSlug: slug })
+          .where(eq(siteSettings.id, 1));
+      }
     }
-  }
-  const [theme] = await db.select().from(themes).where(eq(themes.slug, slug));
-  if (theme) return theme;
-  const [def] = await db.select().from(themes).where(eq(themes.isDefault, true));
-  if (def) return def;
-  const [anyTheme] = await db.select().from(themes).limit(1);
-  if (anyTheme) return anyTheme;
-  throw new ServiceError("没有可用主题", 500);
+    const [theme] = await db.select().from(themes).where(eq(themes.slug, slug));
+    if (theme) return theme;
+    const [def] = await db.select().from(themes).where(eq(themes.isDefault, true));
+    if (def) return def;
+    const [anyTheme] = await db.select().from(themes).limit(1);
+    if (anyTheme) return anyTheme;
+    throw new ServiceError("没有可用主题", 500);
+  });
 }
 
 export type ThemeInput = {
@@ -421,6 +456,7 @@ export async function updateTheme(id: number, input: Partial<ThemeInput>): Promi
     })
     .where(eq(themes.id, id))
     .returning();
+  invalidateActiveThemeCache();
   return row;
 }
 
@@ -450,6 +486,7 @@ export async function deleteTheme(id: number): Promise<{ id: number }> {
   const dir = path.join(THEMES_DIR, existing.slug);
   if (fs.existsSync(dir)) rmSyncRetry(dir);
   invalidateThemeDiscovery();
+  invalidateActiveThemeCache();
   await db.delete(themes).where(eq(themes.id, id));
   synced = false;
   return { id };
@@ -466,6 +503,7 @@ export async function setActiveTheme(id: number): Promise<Theme> {
     .set({ activeThemeSlug: theme.slug, updatedAt: new Date() })
     .where(eq(siteSettings.id, 1));
   invalidateThemeDiscovery();
+  invalidateActiveThemeCache();
   return theme;
 }
 
@@ -600,6 +638,7 @@ export async function updateThemePanel(
     })
     .where(eq(themes.id, theme.id))
     .returning();
+  invalidateActiveThemeCache();
   return row;
 }
 
@@ -615,6 +654,7 @@ export async function resetThemePanel(idOrSlug: string | number): Promise<Theme>
     })
     .where(eq(themes.id, theme.id))
     .returning();
+  invalidateActiveThemeCache();
   return row;
 }
 

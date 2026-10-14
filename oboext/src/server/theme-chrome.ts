@@ -14,11 +14,28 @@ import type { PostView, TaxRef } from "./queries.js";
 import type { PageView } from "./pages.js";
 import * as R from "./render.js";
 import { esc, fmtDate } from "./render.js";
-import { mimeFor } from "./storage.js";
+import { mimeFor, PUBLIC_DIR } from "./storage.js";
 
 export interface ThemeChrome {
   slug: string;
   cssHref(): string;
+  /**
+   * The full stylesheet, inlined into `<head>` as a `<style>` block.
+   *
+   * A `<link rel=stylesheet>` is render-blocking by definition: the parser
+   * stops at it, so the browser must fetch it before painting anything. On a
+   * throttled 4G connection that one request was the critical path - a
+   * Lighthouse run measured /theme-style/default at 542ms, ahead of every
+   * script on the page, and Speed Index (3.9s) was the only metric that
+   * dropped below 100. Inlining trades that round trip for a larger document;
+   * the CSS is identical either way, and the document is already brotli'd, so
+   * the extra bytes cost less than the serialized fetch did.
+   *
+   * Empty string = no inline block, and the caller still emits the <link>. The
+   * default theme inlines; the others (skyscraper's prebuilt /public/theme.css,
+   * and the themes whose markup has no <head> slot for it) keep the link.
+   */
+  cssInline?(): string;
   /**
    * Raw CSS that must apply as early as possible (the theme's base
    * background/colour, before the external stylesheet lands). Contract: this
@@ -88,6 +105,8 @@ export type HomeParts = {
 
   /** bluemix home sidebar widget area (inside aside.bmx-blocks). */
   sideWidgets?: string;
+  /** Published posts per category id, for the sidebar list (default theme). */
+  catCounts?: Map<number, number>;
 };
 
 export type RankPost = {
@@ -122,7 +141,7 @@ export type ListParts = {
 
   drawerPosts?: PostView[];
 
-  sidebarData?: { posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons?: boolean };
+  sidebarData?: { posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons?: boolean; catCounts?: Map<number, number> };
 
   settings?: Record<string, unknown>;
   themeSettings?: Record<string, unknown>;
@@ -155,6 +174,10 @@ export type PostPageParts = {
    *  parity: PostPage.tsx meta={{ ..., badges: metaItems.map(m => m.value) }}). */
   metaBadges?: string[];
 
+  /** The full post.meta items (label + value) — themes whose post page is
+   *  R.postPage render them on the meta line via the pluginMeta param. */
+  metaItems?: R.MetaItem[];
+
   defMetaHtml?: string;
   tagsHtml: string;
 
@@ -171,7 +194,7 @@ export type PostPageParts = {
 
   canonical?: string;
 
-  sidebarData?: { posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons?: boolean };
+  sidebarData?: { posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons?: boolean; catCounts?: Map<number, number> };
 
   settings?: Record<string, unknown>;
 };
@@ -217,7 +240,7 @@ function fontPreloadLinks(slug: string): string {
 }
 
 function themeCssHref(slug: string): string {
-  if (slug === "skyscraper") return "/public/theme.css";
+  if (slug === "skyscraper") return publicAssetHref("theme.css");
   const main = readThemeCss(slug, slug + ".css");
   let v = String(Math.round(main.mtime));
   try {
@@ -235,7 +258,7 @@ function themeCssHref(slug: string): string {
  */
 export function publicAssetHref(file: string): string {
   try {
-    const st = fs.statSync(path.join(process.cwd(), "oboext", "public", file));
+    const st = fs.statSync(path.join(PUBLIC_DIR, file));
     return `/public/${file}?v=${Math.round(st.mtimeMs)}`;
   } catch {
     return `/public/${file}`;
@@ -286,7 +309,26 @@ const SHARED_FORM_BASELINE = `
 }
 .comment-form textarea::-moz-placeholder{ color:var(--muted); }
 .comment-form textarea::placeholder{ color:var(--muted); }
-.comment-form .funcs{ display:flex; margin-top:8px; position:relative; }
+/* The toolbar: emoji trigger on the left, actions on the right, one row.
+   .funcs and .form-actions used to be siblings in the form, both block-level,
+   so the emoji button sat on its own full-width line with the submit below it.
+   They are now children of .sf-toolbar, which is what puts them side by side -
+   the flex here is the fix, not a cosmetic adjustment. */
+.comment-form .sf-toolbar{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:12px; margin-top:8px;
+}
+.comment-form .funcs{ display:flex; position:relative; }
+.comment-form .sf-toolbar .form-actions{
+  display:flex; justify-content:flex-end; align-items:center; gap:8px;
+  margin-top:0;
+}
+/* Below the two-column breakpoint the row still holds - the emoji button is
+   36px and the submit is intrinsic - but the gap has to shrink or the pair
+   wraps on a 320px screen. */
+@media (max-width:420px){
+  .comment-form .sf-toolbar{ gap:8px; }
+}
 /* >button: direct trigger only; the emoji popover is nested inside .funcs
    and its inner buttons must keep the verbatim .emoji-panel styles */
 .comment-form .funcs>button{
@@ -296,14 +338,14 @@ const SHARED_FORM_BASELINE = `
 }
 .comment-form .funcs>button:hover{ color:var(--accent); }
 
-.comment-form .guest-info{ display:flex; gap:8px; }
+.comment-form .guest-info{ display:flex; gap:8px; margin-bottom:12px; position:relative; z-index:1; }
 .comment-form .guest-info .item{ position:relative; flex:1 1 0; min-width:0; }
 .comment-form .comment-field{
-  width:100%; height:34px; padding:0 10px 0 34px;
+  width:100%; height:38px; padding:0 10px 0 34px;
   font-size:13px; font-family:inherit; outline:none;
   background:var(--surface, #fff);
-  border:1px solid var(--border, rgba(144,147,153,.35)); border-left:0;
-  border-radius:0 8px 8px 0; color:var(--text, #1f2937);
+  border:1px solid var(--border, rgba(144,147,153,.35));
+  border-radius:8px; color:var(--text, #1f2937);
   box-shadow:inset 0 1px 2px rgba(31,45,61,.05);
   transition:border-color .15s ease, box-shadow .15s ease;
 }
@@ -317,12 +359,10 @@ const SHARED_FORM_BASELINE = `
   position:absolute; left:0; top:0; bottom:0; width:34px;
   display:flex; align-items:center; justify-content:center;
   font-style:normal; pointer-events:none; color:var(--muted);
-  background:color-mix(in srgb, var(--muted, #909399) 8%, var(--surface, #fff));
-  border:1px solid var(--border, rgba(144,147,153,.35)); border-right:0;
-  border-radius:8px 0 0 8px;
+  border:0; background:transparent;
 }
 .comment-form .comment-field:focus + i{
-  color:var(--accent); border-color:var(--accent);
+  color:var(--accent);
 }
 @media (max-width:650.5px){
   .comment-form .guest-info{ flex-direction:column; }
@@ -361,6 +401,31 @@ const SHARED_FORM_BASELINE = `
 .sf-comment-me-email{ font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
 .comment-form .funcs button.is-active{ color:var(--accent); }
+/* Emoji popover visibility + the open/close motion.
+
+   NOTE ON WHAT ACTUALLY FIXED THE FIRST-OPEN ANIMATION: it was NOT this block.
+   An earlier version of this comment claimed the wrapper "had no rule at all in
+   this theme" and added display:none / opacity:0 / a transition here. Both claims
+   were wrong, and the rules were inert: further down this same stylesheet
+   already declares
+
+     .emoji-panel-wrap{ position:relative; display:inline-block; ... }
+     .emoji-panel-wrap:not(.is-in) .emoji-panel{ opacity:0; transform:...; }
+
+   at equal specificity but LATER in source order, so they won every conflict -
+   the display:none never applied and the opacity:0 / transition were already
+   provided. Verified in the served document, not reasoned about.
+
+   The real cause was ordering in comments.js: it used to add .is-in FIRST and
+   only build the panel after /api/emojis resolved, so the transition ran against
+   an empty host and the panel simply appeared. Building the panel first and
+   adding the class afterwards (comments.js toggleEmoji) is what makes the first
+   open match the later ones. The motion itself is :not(.is-in) below.
+
+   Kept only the reduced-motion opt-out, which nothing else declares. */
+@media (prefers-reduced-motion:reduce){
+  .emoji-panel-wrap .emoji-panel{ transition:none; }
+}
 .emoji-panel{
   position:absolute; left:0; bottom:calc(100% + 6px); z-index:30;
   padding:1em; font-size:15px; border-radius:10px;
@@ -369,6 +434,8 @@ const SHARED_FORM_BASELINE = `
   box-shadow:0 10px 28px rgba(0,0,0,.18);
 }
 .emoji-panel:before{ content:none; }
+/* Auto-flipped below the trigger when there is no room above (set by comments.js). */
+.emoji-panel-wrap.is-below .emoji-panel{ top:calc(100% + 6px); bottom:auto; }
 .emoji-panel .panel{
   width:290px; height:300px; margin:0 -10px;
   overflow-y:auto; scroll-behavior:smooth; position:relative;
@@ -498,7 +565,7 @@ function pagerHtml(page: number, totalPages: number, hrefFor: (p: number) => str
 
 const skyscraperChrome: ThemeChrome = {
   slug: "skyscraper",
-  cssHref: () => "/public/theme.css",
+  cssHref: () => publicAssetHref("theme.css"),
   bodyFix: () => "",
   headExtra: () => fontPreloadLinks("bluemix") + `<script src="/public/noflash.js"></script>`,
   nav: (settings) => R.topNav(settings),
@@ -530,23 +597,139 @@ const skyscraperChrome: ThemeChrome = {
       extra: parts.extra,
     }),
   postPage: (parts) =>
-    R.postPage(parts.post, parts.related, parts.commentsHtml, [], parts.bodyHtml, parts.blogIndex),
+    R.postPage(parts.post, parts.related, parts.commentsHtml, parts.metaItems ?? [], parts.bodyHtml, parts.blogIndex),
   pagePage: (parts) =>
     R.pagePage(parts.page, parts.recent, parts.commentsHtml, parts.bodyHtml),
 };
 
 const defaultBodyFix = `<style id="rv-body-fix">body{background:var(--bg,#09090b);color:var(--text,#f4f4f5)}</style>`;
 
-function defaultMenuUl(items: MenuItem[], cls: string): string {
+const CATEGORY_ICON_MAP: Record<string, string> = {
+  prose: "book-open",
+  poetry: "feather",
+  linux: "terminal",
+  matlab: "sigma",
+  android: "folder-kanban",
+  skill: "wrench",
+  share: "share-2",
+  tool: "package",
+  stm32: "cpu",
+  stc32: "cpu",
+  esp32: "wifi",
+  zigbee: "radio",
+  embedded: "circuit-board",
+  html: "code",
+  python: "code",
+  elanguage: "code",
+  php: "code",
+  code: "code",
+  default: "folder",
+};
+
+export function catIconName(c: { slug?: string | null; icon?: string | null }): string {
+  const set = c.icon && String(c.icon).trim();
+  if (set) return set;
+  if (c.slug && CATEGORY_ICON_MAP[c.slug]) return CATEGORY_ICON_MAP[c.slug];
+  return CATEGORY_ICON_MAP.default;
+}
+
+const MENU_ICON_MAP: Record<string, string> = {
+  "/": "house",
+  "/links": "network",
+  "/maxim": "quote",
+  "/board": "message-square",
+};
+
+function menuIconName(it: MenuItem): string {
+  const set = it.icon && String(it.icon).trim();
+  if (set) return set;
+  if (it.url && MENU_ICON_MAP[it.url]) return MENU_ICON_MAP[it.url];
+  if (it.label && MENU_ICON_MAP[it.label]) return MENU_ICON_MAP[it.label];
+  return "";
+}
+
+/**
+ * One search field: a real GET form plus the combobox wiring that
+ * theme-pjax.js drives.
+ *
+ * `panelId` MUST be unique per rendered field. The suggestion panel is looked
+ * up by id (`aria-controls` -> getElementById) and two fields sharing one id
+ * means both write into the same element, so whichever input the visitor types
+ * into repaints the other one's list. The three call sites are the header
+ * field, the sidebar field and the mobile menu field - all on the same page.
+ *
+ * The panel is a SIBLING of the box, not a child: the box is a flex row
+ * (glyph + input + kbd), so a child panel becomes a third flex item and sits
+ * BESIDE the field instead of under it.
+ */
+function searchField(
+  panelId: string,
+  placeholder: string,
+  label: string,
+  formClass: string,
+): string {
+  return (
+    `<form action="/search" method="get" class="${formClass}" role="search">` +
+    `<span class="df-search-box">` +
+    lucideSvg("search", 16, dfSearchIcon()) +
+    `<input name="q" placeholder="${esc(placeholder)}" class="df-search-input" autocomplete="off"` +
+    ` role="combobox" aria-expanded="false" aria-autocomplete="list"` +
+    ` aria-controls="${panelId}" aria-label="${esc(label)}">` +
+    `<kbd class="df-search-kbd">/</kbd>` +
+    `<div class="df-suggest" id="${panelId}" hidden></div>` +
+    `</span></form>`
+  );
+}
+
+/** The search field inside the mobile menu drawer. */
+function mobileSearchField(): string {
+  return searchField(
+    "df-suggest-mobile",
+    "搜索文章…",
+    "搜索文章",
+    "df-search-form df-search-form-mobile",
+  );
+}
+
+/**
+ * Render a menu list.
+ *
+ * `highlight` decides whether the "current page" marker is applied at all, and
+ * it defaults to TRUE only for the header nav. The footer menu passes false:
+ * the footer is site information, not a position indicator, and it was
+ * lighting up "Home" on every page of the site. That happened because `path`
+ * defaults to "" and norm() maps "" to "/", so the home item - whose rule is
+ * `cur === "/" -> href === "/"` - always matched. Passing an empty path is
+ * therefore NOT the same as passing no path, which is the whole trap.
+ */
+function defaultMenuUl(
+  items: MenuItem[],
+  cls: string,
+  path = "",
+  highlight = true,
+): string {
   if (!items.length) return "";
-  const link = (it: MenuItem, extra: string) =>
-    `<a href="${esc(it.url)}"${it.target && it.target !== "_self" ? ` target="${esc(it.target)}" rel="noopener"` : ""} class="flex items-center gap-1.5 px-3 py-2 text-sm text-zinc-300 transition ${extra}">${esc(it.label)}</a>`;
+  const link = (it: MenuItem, extra: string) => {
+    const mic = menuIconName(it);
+    const ic = mic
+      ? `<span class="df-menu-ic">${lucideSvg(mic, 14)}</span>`
+      : "";
+    const norm = (s: string) => s.split("?")[0].split("#")[0].replace(/\/+$/, "") || "/";
+    const cur = norm(path);
+    const href = norm(it.url || "");
+    const isCurrent =
+      highlight &&
+      (cur === "/"
+        ? href === "/"
+        : href !== "/" && (cur === href || cur.indexOf(href + "/") === 0));
+    return `<a href="${esc(it.url)}"${it.target && it.target !== "_self" ? ` target="${esc(it.target)}" rel="noopener"` : ""} class="df-menu-link${isCurrent ? " is-current" : ""} ${extra}"${isCurrent ? ' aria-current="page"' : ""}>${ic}<span>${esc(it.label)}</span></a>`;
+  };
   const lis = items
     .map((it) => {
       const kids = it.children?.length
-        ? `<ul class="absolute left-0 top-full z-20 hidden min-w-[180px] rounded-lg border border-[var(--border)] bg-[var(--surface)] py-1 shadow-xl group-hover:block">` +
+        ? `<ul class="df-menu-sub">` +
           (it.children || [])
-            .map((c) => `<li>${link(c, "hover:bg-white/5 hover:text-white")}</li>`)
+            .map((c) => `<li>${link(c, "hover:text-white")}</li>`)
             .join("") +
           `</ul>`
         : "";
@@ -563,36 +746,54 @@ function defaultNav(settings: Record<string, any>, items: MenuItem[]): string {
     settings.logoUrl
       ? `<img src="${esc(settings.logoUrl)}" alt="${title}" class="h-7 w-auto">`
       : `<span class="flex h-8 w-8 items-center justify-center rounded-lg" style="background:var(--accent);color:var(--accent-text)">${(title || "").charAt(0).toUpperCase()}</span>${title}`;
-  const menu = defaultMenuUl(items, "flex flex-wrap items-center");
+  const here = settings.__pathname == null ? "" : String(settings.__pathname);
+  const menu = defaultMenuUl(items, "df-menu-list", here);
+  const hasMenu = items.length > 0;
+
+  const mobileMenu = hasMenu
+    ? `<details class="dfm-menu md:hidden">` +
+      `<summary class="dfm-burger" aria-label="打开菜单">${lucideSvg("menu", 20)}</summary>` +
+      `<div class="dfm-panel">` +
+      mobileSearchField() +
+      defaultMenuUl(items, "dfm-list", here) +
+      `</div>` +
+      `</details>`
+    : "";
 
   return `<div class="theme-root relative flex min-h-screen flex-col">` +
     `<header class="sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--bg)]">` +
     `<div class="relative mx-auto flex max-w-5xl items-center gap-4 px-4 py-3">` +
     `<a href="/" class="flex items-center gap-2 text-lg font-bold tracking-tight ${headingClass}">${brandLink}</a>` +
     `<nav class="ml-2 hidden flex-1 md:block">${menu}</nav>` +
-    `<form action="/search" method="get" class="ml-auto hidden sm:block"><div class="relative">` +
-    lucideSvg("search", 16, "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]") +
-    `<input name="q" placeholder="搜索…" class="w-44 rounded-full border border-[var(--border)] bg-[var(--surface)] py-1.5 pl-9 pr-3 text-sm outline-none focus:border-[var(--accent)]">` +
-    `</div></form></div></header>`;
+    searchField("df-suggest-header", "搜索…", "搜索文章", "df-search-form") +
+    mobileMenu +
+    `</div></header>`;
 }
 
 function defaultFooter(settings: Record<string, any>, widgetsHtml: string): string {
   const year = new Date().getFullYear();
   const copy = esc(settings.footerText || `© ${year} ${settings.siteTitle}`);
-  const menu = defaultMenuUl((settings.footerMenu as MenuItem[]) || [], "flex flex-wrap items-center gap-1 text-sm text-zinc-400");
+  const menu = defaultMenuUl(
+    (settings.footerMenu as MenuItem[]) || [],
+    "df-menu-list df-menu-list-foot",
+    "",
+    false,
+  );
   return `<footer class="relative border-t border-[var(--border)] bg-[var(--footer-bg)] px-4 py-8">` +
     `<div class="mx-auto max-w-5xl">` +
     (widgetsHtml ? `<div class="mb-6">${widgetsHtml}</div>` : "") +
     (menu ? `<nav class="mb-4">${menu}</nav>` : "") +
-    `<p class="text-xs text-zinc-500">${copy}</p>` +
+    `<p class="text-xs text-[var(--muted)]">${copy}</p>` +
     `</div></footer>`;
 }
 
-function defaultCatPill(c: { name: string; url?: string }): string {
+function defaultCatPill(c: { name: string; url?: string; icon?: string | null }): string {
   const label = esc(c.name);
-
-  const cls = "rounded-full bg-[var(--accent)]/15 px-2.5 py-0.5 text-[var(--accent)]";
-  return c.url ? `<a href="${esc(c.url)}" class="${cls}">${label}</a>` : `<span class="${cls}">${label}</span>`;
+  const cls = "df-cat-pill";
+  const ic = `<span class="df-cat-pill-ic">${lucideSvg(catIconName(c), 12)}</span>`;
+  return c.url
+    ? `<a href="${esc(c.url)}" class="${cls}">${ic}${label}</a>`
+    : `<span class="${cls}">${ic}${label}</span>`;
 }
 
 function defaultPostCard(p: PostView, idx: number): string {
@@ -607,9 +808,9 @@ function defaultPostCard(p: PostView, idx: number): string {
     `<h2 class="text-lg font-semibold leading-snug text-[var(--text)]"><a href="${esc(p.url)}" class="transition group-hover:text-[var(--accent)]">${esc(p.title)}</a></h2>` +
     (p.excerpt ? `<p class="mt-2 line-clamp-3 flex-1 text-sm text-[var(--muted)]">${esc(p.excerpt)}</p>` : "") +
     `<div class="mt-4 flex flex-wrap items-center gap-3 text-xs text-[var(--muted)]">` +
-    `<span class="inline-flex items-center gap-1">${lucideSvg("user", 13)}${author}</span>` +
-    `<span class="inline-flex items-center gap-1">${lucideSvg("calendar", 13)}${fmtDate(p.publishedAt)}</span>` +
-    (p.commentsCount > 0 ? `<span class="inline-flex items-center gap-1">${lucideSvg("message-circle", 13)}${p.commentsCount} 评论</span>` : "") +
+    `<span class="df-meta-item">${lucideSvg("user", 13)}${author}</span>` +
+    `<span class="df-meta-item">${lucideSvg("calendar", 13)}${fmtDate(p.publishedAt)}</span>` +
+    (p.commentsCount > 0 ? `<span class="df-meta-item">${lucideSvg("message-circle", 13)}${p.commentsCount} 评论</span>` : "") +
     `</div></div></article>`;
 }
 
@@ -621,7 +822,7 @@ function defaultHome(parts: HomeParts): string {
     ? `<p class="mx-auto mt-3 max-w-2xl text-sm text-[var(--muted)]">${esc(parts.settings.siteDescription as string)}</p>`
     : "";
   const hero = `<section class="relative overflow-hidden rounded-3xl border border-[var(--border)] bg-gradient-to-br from-[var(--surface)] to-[var(--bg)] px-8 py-12 text-center">` +
-    lucideSvg("sparkles", 28, "mx-auto mb-4 text-[var(--accent)]") +
+    lucideSvg("sparkles", 28, "df-hero-ic") +
     `<h1 class="text-4xl font-bold tracking-tight text-[var(--text)]">${siteTitle}</h1>${tagline}${desc}</section>`;
   const all = [...parts.hero, ...parts.latest];
   const featured = all[0];
@@ -635,7 +836,7 @@ function defaultHome(parts: HomeParts): string {
         : "") +
       `<div class="p-6">${cats ? `<div class="mb-2 flex flex-wrap gap-2 text-xs">${cats}</div>` : ""}` +
       `<h2 class="text-2xl font-bold leading-snug text-[var(--text)]"><a href="${esc(featured.url)}" class="transition group-hover:text-[var(--accent)]">${esc(featured.title)}</a></h2>` +
-      `<span class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)]">${lucideSvg("sparkles", 13)} 推荐阅读</span>` +
+      `<span class="df-featured-tag">${lucideSvg("sparkles", 13)} 推荐阅读</span>` +
       (featured.excerpt ? `<p class="mt-3 line-clamp-3 text-sm text-[var(--muted)]">${esc(featured.excerpt)}</p>` : "") +
       `</div></article>`;
   }
@@ -644,29 +845,97 @@ function defaultHome(parts: HomeParts): string {
   return `<div class="space-y-10">${hero}` +
     `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><div><div class="space-y-6">${featuredHtml}` +
     (rest.length ? `<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">${grid}</div>` : "") +
-    `</div></div>${defaultAside(parts.cats || [], parts.tags || [], [...parts.hero, ...parts.latest].slice(0, 5), parts.settings, (parts.themeSettings as Record<string, any> | undefined)?.useCustomIcons === true)}</div></div>`;
+    `</div></div>${defaultAside(parts.cats || [], parts.tags || [], [...parts.hero, ...parts.latest].slice(0, 5), parts.settings, (parts.themeSettings as Record<string, any> | undefined)?.useCustomIcons === true, parts.catCounts)}</div></div>`;
 }
 
-function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settings: Record<string, unknown>, showCatIcons = false): string {
-  const catLis = cats.map((c) =>
-    `<li><a href="${esc(c.url)}" class="flex items-center gap-1.5 text-[var(--text)] hover:text-[var(--accent)]">${showCatIcons && c.icon ? lucideSvg(c.icon, 14, "text-[var(--accent)]") : ""}${esc(c.name)}</a></li>`).join("");
-  const recentLis = recent.map((p) =>
-    `<li><a href="${esc(p.url)}" class="text-[var(--text)] hover:text-[var(--accent)]">${esc(p.title)}</a><p class="text-xs text-[var(--muted)]">${fmtDate(p.publishedAt)}</p></li>`).join("");
-  const tagPills = tags.map((t) =>
-    `<a href="${esc(t.url)}" class="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]">#${esc(t.name)}</a>`).join("");
-  const cardHead = (icon: string, label: string) =>
-    `<h3 class="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">${lucideSvg(icon, 15)}${label}</h3>`;
-  return `<aside class="space-y-6">` +
-    `<form action="/search" method="get" class="block"><div class="relative">` +
-    lucideSvg("search", 16, "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]") +
-    `<input name="q" placeholder="搜索文章…" class="w-full rounded-full border border-[var(--border)] bg-[var(--surface)] py-2 pl-9 pr-4 text-sm outline-none focus:border-[var(--accent)]">` +
-    `</div></form>` +
-    `<div class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">${cardHead("folder", "分类")}` +
-    `<ul class="space-y-1 text-sm">${catLis || `<li class="text-[var(--muted)]">暂无分类</li>`}</ul></div>` +
-    `<div class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">${cardHead("tags", "标签")}` +
-    `<div class="flex flex-wrap gap-2">${tagPills || `<span class="text-xs text-[var(--muted)]">暂无标签</span>`}</div></div>` +
-    `<div class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5">${cardHead("clock", "最新文章")}` +
-    `<ul class="space-y-2 text-sm">${recentLis}</ul></div>` +
+function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settings: Record<string, unknown>, showCatIcons = false, catCounts?: Map<number, number>): string {
+  const byId = new Map(cats.map((c) => [c.id, c]));
+  const childOf = new Map<number, TaxRef[]>();
+  const roots: TaxRef[] = [];
+  for (const c of cats) {
+    const pid = c.parentId;
+    if (pid != null && pid !== c.id && byId.has(pid)) {
+      (childOf.get(pid) ?? childOf.set(pid, []).get(pid)!).push(c);
+    } else {
+      roots.push(c);
+    }
+  }
+  const placed = new Set<number>();
+  for (const [, kids] of childOf) for (const k of kids) placed.add(k.id);
+  for (const c of cats) if (!placed.has(c.id) && !roots.includes(c)) roots.push(c);
+
+  const countOf = (c: TaxRef): number | undefined => (catCounts ? catCounts.get(c.id) : undefined);
+
+  const catRow = (c: TaxRef, depth: number): string => {
+    const n = countOf(c);
+    return `<a href="${esc(c.url)}" class="df-cat df-cat-d${depth} text-[var(--text)] hover:text-[var(--accent)]">` +
+      `<span class="df-cat-ic">${lucideSvg(catIconName(c), depth ? 13 : 14)}</span>` +
+      `<span class="df-cat-name">${esc(c.name)}</span>` +
+      (n != null ? `<span class="df-cat-n">${n}</span>` : "") +
+      `</a>`;
+  };
+
+  let openLeft = 2;
+  const catTree = roots
+    .map((r) => {
+      const kids = childOf.get(r.id) ?? [];
+      const n = countOf(r);
+      if (!kids.length) {
+        return `<li class="df-cat-li df-cat-li-leaf">${catRow(r, 0)}</li>`;
+      }
+      const total = kids.reduce((sum, k) => sum + (countOf(k) ?? 0), 0) + (n ?? 0);
+      const open = openLeft-- > 0;
+      const sub = kids.map((k) => `<li class="df-cat-li">${catRow(k, 1)}</li>`).join("");
+      return `<li class="df-cat-li df-cat-li-group">` +
+        `<details class="df-cat-group"${open ? " open" : ""}>` +
+        `<summary class="df-cat-summary" title="展开/收起 ${esc(r.name)}">` +
+        `<span class="df-cat-caret">${lucideSvg("chevron-down", 13)}</span>` +
+        `<span class="df-cat-groupname">${esc(r.name)}</span>` +
+        (total ? `<span class="df-cat-n">${total}</span>` : "") +
+        `</summary>` +
+        `<ul class="df-cat-sub">${sub}</ul>` +
+        `</details>` +
+        `<a href="${esc(r.url)}" class="df-cat df-cat-parent text-[var(--text)] hover:text-[var(--accent)]" aria-label="${esc(r.name)}分类页">` +
+        `<span class="df-cat-ic">${lucideSvg(catIconName(r), 14)}</span></a>` +
+        `</li>`;
+    })
+    .join("");
+
+  const recentLis = recent
+    .map(
+      (p) =>
+        `<li class="df-recent"><a href="${esc(p.url)}" class="df-recent-link text-[var(--text)] hover:text-[var(--accent)]">${esc(p.title)}</a>` +
+        `<p class="df-recent-date">${fmtDate(p.publishedAt)}</p></li>`,
+    )
+    .join("");
+  const tagPills = tags
+    .map(
+      (t) =>
+        `<a href="${esc(t.url)}" class="df-tag text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]">#${esc(t.name)}</a>`,
+    )
+    .join("");
+  const cardHead = (icon: string, label: string, extra = "") =>
+    `<h3 class="df-card-head">${lucideSvg(icon, 15)}<span>${label}</span>${extra}</h3>`;
+  const card = (inner: string, cls = "") => `<section class="df-card ${cls}">${inner}</section>`;
+
+  return `<aside class="df-aside">` +
+    `<form action="/search" method="get" class="df-search-form df-search-form-block" role="search">` +
+    `<label class="df-sr-only" for="df-aside-q">搜索文章</label>` +
+    `<span class="df-search-box df-search-box-block">` +
+    lucideSvg("search", 16, dfSearchIcon()) +
+    `<input id="df-aside-q" name="q" placeholder="搜索文章…" class="df-search-input" autocomplete="off"` +
+    ` role="combobox" aria-expanded="false" aria-autocomplete="list"` +
+    ` aria-controls="df-suggest-aside" aria-label="搜索文章">` +
+    `<kbd class="df-search-kbd">/</kbd>` +
+    `<div class="df-suggest" id="df-suggest-aside" hidden></div>` +
+    `</span></form>` +
+    card(
+      cardHead("folder", "分类") +
+      `<ul class="df-cat-tree">${catTree || `<li class="df-empty">暂无分类</li>`}</ul>`,
+      "df-card-tree",
+    ) +
+    card(cardHead("tags", "标签") + `<div class="df-tags">${tagPills || `<span class="df-empty">暂无标签</span>`}</div>`) +
+    card(cardHead("clock", "最新文章") + `<ul class="df-recent-list">${recentLis || `<li class="df-empty">暂无文章</li>`}</ul>`) +
     `</aside>`;
 }
 
@@ -685,7 +954,7 @@ function defaultPager(page: number, totalPages: number, hrefFor: (p: number) => 
       : "border-[var(--border)] text-zinc-300 hover:border-[var(--accent)] hover:text-[var(--accent)]"}">${p}</a>`;
   };
   const edge = (label: string, icon: string, p: number) =>
-    `<a href="${esc(hrefFor(p))}" class="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-zinc-300 transition hover:border-[var(--accent)] hover:text-[var(--accent)]">${icon}${label}</a>`;
+    `<a href="${esc(hrefFor(p))}" class="df-page-edge">${icon}${label}</a>`;
   let out = `<nav class="mt-10 flex items-center justify-center gap-1.5" aria-label="分页">`;
   if (page > 1) out += edge("上一页", lucideSvg("chevron-left", 15), page - 1);
   if (start > 1) {
@@ -710,7 +979,7 @@ function defaultBreadcrumb(items: { label: string; href?: string }[]): string {
       const inner = c.href && !last
         ? `<a href="${esc(c.href)}" class="transition hover:text-[var(--accent)]">${esc(c.label)}</a>`
         : `<span class="${last ? "text-zinc-300" : ""}">${esc(c.label)}</span>`;
-      return `<span class="inline-flex items-center gap-1">${inner}${last ? "" : lucideSvg("chevron-right", 12, "text-zinc-600")}</span>`;
+      return `<span class="df-meta-item">${inner}${last ? "" : lucideSvg("chevron-right", 12, "text-zinc-600")}</span>`;
     })
     .join("");
   return `<nav aria-label="面包屑" class="flex flex-wrap items-center gap-1 text-xs text-zinc-500">${spans}</nav>`;
@@ -726,25 +995,40 @@ function defaultListPage(parts: ListParts): string {
   const isSearch = parts.variant === "search";
   
   const isTerm = !isBlog && !isCategory && !isSearch;
-  
-  const backLink = isTerm || parts.variant === "category"
-    ? `<div class="mb-6"><a href="/" class="text-sm text-zinc-400 hover:text-[var(--accent)]">← 首页</a>`
-    : `<div class="mb-6"><a href="/" class="inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-[var(--accent)]">${lucideSvg("arrow-left", 14)}首页</a>`;
-  const iconHtml = parts.titleIcon ? lucideSvg(parts.titleIcon, parts.variant === "search" ? 26 : 22, "text-[var(--accent)]") : "";
+  const iconHtml = parts.titleIcon ? lucideSvg(parts.titleIcon, parts.variant === "search" ? 26 : 22, dfIconAccent()) : "";
+
+  const crumbItems: { label: string; href?: string }[] = [{ label: "首页", href: "/" }];
+  if (isCategory) crumbItems.push({ label: "分类" });
+  else if (isSearch) crumbItems.push({ label: "搜索" });
+  else if (isTerm) crumbItems.push({ label: "标签" });
+  else if (!isBlog) crumbItems.push({ label: "页面" });
+  if (isSearch && (parts.query ?? "").trim()) {
+    crumbItems.push({ label: (parts.query ?? "").trim() });
+  } else {
+    crumbItems.push({ label: parts.title.replace(/^(分类|标签|搜索)[：:]\s*/, "") || parts.title });
+  }
+  const backLink =
+    `<div class="mb-6">` +
+    defaultBreadcrumb(crumbItems) +
+    `<h1 class="mt-2${isTerm ? "" : " flex items-center gap-2"} text-3xl font-bold text-zinc-100">` +
+    (isTerm ? "" : iconHtml) +
+    esc(parts.title) +
+    `</h1>` +
+    (parts.titleDesc
+      ? `<p class="mt-2 text-sm text-zinc-400">${esc(parts.titleDesc)}</p>`
+      : parts.sub
+        ? `<p class="mt-2 text-sm text-zinc-400">${esc(parts.sub)}</p>`
+        : "") +
+    `</div>`;
   const headHtml = isBlog
     ? defaultBreadcrumb([{ label: "首页", href: "/" }, { label: "文章" }]) +
       `<header class="mb-6 mt-3">` +
       `<h1 class="text-3xl font-bold text-zinc-100">${esc(parts.title)}</h1>` +
-      (parts.sub ? `<p class="mt-1 text-sm text-zinc-500">${esc(parts.sub)}</p>` : "") +
+      (parts.sub ? `<p class="mt-1 text-sm text-[var(--muted)]">${esc(parts.sub)}</p>` : "") +
       `</header>`
-    : backLink +
-      (isTerm
-        ? `<h1 class="mt-2 text-3xl font-bold text-zinc-100">${esc(parts.title)}</h1>`
-        : `<h1 class="mt-2 flex items-center gap-2 text-3xl font-bold text-zinc-100">${iconHtml}${esc(parts.title)}</h1>`) +
-      (parts.titleDesc ? `<p class="mt-2 text-sm text-zinc-400">${esc(parts.titleDesc)}</p>` : parts.sub ? `<p class="mt-2 text-sm text-zinc-400">${esc(parts.sub)}</p>` : "") +
-      `</div>`;
+    : backLink;
   const sidebar = parts.sidebarData
-    ? defaultAside(parts.sidebarData.cats, parts.sidebarData.tags, parts.sidebarData.posts, parts.settings || {}, parts.sidebarData.showCatIcons === true)
+    ? defaultAside(parts.sidebarData.cats, parts.sidebarData.tags, parts.sidebarData.posts, parts.settings || {}, parts.sidebarData.showCatIcons === true, parts.sidebarData.catCounts)
     : "";
   
   
@@ -768,29 +1052,57 @@ function defaultListPage(parts: ListParts): string {
     `</div>${sidebar}</div>`;
 }
 
+/**
+ * The share block's markup. NO script here.
+ *
+ * The copy button used to ship an inline `<script>` next to the buttons, and
+ * that is why it worked only when the article was opened directly: the block
+ * renders inside `<main id="sk-main">`, and a pjax navigation replaces that
+ * subtree with `main.innerHTML = ...`. The HTML parser ignores every script
+ * inside markup inserted that way, so on every client-side navigation the new
+ * page's copy button arrived with nothing bound to it and did nothing when
+ * clicked — no error, no console message, just a dead button.
+ *
+ * The handler now lives in /public/theme-pjax.js, which is loaded once from
+ * `<head>` and therefore survives every swap. That file already documents this
+ * class of bug; this entry is the second consumer of the same rule.
+ */
 function defaultShareButtons(title: string, url: string): string {
-  const wb = `http://service.weibo.com/share/share.php?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`;
-  const tw = `https://twitter.com/intent/tweet?url=${encodeURIComponent(url)}&text=${encodeURIComponent(title)}`;
+  const wb = `https://service.weibo.com/share/share.php?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`;
+  const x = `https://x.com/intent/post?url=${encodeURIComponent(url)}&text=${encodeURIComponent(title)}`;
   const mail = `mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(url)}`;
-  const btn = "inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] px-3 py-1.5 text-xs text-zinc-300 transition hover:border-[var(--accent)] hover:text-[var(--accent)]";
-  return `<div class="mt-8 flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-6">` +
-    `<span class="mr-1 inline-flex items-center gap-1 text-sm text-zinc-400">${lucideSvg("share-2", 15)}分享</span>` +
-    `<button type="button" title="复制链接 / 系统分享" class="${btn}">${lucideSvg("link", 13)}复制链接</button>` +
+  const btn = "df-share-btn";
+  return `<div class="df-share">` +
+    `<span class="df-share-label">${lucideSvg("share-2", 15)}分享</span>` +
+    `<button type="button" data-share-copy title="复制文章链接" class="${btn}">` +
+    `${lucideSvg("link", 13)}<span data-share-label>复制链接</span></button>` +
     `<a href="${esc(wb)}" target="_blank" rel="noopener noreferrer" class="${btn}">微博</a>` +
-    `<a href="${esc(tw)}" target="_blank" rel="noopener noreferrer" class="${btn}">Twitter</a>` +
+    `<a href="${esc(x)}" target="_blank" rel="noopener noreferrer" class="${btn}" aria-label="分享到 X">X</a>` +
     `<a href="${esc(mail)}" class="${btn}">${lucideSvg("mail", 13)}邮件</a>` +
     `</div>`;
 }
+
+/**
+ * Live view counts. No script here either — see defaultShareButtons.
+ *
+ * The article HTML is render-cached for up to 15s, so the count in the markup
+ * can be stale; the real number is fetched after load and written into the
+ * [data-views-count] slot. That "after load" has to be driven from
+ * theme-pjax.js on the rv:nav event, because this block renders inside
+ * <main id="sk-main"> and pjax replaces that subtree wholesale: an inline
+ * script inside it runs on a direct page load and then never again, which is
+ * why the count stayed at the cached value after a client-side navigation.
+ */
 
 function defaultRelatedSection(posts: PostView[]): string {
   if (!posts.length) return "";
   const cards = posts.map((p) =>
     `<a href="${esc(p.url)}" class="group rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 transition hover:border-[var(--accent)]">` +
     `<h3 class="line-clamp-2 font-medium text-zinc-100 transition group-hover:text-[var(--accent)]">${esc(p.title)}</h3>` +
-    (p.publishedAt ? `<p class="mt-2 text-xs text-zinc-500">${fmtDate(p.publishedAt)}</p>` : "") +
+    (p.publishedAt ? `<p class="mt-2 text-xs text-[var(--muted)]">${fmtDate(p.publishedAt)}</p>` : "") +
     `</a>`).join("");
   return `<section class="mt-10">` +
-    `<h2 class="mb-4 flex items-center gap-2 text-lg font-bold text-zinc-100">${lucideSvg("folder-open", 18, "text-[var(--accent)]")}相关文章</h2>` +
+    `<h2 class="mb-4 flex items-center gap-2 text-lg font-bold text-zinc-100">${lucideSvg("folder-open", 18, dfIconAccent())}相关文章</h2>` +
     `<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">${cards}</div></section>`;
 }
 
@@ -807,19 +1119,35 @@ function defaultPostPage(parts: PostPageParts): string {
     ...(firstCat ? [{ label: firstCat.name, href: firstCat.url }] : []),
     { label: p.title },
   ]);
+  const tocItems = [...parts.bodyHtml.matchAll(/<h([23])[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/h\1>/g)]
+    .map((m) => ({ level: Number(m[1]), id: m[2], text: m[3].replace(/<[^>]*>/g, "").trim() }))
+    .filter((h) => h.text);
+  const tocHtml =
+    tocItems.length >= 2
+      ? `<details class="df-toc mb-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-5 py-4">` +
+        `<summary class="cursor-pointer text-sm font-semibold text-[var(--text)]">目录</summary>` +
+        `<ul class="mt-3 space-y-1.5 text-sm">` +
+        tocItems
+          .map(
+            (h) =>
+              `<li${h.level === 3 ? ' class="ml-4"' : ""}><a href="#${esc(h.id)}" class="text-[var(--muted)] hover:text-[var(--accent)]">${esc(h.text)}</a></li>`,
+          )
+          .join("") +
+        `</ul></details>`
+      : "";
   return `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><article>` +
     `<header class="mb-6">` +
-    `<a href="/" class="mb-4 inline-flex items-center gap-1 text-sm text-[var(--muted)] hover:text-[var(--accent)]">${lucideSvg("arrow-left", 14)}返回首页</a>` +
     crumb +
     (cats ? `<div class="mb-3 mt-3 flex flex-wrap gap-2 text-xs">${cats}</div>` : "") +
     `<h1 class="text-3xl font-bold leading-tight text-[var(--text)]">${esc(p.title)}</h1>` +
     `<div class="mt-3 flex flex-wrap items-center gap-4 text-sm text-[var(--muted)]">` +
-    `<span class="inline-flex items-center gap-1">${lucideSvg("user", 14)}${author}</span>` +
-    `<span class="inline-flex items-center gap-1">${lucideSvg("calendar", 14)}${fmtDate(p.publishedAt)}</span>` +
-    `<span class="inline-flex items-center gap-1">${lucideSvg("eye", 14)}${p.views} 阅读</span>` +
-    (p.commentsCount > 0 ? `<span class="inline-flex items-center gap-1">${lucideSvg("message-circle", 14)}${p.commentsCount} 评论</span>` : "") +
+    `<span class="df-meta-item">${lucideSvg("user", 14)}${author}</span>` +
+    `<span class="df-meta-item">${lucideSvg("calendar", 14)}${fmtDate(p.publishedAt)}</span>` +
+    `<span class="df-meta-item" data-views-post="${p.id}">${lucideSvg("eye", 14)}<span data-views-count>${p.views}</span> 阅读</span>` +
+    (p.commentsCount > 0 ? `<span class="df-meta-item">${lucideSvg("message-circle", 14)}${p.commentsCount} 评论</span>` : "") +
     `</div>${meta}</header>` +
     (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="mb-6 w-full rounded-2xl border border-[var(--border)] object-cover">` : "") +
+    tocHtml +
     `<div class="prose-cms">${parts.bodyHtml}</div>` +
     (tags || "") +
     defaultShareButtons(p.title, parts.canonical || p.url) +
@@ -830,7 +1158,7 @@ function defaultPostPage(parts: PostPageParts): string {
     `<div class="space-y-6">` +
 
     (parts.sidebarData
-      ? defaultAside(parts.sidebarData.cats, parts.sidebarData.tags, parts.sidebarData.posts, parts.settings || {}, parts.sidebarData.showCatIcons === true)
+      ? defaultAside(parts.sidebarData.cats, parts.sidebarData.tags, parts.sidebarData.posts, parts.settings || {}, parts.sidebarData.showCatIcons === true, parts.sidebarData.catCounts)
       : "") +
     (parts.sidebarWidgets || "") +
     `</div></div>`;
@@ -847,6 +1175,7 @@ function defaultPagePage(parts: PagePageParts): string {
 const defaultChrome: ThemeChrome = {
   slug: "default",
   cssHref: () => themeCssHref("default"),
+  cssInline: () => themeCssContent("default"),
   bodyFix: () => defaultBodyFix,
   headExtra: () => "",
   nav: (settings, items) => defaultNav(settings, items),
@@ -1184,7 +1513,6 @@ const pseudolinearChrome: ThemeChrome = {
   bodyFix: () => pseudoBodyFix,
   headExtra: () => "",
   nav: (settings, items) => pseudoNav(settings, items),
-  
   
   
   bodyOpen: (settings, items) =>
@@ -1659,7 +1987,6 @@ function bmixYmd(v: Date | string | null | undefined): string {
 
 const BMIX_ICON_ALIAS: Record<string, string> = {
   comments: "message-square-text",
-  "bars-staggered": "layout-list",
   more: "ellipsis",
   "ranking-star": "award",
   "right-to-bracket": "log-in",
@@ -1677,7 +2004,7 @@ function bmixIc(icon: string, size: number, marginRight = 0): string {
   
   const fromFile = lucideSvg(bmixIconName(icon), px, "", mr);
   if (fromFile) return fromFile;
-  const common = `width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:inline-block;vertical-align:-0.125em;flex-shrink:0;${mr}"`;
+  const common = `overflow="visible" width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:inline-block;vertical-align:-0.125em;flex-shrink:0;${mr}"`;
   if (icon === "sun") {
     return `<svg ${common}><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
   }
@@ -1691,7 +2018,7 @@ function bmixIc(icon: string, size: number, marginRight = 0): string {
     comments: "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z",
     eye: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z",
     clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zm0-16v6l4 2",
-    "bars-staggered": "M2 6h20M2 12h14M2 18h20",
+    "align-justify": "M21 10H3M21 14H3M21 6H3M21 18H3",
     "chevron-left": "m15 18-6-6 6-6",
     "chevron-right": "m9 18 6-6-6-6",
     lightbulb: "M9 18h6M10 22h4M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5",
@@ -1707,10 +2034,33 @@ const iconFileCache = new Map<string, string | null>();
 
 const LUCIDE_CLASS_ALIAS: Record<string, string> = { "share-2": "share2" };
 
+/**
+ * Class for icons rendered inside prose/meta rows.
+ *
+ * These classes must be real rules in each theme's stylesheet: lucideSvg()'s
+ * `cls` argument is a runtime string, so Tailwind's scanner never sees it and
+ * never emits the utility. Passing text-[var(--muted)] here therefore produced
+ * an unstyled icon - the date/meta glyphs read as "broken" while the markup
+ * looked correct. Semantic classes are declared in the theme CSS instead.
+ *
+ * Functions, not consts: the default-theme chrome above is defined before this
+ * point in the file but only RUNS at request time, and a const declared here
+ * would still be in its temporal dead zone for any call made before it.
+ */
+function dfIcon(): string {
+  return "df-ic";
+}
+function dfIconAccent(): string {
+  return "df-ic df-ic-accent";
+}
+function dfSearchIcon(): string {
+  return "df-search-ic";
+}
+
 function lucideSvg(name: string, px: number, cls = "", styleExtra = ""): string {
   let svg = iconFileCache.get(name);
   if (svg === undefined) {
-    try { svg = fs.readFileSync(path.join(process.cwd(), "oboext/public/icons", `${name}.svg`), "utf8"); }
+    try { svg = fs.readFileSync(path.join(PUBLIC_DIR, "icons", `${name}.svg`), "utf8"); }
     catch { svg = null; }
     iconFileCache.set(name, svg);
   }
@@ -1719,12 +2069,23 @@ function lucideSvg(name: string, px: number, cls = "", styleExtra = ""): string 
   const style = `display:inline-block;vertical-align:-0.125em;flex-shrink:0${styleExtra ? ";" + styleExtra : ""}`;
   
   
-  
-  
   return svg
-    .replace(/\s(?:width|height)="\d+"/g, "")
+    // Strip the root <svg>'s width/height only - the next line re-adds them at
+    // the call site's size, and the viewBox does the actual scaling.
+    //
+    // The pattern is ANCHORED to the root tag on purpose. An unanchored
+    // /\s(?:width|height)="\d+"/g also matches nested elements, and those
+    // dimensions are GEOMETRY, not presentation: a <rect> without a width does
+    // not render at all. That silently emptied every rect in cpu.svg, book-open
+    // and the rest, so those glyphs came out with rectangular holes.
+    // Two passes, because the two attributes are independent.
+    .replace(/^(<svg\b[^>]*?)\s(?:width|height)="\d+"/, (m, head) => head)
+    .replace(/^(<svg\b[^>]*?)\s(?:width|height)="\d+"/, (m, head) => head)
     .replace(/^<svg\b[^>]*?\bxmlns="[^"]*"/, (m) => `${m} width="${px}" height="${px}"`)
     .replace(/stroke="#[0-9a-fA-F]{3,8}"/, 'stroke="currentColor"')
+    // Glyphs that draw to y=2 / y=22 lose another 1px to the 2px stroke, and
+    // the default svg overflow:hidden clips it - those icons render sliced.
+    .replace(/^<svg\b/, '<svg overflow="visible"')
     .replace(/class="lucide lucide-[^"]*"/, `class="lucide lucide-${LUCIDE_CLASS_ALIAS[name] || name}${c}"`)
     .replace(/(<svg\b[^>]*)>/, `$1 style="${style}">`);
 }
@@ -2018,7 +2379,6 @@ function bmixListPage(parts: ListParts): string {
   const banner = showBanner ? bmixBanner(hero, parts.bannerMax || 5) : "";
 
   
-  
   const contentInner = isCategory
     ? `<span class="inline-flex items-center gap-2">${parts.titleIcon ? bmixIconFile(parts.titleIcon, 15) : ""}${esc(parts.title)}${parts.titleDesc ? ` · ${esc(parts.titleDesc)}` : ""}</span>`
     : esc(parts.title);
@@ -2028,7 +2388,6 @@ function bmixListPage(parts: ListParts): string {
     `<div class="content text-primary-gray text-bulge-primary-gray">${contentInner}</div>` +
     `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span></div></div>`;
 
-  
   
   const gridCls = isBlog || isCategory || isSearch ? "blog-grid" : "list-grid";
   const cards = parts.items.map((p, i) => bmixPostCard(p, i)).join("");
@@ -2128,7 +2487,7 @@ function bmixPostSidebar(toc: { id: string; text: string; level: number }[], pos
   const paneJson = JSON.stringify({ bookmark: paneBookmark, bars: paneBars }).replace(/</g, "\\u003c");
   return `<div class="sidebar-titles"><ul class="grid cols-2">` +
     `<li class="anchor" aria-hidden="true" style="transform:translateX(100%)"></li>` +
-    `<li class="title" data-bmx-tab="bars"><a href="#" aria-label="大家喜欢" role="link" data-role="tab">${bmixIc("bars-staggered", 12, 0)}</a></li>` +
+    `<li class="title" data-bmx-tab="bars"><a href="#" aria-label="大家喜欢" role="link" data-role="tab">${bmixIc("align-justify", 12, 0)}</a></li>` +
     `<li class="title active" data-bmx-tab="bookmark"><a href="#" aria-label="目录·相关" role="link" data-role="tab">${bmixIc("bookmark", 12, 0)}</a></li>` +
     `</ul></div>` +
     `<div class="panel"><div class="wrapper">` +

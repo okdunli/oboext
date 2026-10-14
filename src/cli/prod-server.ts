@@ -44,6 +44,15 @@ const ready = createEdgeHandler(dist).then(async (h) => {
   } catch { /* warm list stays just the home route */ }
 });
 
+ready.then(async (h) => {
+  for (const r of warmList) {
+    try {
+      const res = await h(new Request('http://localhost' + r));
+      await res.arrayBuffer();
+    } catch { /* a warm-up failure just means that route renders cold */ }
+  }
+}).catch(() => {});
+
 const hotCache = new Map<string, { raw: Buffer; br: Buffer; gzip: Buffer; headers: Record<string, string>; etag: string; fetchedAt: number; refreshing?: boolean }>();
 const HOT_TTL = 10_000;
 

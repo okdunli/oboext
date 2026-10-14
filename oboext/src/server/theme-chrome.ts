@@ -82,6 +82,12 @@ export type HomeParts = {
   showHero?: boolean;
   bannerMax?: number;
   recentCount?: number;
+
+  /** bluemix `home-top` widget area, rendered under the banner. */
+  homeTop?: string;
+
+  /** bluemix home sidebar widget area (inside aside.bmx-blocks). */
+  sideWidgets?: string;
 };
 
 export type RankPost = {
@@ -1917,7 +1923,7 @@ function bmixHomeArticleRow(p: PostView): string {
     `<span class="text-success">${bmixIc("eye", 10)} ${p.views ?? 0}</span></span></span></div>`;
 }
 
-function bmixHomeSidebar(posts: PostView[], settings: Record<string, unknown>, ts: Record<string, unknown>): string {
+function bmixHomeSidebar(posts: PostView[], settings: Record<string, unknown>, ts: Record<string, unknown>, widgetsHtml = ""): string {
   const items = posts || [];
   const popular = [...items].sort((a, b) => (b.views ?? 0) - (a.views ?? 0)).slice(0, 4);
   const recent = items.filter((p) => !popular.some((q) => q.id === p.id)).slice(0, 4);
@@ -1928,12 +1934,17 @@ function bmixHomeSidebar(posts: PostView[], settings: Record<string, unknown>, t
     "linear-gradient(135deg,#7ba3e0,#b59df0)";
   const isGradient = avatarRaw.startsWith("linear-gradient");
   const avatarStyle = isGradient ? `background-image:${avatarRaw}` : `background-image:${cssUrl(avatarRaw)}`;
-  const avatarNode = `<div class="avatar" style="${avatarStyle}"></div>`;
+  const avatarHref = typeof (ts as any)?.sidebarAvatarLink === "string" ? (ts as any).sidebarAvatarLink.trim() : "";
+  const external = /^https?:\/\//i.test(avatarHref);
+  const avatarNode = avatarHref
+    ? `<a href="${esc(avatarHref)}" class="avatar-link"${external ? ' target="_blank" rel="noopener noreferrer"' : ""}><span class="avatar" style="${avatarStyle}"></span></a>`
+    : `<div class="avatar" style="${avatarStyle}"></div>`;
   const bloggerDesc = String(settings.tagline ?? settings.siteDescription ?? "Design a colorful life");
   return `<div class="panel"><div class="wrapper"><aside class="bmx-blocks">` +
     `<div class="widget-blogger flex items-center g-8">${avatarNode}<div class="metas"><div class="name">${esc(String(settings.siteTitle ?? ""))}</div><div class="description text-embossed">${esc(bloggerDesc)}</div></div></div>` +
     `<div class="widget-title"><div class="title">热门文章</div></div><div class="widget-articles mb-20">${popular.map(bmixHomeArticleRow).join("")}</div>` +
     `<div class="widget-title"><div class="title">最新文章</div></div><div class="widget-articles mb-20">${(recent.length ? recent : items.slice(0, 4)).map(bmixHomeArticleRow).join("")}</div>` +
+    widgetsHtml +
     `</aside></div></div>`;
 }
 
@@ -1963,13 +1974,15 @@ function bmixHome(parts: HomeParts): string {
     `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span>` +
     `<a href="${esc(parts.blogIndex || "/blog")}" class="more-btn flex items-center justify-center text-sm r-full text-embossed truncate"><span class="flex items-center justify-center"><span class="more-text">更多</span>${bmixIc("chevron-right", 7)}</span></a></div></div>`;
   const mainContent = `${catTitle}${inner}`;
-  const sidebar = bmixHomeSidebar(recent, parts.settings, ts as Record<string, unknown>);
+  const sidebar = bmixHomeSidebar(recent, parts.settings, ts as Record<string, unknown>, parts.sideWidgets || "");
   const catNav = bmixCatNav("/", parts.cats, parts.blogIndex || "/blog");
   const banner = showHero ? bmixBanner(recent, bannerMax) : "";
   const rankings = bmixRankings(parts.rankings, parts.rankTabs);
   const sections = (parts.sections || []).map((s) => `<div class="bmx-reveal">${bmixSection(s.row.title, s.row.category.url, s.row.icon, s.posts)}</div>`).join("");
+  const homeTop = parts.homeTop || "";
   return `<div class="home">` +
     banner +
+    homeTop +
     `<div class="content-wrapper flex container-np line reverse">` +
     `<div class="sidebar"><div class="pf_scroller sidebar-sticky"><div class="sidebar-content">${sidebar}</div></div></div>` +
     `<div class="main-content">${catNav}${mainContent}</div>` +
@@ -2146,20 +2159,20 @@ function bmixPostPage(parts: PostPageParts): string {
     (hasImage ? `<img src="${imgUrl}" alt="" >` : "") +
     `</div></div></div>`;
   const sidebar = bmixPostSidebar(toc, p, parts.related || [], parts.popular || [], parts.random || []);
-  
-  
-  
+  const sideWidgets = parts.sidebarWidgets || "";
+  const postBottom = parts.postBottom || "";
   return `<div class="single"><div data-post-type="article">` +
     `<div class="coverflow-swiper"><div class="container-np"><div class="slider mx-10">` +
     heroCard +
     `</div></div></div>` +
     `<div class="content-wrapper flex container-np line reverse">` +
-    `<div class="sidebar"><div class="pf_scroller sidebar-sticky"><div class="sidebar-content">${sidebar}</div></div></div>` +
+    `<div class="sidebar"><div class="pf_scroller sidebar-sticky"><div class="sidebar-content">${sidebar}${sideWidgets}</div></div></div>` +
     `<div class="main-content">` +
     `<div class="model-wrapper article"><div class="model">` +
     `<article class="bmx-blocks" data-bmix-article>${bodyHtml}</article>` +
     parts.shareHtml +
     `</div></div>` +
+    postBottom +
     (parts.commentsHtml
       ? `<div class="model-wrapper"><div class="model">` +
         bmixCommentHead(p.commentsCount) +
@@ -2331,11 +2344,17 @@ const bluemixChrome: ThemeChrome = {
     bmixNav(settings, items) +
     `<main id="sk-main"><div class="pf-route-frame pf-init" data-bmx-frame>`,
   
-  bodyClose: (settings, footerHtml) =>
-    `</div></main>` +
-    `<div class="full-loading show" aria-hidden="true"><div class="lines"><div></div><div></div><div></div><div></div><div></div></div></div>` +
-    `<noscript><style>.full-loading{display:none!important}.pf-route-frame{opacity:1!important;transform:none!important}</style></noscript>` +
-    footerHtml + `</div>`,
+  bodyClose: (settings, footerHtml) => {
+    const analytics = typeof settings.analyticsCode === "string" ? settings.analyticsCode.trim() : "";
+    return (
+      `</div></main>` +
+      `<div class="full-loading show" aria-hidden="true"><div class="lines"><div></div><div></div><div></div><div></div><div></div></div></div>` +
+      `<noscript><style>.full-loading{display:none!important}.pf-route-frame{opacity:1!important;transform:none!important}</style></noscript>` +
+      footerHtml +
+      (analytics ? `<div data-oboe="analytics">${analytics}</div>` : "") +
+      `</div>`
+    );
+  },
   aside: () => "",
   footer: (settings, widgetsHtml) => bmixFooter(settings, widgetsHtml),
   home: bmixHome,

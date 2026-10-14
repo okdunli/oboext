@@ -79,6 +79,41 @@ async function pluginFooterHtml(): Promise<string> {
   return `<div id="oboe-footer-hooks" aria-hidden="true" style="display:none">${joined}</div>`;
 }
 
+function verificationMetaHtml(raw: unknown): string {
+  const v = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const pick = (...keys: string[]) => {
+    for (const k of keys) {
+      const val = v[k];
+      if (typeof val === "string" && val.trim()) return val.trim();
+    }
+    return "";
+  };
+  const out: string[] = [];
+  const google = pick("google", "google-site-verification");
+  const yandex = pick("yandex", "yandex-verification");
+  const bing = pick("bing", "msvalidate.01");
+  const yahoo = pick("yahoo", "y_key");
+  if (google) out.push(`<meta name="google-site-verification" content="${R.esc(google)}">`);
+  if (yandex) out.push(`<meta name="yandex-verification" content="${R.esc(yandex)}">`);
+  if (bing) out.push(`<meta name="msvalidate.01" content="${R.esc(bing)}">`);
+  if (yahoo) out.push(`<meta name="y_key" content="${R.esc(yahoo)}">`);
+  return out.join("\n");
+}
+
+/**
+ * Google Analytics tag for the stored measurement id. The id charset is
+ * restricted so it cannot break out of the attribute or the JSON string.
+ */
+function analyticsSnippet(raw: unknown): string {
+  const id = typeof raw === "string" ? raw.trim() : "";
+  if (!id || !/^[A-Za-z0-9_-]+$/.test(id)) return "";
+  return (
+    `<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>` +
+    `<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}` +
+    `gtag('js',new Date());gtag('config',${JSON.stringify(id)});</script>`
+  );
+}
+
 /** Collect plugin <head> nodes for a page (head.tags filter). */
 async function pluginHeadHtml(context: HeadContext): Promise<string> {
   await ensurePluginsLoaded();
@@ -204,18 +239,33 @@ async function chromeData(pathname: string) {
     },
     R.widgetAreaHtml(footerWidgets, "sk-footer-widgets"),
   );
+  const customCss = typeof settings.customCss === "string" ? settings.customCss.trim() : "";
+  const customHead = typeof settings.customHead === "string" ? settings.customHead.trim() : "";
+  const customFooter =
+    typeof settings.customFooter === "string" ? settings.customFooter.trim() : "";
+  const siteBodyOpen =
+    (customCss ? `<style id="oboe-custom-css">${customCss}</style>` : "") + customHead;
+  const siteBodyEnd = [customFooter, analyticsSnippet(settings.analyticsId)]
+    .filter(Boolean)
+    .join("\n");
   return {
     siteTitle: settings.siteTitle ?? "",
     siteDescription: settings.siteDescription ?? "",
     varsHtml,
+    siteHead: verificationMetaHtml(settings.verifications),
+    siteBodyOpen,
+    siteBodyEnd,
     themeSlug,
     cssHref: tc.cssHref(),
     themeScripts,
-    bodyFix: tc.bodyFix(),
+    bodyFix: tc.bodyFix() + siteBodyOpen,
     headExtra: tc.headExtra(),
     navHtml: tc.nav({ ...settings, __pathname: pathname }, headerItems),
     bodyOpen: tc.bodyOpen({ ...settings, __pathname: pathname }, headerItems),
-    bodyClose: tc.bodyClose(settings, footerHtml),
+    bodyClose: tc.bodyClose(
+      { ...settings, analyticsCode: (themeSettings as Record<string, unknown>).analyticsCode },
+      footerHtml,
+    ),
     asideHtml: tc.aside({
       menu: R.sidebarMenu(menuItems, pathname),
       tagCloud: R.tagCloud(tags),
@@ -233,7 +283,7 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
   const [d, cfg] = await Promise.all([chromeData(pathname), getPermalinkConfig()]);
   const isAdmin = pathname.indexOf("/admin") === 0;
   const blogIndex = blogIndexUrlFor(cfg);
-  const pluginFooter = isAdmin ? "" : await pluginFooterHtml();
+  const pluginFooter = isAdmin ? "" : (await pluginFooterHtml()) + d.siteBodyEnd;
   const pluginHead =
     isAdmin || chromeSkipsHead(pathname, cfg)
       ? ""
@@ -243,6 +293,7 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
     siteDescription: d.siteDescription,
 
     siteUrl: origin,
+    siteHead: isAdmin ? "" : d.siteHead,
     themeHead: d.varsHtml + d.headExtra,
     themeSlug: d.themeSlug,
     cssHref: d.cssHref,
@@ -414,8 +465,13 @@ async function home(ctx?: Ctx) {
       most_reads: bmStrOr(ts.rankLabelReads, "阅读最多"),
     },
     order: rankOrder,
-    defaultTab: bmRankDefaultFrom(ts.rankOrder, rankOrder[0]),
+    defaultTab: bmRankDefaultFrom(ts.rankDefault, rankOrder[0]),
   };
+
+  const [homeTopItems, homeSideItems] = await Promise.all([
+    getAreaWidgets(themeSlug, "home-top"),
+    getAreaWidgets(themeSlug, "sidebar"),
+  ]);
 
   return {
     head: homeHead,
@@ -435,6 +491,8 @@ async function home(ctx?: Ctx) {
       showHero,
       bannerMax,
       recentCount,
+      homeTop: R.widgetAreaHtml(homeTopItems, "container-np bmx-ad-area"),
+      sideWidgets: R.widgetAreaHtml(homeSideItems, "bmx-ad-area"),
     }),
   };
 }
@@ -810,13 +868,19 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     : "";
   
   const isDefault = themeSlug === "default";
-  const [postBottom, sidebarWidgets, ts] = isDefault
-    ? await Promise.all([
-        R.widgetAreaHtml(await getAreaWidgets(themeSlug, "post-bottom"), "space-y-6"),
-        R.widgetAreaHtml(await getAreaWidgets(themeSlug, "sidebar"), "space-y-6"),
-        getActiveThemeSettings(),
-      ])
-    : ["", "", undefined];
+  const isBluemix = themeSlug === "bluemix";
+  let postBottom = "";
+  let sidebarWidgets = "";
+  let ts: Awaited<ReturnType<typeof getActiveThemeSettings>> | undefined;
+  if (isDefault || isBluemix) {
+    const [bottomItems, sideItems] = await Promise.all([
+      getAreaWidgets(themeSlug, "post-bottom"),
+      getAreaWidgets(themeSlug, "sidebar"),
+    ]);
+    postBottom = R.widgetAreaHtml(bottomItems, isBluemix ? "model-wrapper bmx-ad-area" : "space-y-6");
+    sidebarWidgets = R.widgetAreaHtml(sideItems, isBluemix ? "bmx-ad-area" : "space-y-6");
+    if (isDefault) ts = await getActiveThemeSettings();
+  }
   return {
     main: tc.postPage({
       post,

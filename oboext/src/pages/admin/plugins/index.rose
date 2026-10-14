@@ -3,7 +3,16 @@
   function list() { return data().plugins || []; }
   function iconUrl(p) {
     var name = (p.manifest && p.manifest.icon) || "plug";
-    return "/public/icons/" + name.toLowerCase() + ".svg";
+    // Icon files are stored kebab-case (calendar-check.svg), but manifests may
+    // spell the name in camelCase/PascalCase ("calendarCheck") or with
+    // underscores. Normalise to kebab-case, otherwise the URL 404s — and a
+    // missing /public asset falls through to the catch-all route, which then
+    // boots the DB and can 500 the whole page.
+    var kebab = String(name)
+      .replace(/([a-z0-9])([A-Z0-9])/g, "$1-$2")
+      .replace(/[_\s]+/g, "-")
+      .toLowerCase();
+    return "/public/icons/" + kebab + ".svg";
   }
   function statusStyle(p) {
     return p.enabled
@@ -11,10 +20,17 @@
       : "background:rgba(120,120,130,.18);color:#d4d4d8;";
   }
   function statusText(p) { return p.enabled ? "已启用" : "已禁用"; }
-  function toggleIcon(p) { return p.enabled ? "/public/icons/toggle-left.svg" : "/public/icons/toggle-right.svg"; }
+  function toggleIcon(p) {
+    return p.enabled ? "/public/icons/circle-check.svg" : "/public/icons/circle-x.svg";
+  }
   function toggleText(p) { return p.enabled ? "禁用" : "启用"; }
+  // The toggle button used to be a plain adm-iconbtn, so an enabled plugin's
+  // green "已启用" badge sat next to a colourless "禁用" button and the row
+  // read as mismatched. The state class tints the button border/text to match
+  // the badge (red = destructive action on a live plugin, grey = inert).
+  function toggleClass(p) { return p.enabled ? "plg-toggle is-on" : "plg-toggle is-off"; }
   function iconBg(p) { return p.enabled ? "rgba(79,70,229,.15)" : "var(--adm-panel-2)"; }
-  function iconColor(p) { return p.enabled ? "#818cf8" : "var(--adm-faint)"; }
+  function iconColor(p) { return p.enabled ? "#22c55e" : "#ef4444"; }
   function emptyHint() { return list().length ? [] : [1]; }
 
   function hasSettings(p) {
@@ -83,7 +99,7 @@
         面板
       </a>
       {/if}
-      <button class="adm-iconbtn" data-adm-act="plugin-toggle" data-slug={p.slug} data-enabled={p.enabled ? "1" : "0"}>
+      <button class={"adm-iconbtn " + toggleClass(p)} data-adm-act="plugin-toggle" data-slug={p.slug} data-enabled={p.enabled ? "1" : "0"}>
         <span class="adm-ic adm-ic-sm" style="--i:url({toggleIcon(p)})"></span>
         {toggleText(p)}
       </button>

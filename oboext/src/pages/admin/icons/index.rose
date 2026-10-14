@@ -22,6 +22,7 @@
     <span class="adm-hint" style="margin:0;">共 {count()} 个</span>
   </div>
   <span style="flex:1"></span>
+  <a class="adm-iconbtn" href="https://lucide.dev/icons/" target="_blank" rel="noopener noreferrer" title="在 lucide.dev 查看全部图标与用法">来源 lucide.dev</a>
   <input class="adm-input" data-ic-search placeholder="搜索标识符或名称…" style="max-width:260px;" spellcheck="false" autocomplete="off">
 </div>
 

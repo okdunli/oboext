@@ -62,7 +62,12 @@
     return "L" + (r.depth + 1);
   }
   function emptyClass() {
-    return "adm-empty adm-menu-empty" + (rows().length ? "" : " is-hidden");
+    // Hidden unconditionally on the server. activeMenu() here is ms[0] - it
+    // has no notion of the selected tab, so this could only ever describe the
+    // first menu while the panel showed another one, which is what printed
+    // "这个菜单还没有项目。" at a menu that does have items. admin.js owns the
+    // real toggle (it reads state.flat for the ACTIVE menu) once it hydrates.
+    return "adm-empty adm-menu-empty is-hidden";
   }
 </script>
 
@@ -77,7 +82,7 @@
       <button type="button" class="adm-menu-tab" data-menu-tab data-id={m.id}>{m.name} <span class="adm-menu-loc">({m.location})</span></button>
       {/each}
     </div>
-    <button type="button" class="adm-btn" data-menu-save>保存菜单</button>
+    <span class="adm-menu-auto">改动自动保存</span>
   </div>
 
   <p class="adm-menu-msg" data-menu-msg></p>

@@ -2,30 +2,106 @@
 
   //
 
-  import { graphql } from "graphql";
+  import { parse, validate, execute as executeGraphql, specifiedRules } from "graphql";
   import { schema, buildContext } from "@server/graphql";
+  import { checkQueryDepth, estimateCost, MAX_COST } from "@server/graphql-guard";
 
-  function jsonOut(obj, status) {
+  // Same-origin by default. This used to answer "*", which let any page on the
+  // internet drive this endpoint from a logged-in admin's browser - a
+  // cross-site request forgery surface with a JSON API attached, and the
+  // whole /admin surface is reachable through it.
+  //
+  // The admin UI does not use GraphQL at all (it talks to the /api/admin/*
+  // routes), so nothing on the site depends on cross-origin access. A
+  // deployment that genuinely needs it sets GRAPHQL_ALLOWED_ORIGIN to a
+  // comma-separated allowlist rather than reopening the default.
+  function corsOrigin() {
+    const raw = process.env.GRAPHQL_ALLOWED_ORIGIN;
+    if (!raw) return null;
+    const allowed = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    return allowed.length ? allowed : null;
+  }
+
+  function withCors(origin) {
+    const h = { "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "content-type, authorization" };
+    const allow = corsOrigin();
+    // Reflect the request origin only when it is on the allowlist. Echoing an
+    // arbitrary origin back is the same thing as "*" whenever the caller
+    // forgets the credentials flag, so the check has to happen here.
+    if (allow && origin && allow.includes(origin)) {
+      h["access-control-allow-origin"] = origin;
+      h["vary"] = "origin";
+    }
+    return h;
+  }
+
+  function jsonOut(obj, status, origin) {
     return new Response(JSON.stringify(obj), {
       status: status || 200,
-      headers: { "content-type": "application/json; charset=utf-8" },
+      headers: { "content-type": "application/json; charset=utf-8", ...withCors(origin) },
     });
   }
 
+  // Introspection is how an attacker maps the whole data model in one request.
+  // It is a development affordance; on a public endpoint it is reconnaissance.
+  function introspectionAllowed() {
+    return process.env.NODE_ENV !== "production";
+  }
+
   async function execute(request, payload) {
+    const origin = request.headers.get("origin");
     const query = payload.query;
     if (typeof query !== "string" || !query) {
-      return jsonOut({ errors: [{ message: "Must provide query string." }] }, 400);
+      return jsonOut({ errors: [{ message: "Must provide query string." }] }, 400, origin);
     }
+
+    // Parsed once and reused three times: the guards need the AST, and handing
+    // the same document to execute() avoids a second parse of the same text.
+    let document;
+    try {
+      document = parse(query);
+    } catch (e) {
+      return jsonOut({ errors: [{ message: e instanceof Error ? e.message : "Parse error" }] }, 400, origin);
+    }
+
+    // Validation runs before the guards so a malformed query fails on its own
+    // terms rather than being reported as "too deep", which would send the
+    // caller looking in the wrong place.
+    const problems = validate(schema, document, specifiedRules);
+    if (problems.length) {
+      return jsonOut({ errors: problems.map((p) => ({ message: p.message })) }, 400, origin);
+    }
+
+    if (!introspectionAllowed()) {
+      for (const def of document.definitions || []) {
+        if (def.kind === "OperationDefinition" && def.operation === "query") {
+          const names = ((def.selectionSet && def.selectionSet.selections) || []).map((s) => s.name && s.name.value);
+          if (names.includes("__schema") || names.includes("__type")) {
+            return jsonOut({ errors: [{ message: "Introspection is disabled." }] }, 403, origin);
+          }
+        }
+      }
+    }
+
+    // Both guards run on the parsed document, before any resolver fires, so a
+    // rejected query costs one parse and no database work at all.
+    const tooDeep = checkQueryDepth(document);
+    if (tooDeep) return jsonOut({ errors: [{ message: tooDeep }] }, 400, origin);
+
+    const cost = estimateCost(document);
+    if (cost > MAX_COST) {
+      return jsonOut({ errors: [{ message: "Query is too expensive (estimated " + cost + ", max " + MAX_COST + ")." }] }, 400, origin);
+    }
+
     const contextValue = await buildContext(request);
-    const result = await graphql({
+    const result = await executeGraphql({
       schema,
-      source: query,
+      document,
       variableValues: payload.variables,
       operationName: payload.operationName,
       contextValue,
     });
-    return jsonOut(result);
+    return jsonOut(result, 200, origin);
   }
 
   function graphiqlHtml() {
@@ -46,11 +122,14 @@
 
   export async function GET(request) {
     const url = new URL(request.url);
+    const origin = request.headers.get("origin");
     if ((request.headers.get("accept") || "").includes("text/html")) {
 
-      if (process.env.NODE_ENV === "production") return jsonOut({ errors: [{ message: "Not found" }] }, 404);
+      // The playground reveals the entire schema to anyone who asks. It stays a
+      // development tool; on a public endpoint it is reconnaissance.
+      if (process.env.NODE_ENV === "production") return jsonOut({ errors: [{ message: "Not found" }] }, 404, origin);
       return new Response(graphiqlHtml(), {
-        headers: { "content-type": "text/html; charset=utf-8" },
+        headers: { "content-type": "text/html; charset=utf-8", ...withCors(origin) },
       });
     }
     let variables;
@@ -59,7 +138,7 @@
       try {
         variables = JSON.parse(rawVars);
       } catch {
-        return jsonOut({ errors: [{ message: "Variables are invalid JSON." }] }, 400);
+        return jsonOut({ errors: [{ message: "Variables are invalid JSON." }] }, 400, origin);
       }
     }
     return execute(request, {
@@ -74,19 +153,16 @@
     try {
       body = await request.json();
     } catch {
-      return jsonOut({ errors: [{ message: "POST body sent invalid JSON." }] }, 400);
+      return jsonOut({ errors: [{ message: "POST body sent invalid JSON." }] }, 400, request.headers.get("origin"));
     }
     return execute(request, body);
   }
 
-  export async function OPTIONS() {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "access-control-allow-origin": "*",
-        "access-control-allow-methods": "GET, POST, OPTIONS",
-        "access-control-allow-headers": "content-type, authorization",
-      },
-    });
+  // Same-origin by default (see corsOrigin above). No wildcard: this endpoint
+  // can drive the entire /admin surface, and answering "*" let any page on the
+  // internet issue those requests from a logged-in admin's browser.
+  export async function OPTIONS(request) {
+    return new Response(null, { status: 204, headers: withCors(request.headers.get("origin")) });
   }
+
 </script>

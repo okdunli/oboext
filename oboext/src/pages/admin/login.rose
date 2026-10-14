@@ -5,8 +5,15 @@
   // with the disguised secret entry — one pre-rendered string via the
   // loginCard loader, all behaviour in admin.js's initLogin().
   let card = $data(() => __rvLoad("loginCard", {}));
+  let brand = $data(() => __rvLoad("loginBrand", {}));
   function cardHtml() {
     return card().html || "";
+  }
+  function blogName() {
+    return brand().siteTitle || "博客";
+  }
+  function curYear() {
+    return new Date().getFullYear();
   }
 </script>
 
@@ -16,17 +23,12 @@
 
 <div class="adm-auth">
   <div class="adm-auth-side">
-    <div class="adm-auth-brand"><span class="adm-auth-mark">O</span> oboext</div>
+    <div class="adm-auth-brand"><span class="adm-auth-mark"><span class="adm-ic adm-ic-lg" style="--i:url(/public/icons/layout-dashboard.svg)"></span></span> Oboext</div>
     <div>
-      <h1>内容管理后台</h1>
-      <p>动态全栈博客：文章、评论、分类、标签、用户与站点设置，全部按请求实时读写数据库。</p>
-      <ul>
-        <li>jose HS256 会话 + bcrypt 密码哈希</li>
-        <li>登录失败滑动窗口限流</li>
-        <li>邮箱 / 手机验证码登录与两步验证</li>
-      </ul>
+      <h1>{blogName()}</h1>
+      <p class="adm-auth-sub">系统管理后台</p>
     </div>
-    <div class="adm-hint">oboext on rosefd · Node runtime</div>
+    <div class="adm-hint">© {curYear()} Oboext</div>
   </div>
   <div class="adm-auth-main">
     {@html cardHtml()}

@@ -76,9 +76,9 @@
         <td class="adm-hint">{fmtDate(p.updatedAt)}</td>
         <td>
           <div class="row-actions">
-            <a class="adm-iconbtn" href={p.url} target="_blank" rel="noopener">查看</a>
-            <a class="adm-iconbtn" href={"/admin/pages/" + p.id}>编辑</a>
-            <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/pages/" + p.id} data-confirm={"确认删除页面「" + p.title + "」？"}>删除</button>
+            <a class="adm-iconbtn" href={p.url} target="_blank" rel="noopener"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/eye.svg)"></span>查看</a>
+            <a class="adm-iconbtn" href={"/admin/pages/" + p.id}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pencil.svg)"></span>编辑</a>
+            <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/pages/" + p.id} data-confirm={"确认删除页面「" + p.title + "」？"}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span>删除</button>
           </div>
         </td>
       </tr>

@@ -22,8 +22,32 @@
   function statusLabel(s) {
     return s === "published" ? "已发布" : s === "draft" ? "草稿" : "已归档";
   }
-  function taxNames(list) {
-    return (list || []).map((t) => t.name).join(" · ");
+  // Categories and tags render as separate chips so a row does not read as one
+  // undifferentiated string; tags carry a # prefix.
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  function ic(n, size) {
+    const s = size || 12;
+    return '<span class="adm-ic" style="width:' + s + "px;height:" + s +
+      'px;--i:url(/public/icons/' + String(n).replace(/[^a-z0-9-]/g, "") + '.svg)"></span>';
+  }
+  function catChipHtml(list) {
+    return (list || [])
+      .map(function (c) {
+        return '<span class="adm-tax-chip adm-tax-cat">' + ic("folder", 12) +
+          esc(c.name) + "</span>";
+      })
+      .join("");
+  }
+  function tagChipHtml(list) {
+    return (list || [])
+      .map(function (t) {
+        return '<span class="adm-tax-chip adm-tax-tag">#' + esc(t.name) + "</span>";
+      })
+      .join("");
   }
   // Scheduled badge: a draft whose publish time is still in the future.
   function scheduledLabel(p) {
@@ -111,7 +135,11 @@
         <td><input type="checkbox" class="adm-check" value={p.id}></td>
         <td>
           <a class="title" href={"/admin/posts/" + p.id}>{p.title}</a>
-          <div class="sub">/{p.slug} · {taxNames(p.categories)} <span style="opacity:.55">{taxNames(p.tags)}</span></div>
+          <div class="sub adm-post-meta">
+            <a class="adm-post-slug" href={"/admin/posts/" + p.id}>/{p.slug}</a>
+            {@html catChipHtml(p.categories)}
+            {@html tagChipHtml(p.tags)}
+          </div>
         </td>
         <td>{p.authorName || "—"}</td>
         <td><span class={"adm-tag " + p.status}>{statusLabel(p.status)}</span>
@@ -121,9 +149,9 @@
         <td class="adm-hint">{p.views}</td>
         <td>
           <div class="row-actions">
-            <a class="adm-iconbtn" href={viewUrl(p)} target="_blank" rel="noopener noreferrer" title="查看">查看</a>
-            <a class="adm-iconbtn" href={"/admin/posts/" + p.id}>编辑</a>
-            <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/posts/" + p.id} data-confirm={"确认删除文章「" + p.title + "」？"}>删除</button>
+            <a class="adm-iconbtn" href={viewUrl(p)} target="_blank" rel="noopener noreferrer" title="查看"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/eye.svg)"></span>查看</a>
+            <a class="adm-iconbtn" href={"/admin/posts/" + p.id}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pencil.svg)"></span>编辑</a>
+            <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/posts/" + p.id} data-confirm={"确认删除文章「" + p.title + "」？"}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span>删除</button>
           </div>
         </td>
       </tr>

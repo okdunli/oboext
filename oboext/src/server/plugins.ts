@@ -8,7 +8,7 @@
  * ensureBootstrap (ensureMigrations covers it) and no public-cache bump (this
  * app renders per request with no cross-response cache).
  */
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
 import { plugins, type Plugin } from "./schema.js";
 import {
@@ -45,10 +45,11 @@ export type PluginView = Plugin & {
 export async function syncPlugins(): Promise<void> {
   await ensureMigrations();
   const manifests = discoverPlugins();
-  for (const m of manifests) {
-    await db
-      .insert(plugins)
-      .values({
+  if (manifests.length === 0) return;
+  await db
+    .insert(plugins)
+    .values(
+      manifests.map((m) => ({
         slug: m.slug,
         name: m.name,
         description: m.description ?? "",
@@ -56,17 +57,17 @@ export async function syncPlugins(): Promise<void> {
         author: m.author ?? "",
         enabled: false,
         settings: {},
-      })
-      .onConflictDoUpdate({
-        target: plugins.slug,
-        set: {
-          name: m.name,
-          description: m.description ?? "",
-          version: m.version ?? "1.0.0",
-          author: m.author ?? "",
-        },
-      });
-  }
+      })),
+    )
+    .onConflictDoUpdate({
+      target: plugins.slug,
+      set: {
+        name: sql`excluded."name"`,
+        description: sql`excluded."description"`,
+        version: sql`excluded."version"`,
+        author: sql`excluded."author"`,
+      },
+    });
 }
 
 /**

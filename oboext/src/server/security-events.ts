@@ -1,8 +1,21 @@
-
-
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq, lt, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
 import { securityEvents } from "./schema.js";
+
+let lastPruneAt = 0;
+export async function pruneSecurityEvents(): Promise<void> {
+  const now = Date.now();
+  if (now - lastPruneAt < 3_600_000) return;
+  lastPruneAt = now;
+  const days = Number(process.env.OBOEXT_SECURITY_LOG_DAYS) || 90;
+  try {
+    await db
+      .delete(securityEvents)
+      .where(lt(securityEvents.createdAt, new Date(now - days * 86_400_000)));
+  } catch (e) {
+    console.warn("[security-events] prune failed:", e);
+  }
+}
 
 export interface SecurityEventView {
   id: number;

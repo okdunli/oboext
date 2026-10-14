@@ -1,5 +1,3 @@
-
-
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sql } from "drizzle-orm";
@@ -166,7 +164,7 @@ function assertBackup(input: unknown): DatabaseBackup {
   }
   const b = input as Partial<DatabaseBackup>;
   if (b.kind !== BACKUP_KIND) {
-    throw new ServiceError("文件格式不是 oboext 整库备份", 400);
+    throw new ServiceError("文件格式不是 Oboext 整库备份", 400);
   }
   if (b.version !== 1 || typeof b.tables !== "object" || b.tables === null) {
     throw new ServiceError("备份文件缺少版本号或数据表", 400);

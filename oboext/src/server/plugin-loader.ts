@@ -9,7 +9,7 @@
  */
 import { removeAllByOwner, withOwner } from "./hooks.js";
 import { createContext, type PluginDefinition } from "./plugin-api.js";
-import { pluginHasEntry } from "./plugin-registry.js";
+import { invalidatePluginDiscovery, pluginHasEntry } from "./plugin-registry.js";
 import { PLUGIN_ENTRIES } from "./plugin-entries.js";
 
 type LoadedState = {
@@ -101,7 +101,16 @@ export function loadedPluginSlugs(): string[] {
   return [...state().loaded.keys()];
 }
 
-/** Force the next loadPlugins() call to re-run (used after toggling in admin). */
+/**
+ * Force the next loadPlugins() call to re-run (used after toggling in admin).
+ *
+ * Also drops the registry's discovery memo. The two caches answer different
+ * questions — "which plugin modules are imported" versus "which folders exist
+ * on disk" — so a caller that invalidates one after writing a plugin folder
+ * must invalidate both, or `discoverPlugins()` keeps serving the pre-install
+ * manifest list until the directory mtime happens to change.
+ */
 export function invalidatePluginCache(): void {
   state().signature = "";
+  invalidatePluginDiscovery();
 }

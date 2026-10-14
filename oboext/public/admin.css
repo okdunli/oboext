@@ -84,7 +84,7 @@ button { font-family: inherit; }
 .adm-auth-card h2 { font-size: 24px; margin: 0 0 6px; }
 .adm-auth-sub { color: var(--adm-muted); font-size: 14px; margin: 0 0 28px; }
 .adm-field { margin-bottom: 18px; }
-.adm-field label { display: block; font-size: 13px; color: var(--adm-muted); margin-bottom: 7px; font-weight: 500; }
+.adm-field label:not(.adm-switch) { display: block; font-size: 13px; color: var(--adm-muted); margin-bottom: 7px; font-weight: 500; }
 .adm-input, .adm-textarea, .adm-select {
   width: 100%;
   background: var(--adm-panel);

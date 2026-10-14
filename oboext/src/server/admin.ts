@@ -1,17 +1,4 @@
-/**
- * Admin service layer + Web API helpers — ported from the original app
- * (lib/services/{posts,comments,taxonomies,settings,users,dashboard}.ts and
- * lib/http.ts), trimmed to what the B-phase admin uses:
- *
- *  - no plugin hooks, no cross-response caches (every request reads the DB —
- *    the core invariant of this port),
- *  - no pinyin dictionary: pinyin link tails reuse the slug (the public
- *    resolver falls back to slug anyway),
- *  - no avatars/metas/reply UI (later phases).
- *
- * Everything here is server-only: imported exclusively by pages/api/*.rose
- * and the admin.* loader keys, which never enter the client bundle.
- */
+// Admin service layer + Web API helpers — ported from the original app (lib/services/{posts,comments,taxonomies,settings,users,dashboard}.ts).
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
 import { invalidateContentCaches } from "./cache.js";
@@ -44,8 +31,14 @@ import type { SessionUser } from "./auth.js";
 import { hashPassword } from "./auth.js";
 import { HOOKS, applyAsyncFilters, doAction } from "./hooks.js";
 
+// --------------------------------------------------------------------- errors
+
+// Re-exported for every existing importer; the class itself lives in
+// errors.ts (leaf module) so auth.ts can throw it without a cycle.
 export { ServiceError } from "./errors.js";
 import { ServiceError } from "./errors.js";
+
+// ------------------------------------------------------------------ RBAC etc.
 
 type Capability =
   | "content:read"
@@ -87,6 +80,8 @@ function canModifyContent(role: Role, ownerId: number, currentUserId: number): b
   if (can(role, "content:update:any")) return true;
   return ownerId === currentUserId && can(role, "content:update:own");
 }
+
+// ------------------------------------------------------------- Web API helpers
 
 export function jsonOk(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -139,6 +134,8 @@ export async function apiGate(
     return jsonFail("服务器内部错误" + detail, 500);
   }
 }
+
+// ---------------------------------------------------------------- text utils
 
 export function slugify(input: string): string {
   const base = input
@@ -238,6 +235,8 @@ async function uniqueLinkTails(
   };
 }
 
+// --------------------------------------------------------------------- posts
+
 async function attachTaxonomyIds(ids: number[]) {
   const cats: Record<number, number[]> = {};
   const tags: Record<number, number[]> = {};
@@ -280,6 +279,7 @@ export async function adminListPosts(user: SessionUser, f: PostListFilter = {}) 
   const offset = f.offset ?? 0;
   const conditions = [];
   if (f.status) conditions.push(eq(posts.status, f.status as any));
+  // authors only see their own content; editors/admins see everything
   if (!can(user.role, "content:update:any"))
     conditions.push(eq(posts.authorId, user.id));
   if (f.search)
@@ -288,7 +288,11 @@ export async function adminListPosts(user: SessionUser, f: PostListFilter = {}) 
     );
   const where = conditions.length ? and(...conditions) : undefined;
 
-  const rows = await db
+  // One wave: the row window, the total count and the taxonomy lookup tables
+  // are mutually independent. Only attachTaxonomyIds needs the row ids, so it
+  // forms the single dependent second step (the old shape chained four serial
+  // awaits: rows -> count -> taxIds -> cat/tag/config).
+  const rowsP = db
     .select({
       post: posts,
       authorName: users.name,
@@ -299,18 +303,22 @@ export async function adminListPosts(user: SessionUser, f: PostListFilter = {}) 
     .orderBy(desc(posts.updatedAt))
     .limit(limit)
     .offset(offset);
-
-  const [totalRows] = await db
+  const totalP = db
     .select({ n: sql<number>`count(*)` })
     .from(posts)
     .where(where);
+  const catRowsP = allCategories();
+  const tagRowsP = allTags();
+  const cfgP = getPermalinkConfig();
 
+  const rows = await rowsP;
   const ids = rows.map((r) => r.post.id);
-  const tax = await attachTaxonomyIds(ids);
-  const [catRows, tagRows, cfg] = await Promise.all([
-    allCategories(),
-    allTags(),
-    getPermalinkConfig(),
+  const [tax, totalRows, catRows, tagRows, cfg] = await Promise.all([
+    attachTaxonomyIds(ids),
+    totalP,
+    catRowsP,
+    tagRowsP,
+    cfgP,
   ]);
   const catName = new Map(catRows.map((c) => [c.id, c]));
   const tagName = new Map(tagRows.map((t) => [t.id, t]));
@@ -377,6 +385,7 @@ function normMetas(v: unknown): { key: string; value: string }[] {
   return v.map((m: any) => ({ key: String(m?.key ?? ""), value: String(m?.value ?? "") }));
 }
 
+
 function normFormatMeta(v: unknown): Record<string, string> {
   if (v == null) return {};
   if (typeof v !== "object" || Array.isArray(v))
@@ -420,6 +429,8 @@ export async function createPost(user: SessionUser, input: PostInput) {
     .values({
       title,
       slug,
+      // Real romanised tails (the pinyin dictionary powers postMode
+      // "pinyin"/"initial" and the {pinyin}/{initial} permalink tokens).
       pinyinSlug: tails.pinyinSlug,
       initialSlug: tails.initialSlug,
       excerpt,
@@ -449,7 +460,7 @@ export async function createPost(user: SessionUser, input: PostInput) {
 }
 
 export async function updatePost(user: SessionUser, id: number, input: Partial<PostInput>) {
-  const existing = await adminGetPost(user, id);
+  const existing = await adminGetPost(user, id); // 404 + ownership
   let slug = existing.slug;
   if (input.slug && input.slug !== existing.slug) {
     const base = slugify(input.slug);
@@ -458,6 +469,9 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
     slug = uniqueSlug(base, taken);
   }
   const content = input.content ?? (existing.content as Block[]);
+  // Re-derive the romanised tails only when the title changes; otherwise the
+  // columns are left out of the SET entirely, so a row keeps its values (NULL
+  // included — pre-pinyin rows never had them).
   const nextTitle = input.title ?? existing.title;
   const tails =
     input.title !== undefined && input.title !== existing.title
@@ -469,6 +483,7 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
   let publishedAt = existing.publishedAt;
   if (input.publishedAt) publishedAt = new Date(input.publishedAt);
   else if (input.status === "published" && !existing.publishedAt) publishedAt = new Date();
+  // only admins/editors may reassign authorship; authors keep themselves
   const authorId =
     input.authorId != null && can(user.role, "content:update:any")
       ? Number(input.authorId)
@@ -519,6 +534,7 @@ export async function deletePost(user: SessionUser, id: number) {
   const existing = await adminGetPost(user, id);
   if (!canModifyContent(user.role, existing.authorId, user.id))
     throw new ServiceError("权限不足", 403);
+  // hard delete like the original; comments have no FK and are left behind
   await db.delete(posts).where(eq(posts.id, id));
   invalidateContentCaches();
   return { id };
@@ -529,6 +545,7 @@ export async function bulkPosts(
   ids: number[],
   action: "publish" | "draft" | "archive" | "delete",
 ) {
+  // 401 for guests; per-row ownership filtering still applies below.
   const u = requireUser(user);
   const rows = await db
     .select({ id: posts.id, authorId: posts.authorId })
@@ -550,8 +567,11 @@ export async function bulkPosts(
       )
       .where(inArray(posts.id, allowedIds));
   }
+  invalidateContentCaches();
   return { affected: allowedIds.length };
 }
+
+// ------------------------------------------------------------------ comments
 
 async function bumpCommentCount(postType: string, postId: number, delta: number) {
   const t = postType === "page" ? pages : posts;
@@ -584,6 +604,7 @@ export async function adminListComments(
     .from(comments)
     .where(where);
 
+  // resolve parent content titles (posts + pages, N+6 at most per page)
   const postIds = [...new Set(rows.map((r) => r.postId))];
   const titles = new Map<number, string>();
   const pRows = await db
@@ -616,6 +637,8 @@ export async function publicListComments(
   if (status && status !== "published" && !isMod) {
     throw new ServiceError("未认证", 401);
   }
+  // Post threads read oldest-first (tree order); an unscoped moderator view
+  // is an admin listing, so newest-first (and newest rows survive the cap).
   const scoped = !!q.post;
   const { items, total } = await listComments({
     postId: q.post ? Number(q.post) : undefined,
@@ -716,6 +739,7 @@ export async function createPublicComment(input: PublicCommentInput) {
   let authorUrl = input.authorUrl ?? null;
   let userId: number | null = null;
 
+  // logged-in identity overrides submitted guest fields (no impersonation)
   if (input.user) {
     const [u] = await db
       .select({ name: users.name, email: users.email })
@@ -729,6 +753,9 @@ export async function createPublicComment(input: PublicCommentInput) {
   } else {
     if (settings.requireNameEmail && (!input.authorName?.trim() || !input.authorEmail?.trim()))
       throw new ServiceError("请填写昵称和邮箱", 422);
+    // The link is required on its own switch, not as part of the name+email
+    // pair. Enforced here rather than only in the browser: the field is a
+    // placeholder hint client-side, and a POST that skips it must not slip past.
     if (settings.requireAuthorUrl && !input.authorUrl?.trim())
       throw new ServiceError("请填写链接", 422);
   }
@@ -744,6 +771,7 @@ export async function createPublicComment(input: PublicCommentInput) {
     .filter(Boolean);
   if (words.some((w) => haystack.includes(w))) status = "pending";
 
+  // Comment-moderation plugins (e.g. comment-guard) may downgrade approval.
   const reviewed = await applyAsyncFilters<{
     comment: { content: string; userId?: number | null; authorUrl?: string | null };
     status: "published" | "pending" | "spam";
@@ -772,6 +800,11 @@ export async function createPublicComment(input: PublicCommentInput) {
     .returning();
 
   if (status === "published") await bumpCommentCount(postType, input.postId, 1);
+  // A published submission changes what the post page renders (comment list +
+  // count) — drop the content caches so it shows up on the next render, not a
+  // TTL later. Pending/spam don't render, nothing to drop.
+  if (status === "published") invalidateContentCaches();
+  // Notification etc. plugins (comment.created); pending comments fire too.
   doAction(HOOKS.commentCreated, {
     comment,
     postType,
@@ -821,6 +854,8 @@ export async function deleteComment(user: SessionUser | null, id: number) {
 export async function setCommentsStatus(
   user: SessionUser | null,
   ids: number[],
+  // The API route validates the three states at the trust boundary
+  // (api/comments/bulk.rose); this is the honest contract below it.
   status: (typeof commentStateEnum.enumValues)[number],
 ) {
   const u = requireUser(user);
@@ -853,6 +888,8 @@ export async function deleteComments(user: SessionUser | null, ids: number[]) {
   }
   return ok;
 }
+
+// --------------------------------------------------------------- taxonomies
 
 function cleanOpt(v: string | null | undefined): string | null | undefined {
   if (v === undefined) return undefined;
@@ -1022,6 +1059,8 @@ export async function bulkDeleteTags(user: SessionUser, ids: number[]) {
   return { deleted: set.length };
 }
 
+// ------------------------------------------------------------------ settings
+
 /** Whitelisted site_settings columns the admin form may patch. */
 const SETTINGS_FIELDS = {
   str: [
@@ -1046,6 +1085,7 @@ const SETTINGS_FIELDS = {
 export async function updateSettings(user: SessionUser, input: Record<string, unknown>) {
   requireCap(user, "settings:manage");
   if (typeof input.activeThemeSlug === "string") {
+    // Lazy import: themes.js depends on this module (ServiceError).
     const { isPublicThemePorted, getThemeManifest } = await import("./themes.js");
     const slug = input.activeThemeSlug.trim();
     if (!getThemeManifest(slug)) throw new ServiceError("主题不存在", 422);
@@ -1073,7 +1113,15 @@ export async function updateSettings(user: SessionUser, input: Record<string, un
     .returning();
   invalidateSettings();
   if (typeof input.activeThemeSlug === "string") {
+    // Clear the render memo so the next request re-renders with the new theme.
+    // invalidateContentCaches() is the app's cache-invalidation entry point
+    // (server/cache.ts) — the previously referenced invalidateRenderCache() was
+    // never defined or imported anywhere in this project, so saving any
+    // settings payload containing activeThemeSlug threw
+    // `ReferenceError: invalidateRenderCache is not defined` and 500'd the
+    // whole /api/settings route (i.e. every theme switch from the admin).
     invalidateContentCaches();
+    // Lazy import: themes.js depends on this module (ServiceError).
     const { invalidateActiveThemeCache } = await import("./themes.js");
     invalidateActiveThemeCache();
   }
@@ -1101,6 +1149,8 @@ export async function bootstrapSiteSettings(input: Record<string, unknown>): Pro
   await db.update(siteSettings).set(set).where(eq(siteSettings.id, 1));
   invalidateSettings();
 }
+
+// --------------------------------------------------------------------- users
 
 function publicUser(u: any) {
   const { passwordHash, ...rest } = u;
@@ -1175,6 +1225,8 @@ export async function deleteUser(actor: SessionUser | null, id: number) {
   await db.delete(users).where(eq(users.id, id));
   return { id };
 }
+
+// ----------------------------------------------------------------- dashboard
 
 export async function dashboardStats(user: SessionUser) {
   requireCap(user, "content:read");

@@ -1,17 +1,4 @@
-/**
- * Widget service — ported from lib/widgets/registry.ts + lib/services/widgets.ts.
- *
- * A widget TYPE declares a settings schema (this static registry); a widget
- * INSTANCE (a row in `widgets`) binds a type into a theme-declared area with a
- * title, order and per-instance config. Public pages resolve enabled widgets
- * per area on every request (config defaults merged, data fetched live, URLs
- * resolved against current permalink config). No snapshots, no cross-request
- * caches.
- *
- * Trade-off: plugins (HOOKS.widgetTypes), multi-theme discovery and the
- * public-cache TTL are not ported yet — one shipped theme ("skyscraper"),
- * registry is static. Wire them in with p11 themes/plugins.
- */
+// Widget service — ported from lib/widgets/registry.ts + lib/services/widgets.ts.
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { memoQuery, invalidatePrefix, SIDEBAR_TTL } from "./cache.js";
@@ -34,6 +21,8 @@ import {
   tagUrlFor,
   type PermalinkConfig,
 } from "./links.js";
+
+// ------------------------------------------------------------- type registry
 
 export type WidgetField = {
   key: string;
@@ -268,16 +257,15 @@ export function getWidgetType(type: string): WidgetTypeDef | null {
   return WIDGET_TYPES.find((w) => w.type === type) ?? null;
 }
 
-/**
- * Theme widget areas. The only shipped theme is skyscraper, whose manifest
- * declares both base areas with themed labels; p11 will read manifests.
- */
+// Theme widget areas. The only shipped theme is skyscraper, whose manifest declares both base areas with themed labels; p11 will read manifests.
 export const THEME_SLUG = "skyscraper";
 
 export const WIDGET_AREAS: { key: string; label: string; description?: string }[] = [
   { key: "sidebar", label: "左侧栏", description: "固定左侧栏的组件区域" },
   { key: "footer", label: "页脚", description: "页脚链接区" },
 ];
+
+// ------------------------------------------------------- settings resolution
 
 /** Merge stored values over schema defaults, dropping unknown keys. */
 export function resolveSettings(
@@ -293,6 +281,8 @@ export function resolveSettings(
   }
   return out;
 }
+
+// ------------------------------------------------------------------- admin CRUD
 
 export type WidgetInput = {
   area: string;
@@ -377,6 +367,8 @@ export async function reorderWidgets(user: SessionUser | null, ids: number[]): P
   invalidatePrefix("widget:");
 }
 
+// --------------------------------------------------------- public resolution
+
 export type ResolvedWidget = {
   id: number;
   type: string;
@@ -409,6 +401,8 @@ export async function getAreaWidgets(
       .orderBy(asc(widgets.order));
 
     const cfg = await getPermalinkConfig();
+    // Per-widget data fetches are independent — resolve them together instead
+    // of one serial round trip each (visible on cold areas with 3+ widgets).
     const out: ResolvedWidget[] = await Promise.all(
       rows.map(async (w) => {
         const def = getWidgetType(w.type);
@@ -585,6 +579,7 @@ async function resolveWidgetDataRaw(
     }
 
     default:
+      // text / search / profile / links need no server data.
       return null;
   }
 }

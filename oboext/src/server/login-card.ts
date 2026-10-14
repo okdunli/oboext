@@ -1,3 +1,5 @@
+import { publicAssetHref } from "./theme-chrome.js";
+
 export function loginCardHtml(captcha?: { enabled: boolean; mode: "builtin" | "custom" | null }): string {
   const showCaptcha = !!captcha && captcha.enabled;
   return (
@@ -81,6 +83,6 @@ export function secretEntryPageHtml(captcha?: { enabled: boolean; mode: "builtin
     `</div>` +
     `</div>` +
     `<link rel="stylesheet" href="/public/admin.css">` +
-    `<script src="/public/admin.js"></script>`
+    `<script src="${publicAssetHref("admin.js")}" defer></script>`
   );
 }

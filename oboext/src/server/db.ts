@@ -1,28 +1,20 @@
-/**
- * Dual-driver lazy database client — ported from the original app
- * (db/index.ts), adapted for rosefd's server bundle.
- *
- * IMPORTANT: rosefd builds dist/server.js with esbuild `bundle: true` and
- * no external allowlist. @electric-sql/pglite ships WASM/data files and
- * cannot be inlined, so every driver package is loaded through a
- * NON-LITERAL dynamic import — esbuild leaves the expression alone and
- * Node resolves it from node_modules at runtime (Node deployment only,
- * exactly as the target architecture requires).
- *
- *  - Local:  DB_DRIVER=pglite (default), data dir ./.data/pglite_live
- *  - Prod:   DB_DRIVER=postgres + DATABASE_URL (managed Postgres)
- */
+// Dual-driver lazy database client — ported from the original app (db/index.ts), adapted for rosefd's server bundle.
 import fs from "fs";
 import path from "path";
 import { sql, type SQL } from "drizzle-orm";
+// Type-only: a value import would pull the driver into the esbuild bundle.
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import * as schema from "./schema";
 
+// Resolved off globalThis: a static import would be inlined as a second copy
+// of the registry, and the server would drain a copy the app never saw.
 function onPgliteShutdown(fn: () => Promise<void>): () => void {
   const g = globalThis as unknown as {
     __rosefdOnShutdown?: (name: string, f: () => void | Promise<void>) => () => void;
   };
   if (typeof g.__rosefdOnShutdown !== "function") {
+    // No framework registry (a bare script, a test harness): the direct
+    // signal handlers in registerGracefulShutdown() still cover it.
     return () => {};
   }
   return g.__rosefdOnShutdown("pglite-close", fn);
@@ -38,14 +30,11 @@ const globalForDb = globalThis as unknown as {
   __oboeMigrated?: Promise<void>;
   __oboeReady?: Promise<any>;
   __oboePglite?: any;
+  // Published so the rosefd framework's render entry points (renderPage / renderPageStream) can await database readiness before painting a page.
   __rosefdAppReady?: Promise<void>;
 };
 
-/**
- * Minimal .env.local loader. The rosefd CLI does not auto-load env files
- * (unlike the original runtime), so the installer-written config would otherwise only
- * apply to the process that received the POST. Real process env wins.
- */
+// Minimal .env.local loader.
 function loadEnvLocal(): void {
   try {
     const file = path.join(process.cwd(), ".env.local");
@@ -74,15 +63,7 @@ let pgliteClient: any = null;
 let postgresClient: any = null;
 let appLockPath: string | null = null;
 
-/**
- * Single-instance interlock for a PGlite data directory. PGlite's own
- * postmaster.pid carries a WASM virtual PID (-42) that is never alive on the
- * host, so sweepStalePgLocks() cannot detect a SECOND process opening the same
- * directory. Two concurrent openers (a stale server + a restart, or a
- * multi-worker cluster) silently interleave file syncs and can tear
- * pg_control/WAL — "could not locate a valid checkpoint record" on the next
- * boot. This lock uses the REAL OS pid and atomically claims the directory.
- */
+// Single-instance interlock for a PGlite data directory.
 function acquireAppLock(dataDir: string): void {
   const lockPath = dataDir + ".app-lock";
   const reclaim = (): void => {
@@ -167,6 +148,8 @@ function registerGracefulShutdown(): () => void {
     __oboeDbUnregister?: () => void;
     __oboeDbClosed?: Promise<void> | null;
   };
+  // Replace the previous hook: reconfigureDatabase() swaps clients without the
+  // process exiting, and a stale hook would close the replacement.
   g.__oboeDbUnregister?.();
 
   const closeDb = async (): Promise<void> => {
@@ -175,10 +158,22 @@ function registerGracefulShutdown(): () => void {
     if (!client || client.closed) return;
     const snap = snapshotPath(currentDataDir);
     try {
+      // CHECKPOINT first: it flushes dirty buffers into the data files and
+      // makes the WAL redundant, so a close() that dies halfway leaves a
+      // directory that still opens. Cheap enough to always run - measured at
+      // single-digit milliseconds against an embedded instance.
       await client.query("CHECKPOINT");
     } catch (err) {
+      // A checkpoint failure (already closed, read-only dir) must not stop
+      // the close itself - close() is what releases the file handles.
       console.error("[db] PGlite checkpoint before close failed:", (err as Error)?.message ?? err);
     }
+    // Snapshot AFTER the checkpoint and BEFORE the close, because
+    // dumpDataDir() reads a LIVE instance - there is nothing to dump once
+    // close() has released it. The checkpoint above is what makes the
+    // captured tar self-consistent: without it the snapshot would carry the
+    // WAL the close had not flushed yet, i.e. exactly the state this whole
+    // mechanism exists to avoid persisting.
     await writeRecoverySnapshot(client, snap);
     try {
       await client.close();
@@ -188,6 +183,8 @@ function registerGracefulShutdown(): () => void {
     }
   };
 
+  // One close per client: PGlite throws "PGlite is closing" on a second one,
+  // and two racing closes are a corruption path in themselves.
   g.__oboeDbClosed = null;
   const once = (): Promise<void> => {
     if (!g.__oboeDbClosed) {
@@ -205,6 +202,7 @@ function registerGracefulShutdown(): () => void {
       clearTimeout(forceTimer);
       releaseAppLock();
       process.removeAllListeners(signal);
+      // Restore the default disposition so the exit code reflects the signal.
       process.kill(process.pid, signal);
     });
   };
@@ -213,6 +211,7 @@ function registerGracefulShutdown(): () => void {
   process.once("beforeExit", () => {
     void once();
   });
+  // 'exit' only allows synchronous work; the close already ran above.
   process.on("exit", () => {
     releaseAppLock();
   });
@@ -292,10 +291,62 @@ function logDbTarget(label: string, url: string): void {
   }
 }
 
+/**
+ * Keep a Neon serverless connection from ever suspending.
+ *
+ * Neon compute suspends after an idle period; the next real request then pays a
+ * 5-8s wake-up handshake before any query runs (observed in the field: a
+ * postDetail render took 9.79s with the DB layer reporting `dbTime=2ms` — the
+ * entire cost was the cold connection, not the queries). A trivial periodic
+ * ping keeps the socket active so visitors never hit that penalty.
+ *
+ * Deliberately scoped: only when the driver is postgres AND the host is Neon
+ * (or DB_KEEPALIVE=1 is set), and never inside serverless (Vercel / AWS Lambda)
+ * where there is no long-lived process to keep warm and the timer would only
+ * delay the freeze. `unref()` so the ping alone never holds the event loop open,
+ * and it is cleared on framework shutdown via __rosefdOnShutdown.
+ */
+function maybeStartDbKeepalive(connectionString: string): void {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) return;
+  const isNeon = /neon\.(tech|vc)/i.test(connectionString);
+  if (!isNeon && process.env.DB_KEEPALIVE !== "1") return;
+  if (!postgresClient) return;
+  const ms = Number(process.env.DB_KEEPALIVE_MS || 20000);
+  if (!(ms > 0)) return;
+  console.log("[db] keepalive started interval=" + ms + "ms");
+  let warned = false;
+  const timer = setInterval(async () => {
+    try {
+      await postgresClient.unsafe("select 1");
+      warned = false;
+    } catch (e) {
+      if (!warned) {
+        warned = true;
+        console.warn("[db] keepalive ping failed: " + (e && (e as Error).message) + " (will retry)");
+      }
+    }
+  }, ms);
+  if (typeof (timer as any).unref === "function") (timer as any).unref();
+  const g = globalThis as unknown as {
+    __rosefdOnShutdown?: (name: string, f: () => void | Promise<void>) => () => void;
+  };
+  if (typeof g.__rosefdOnShutdown === "function") {
+    g.__rosefdOnShutdown("db-keepalive", () => clearInterval(timer));
+  }
+}
+
 async function createDb(): Promise<any> {
   const driver: Driver = (process.env.DB_DRIVER || "pglite") as Driver;
 
   if (driver === "postgres") {
+    // Runtime queries go through the DIRECT (unpooled) endpoint. In this
+    // project's Neon/Vercel integration the provisioned pooled DATABASE_URL has
+    // a mangled, non-resolving host (getaddrinfo ENOTFOUND
+    // ep-xxx-pooler.c-14.us-east-1.aws-pooler.neon.tech), so the pooler is
+    // unusable — the direct DATABASE_URL_UNPOOLED endpoint resolves and
+    // connects cleanly (verified). pickPostgresUrl() prefers UNPOOLED and
+    // validates the host, so this is the safe, working target. Cold-start
+    // wake-up is absorbed by connect_timeout + the ensureDb retry backoff below.
     const connectionString = pickPostgresUrl();
     logDbTarget("runtime (direct)", connectionString);
     if (!connectionString) {
@@ -304,18 +355,32 @@ async function createDb(): Promise<any> {
           "Set DATABASE_URL (pooled) or DATABASE_URL_UNPOOLED when using a pooled provider.",
       );
     }
+    // Non-literal specifiers keep these out of the esbuild bundle.
     const pgPkg = "post" + "gres";
     const drvPkg = "drizzle-orm/postgres" + "-js";
     const [pgMod, drvMod] = await Promise.all([import(pgPkg), import(drvPkg)]);
     const client = pgMod.default(connectionString, {
+      // >1 so the 30~50 queries a single page render fans out do not all queue
+      // on a single connection. A suspended compute amplifies the latency of
+      // every one of them, and max=1 turns that into a guaranteed timeout.
       max: Number(process.env.POSTGRES_MAX || 4),
       prepare: false,
+      // Must stay BELOW the platform's function ceiling, or the timeout can
+      // never fire: Vercel kills the invocation at maxDuration and withDbRetry
+      // never gets the chance to reconnect. 8s leaves room for the retry
+      // backoff to run inside a 10s (Hobby) budget. Raise via
+      // POSTGRES_CONNECT_TIMEOUT only together with maxDuration.
       connect_timeout: Number(process.env.POSTGRES_CONNECT_TIMEOUT || 8),
     });
     postgresClient = client;
+    maybeStartDbKeepalive(connectionString);
     return drvMod.drizzle(client, { schema, logger: queryLogger() });
   }
 
+  // A Postgres connection string in DATABASE_URL is not a filesystem path.
+  // The installer stores the data dir there for pglite, but `vercel env pull`
+  // (or a copied .env.local) overwrites it with a real URL, and opening that
+  // as a directory fails with ENOENT on a path named after the URL.
   const configured =
     process.env.PGLITE_DATA_DIR || process.env.DATABASE_URL || "./.data/pglite_live";
   const url = /^(postgres|postgresql):\/\//i.test(configured)
@@ -331,6 +396,8 @@ async function createDb(): Promise<any> {
   const [pgMod, drvPkgMod] = await Promise.all([import(pglitePkg), import(drvPkg)]);
 
   currentDataDir = dir;
+  // Open, and if the directory is unreadable, try to recover it from the
+  // last good snapshot before giving up (see openPgliteWithRecovery).
   const { client, recovered } = await openPgliteWithRecovery(pgMod, dir);
   if (recovered) {
     console.warn(
@@ -416,6 +483,9 @@ async function tunePersistence(client: any): Promise<void> {
       rejected.push(`${key} (${(err as Error)?.message ?? err})`);
     }
   }
+  // A reload makes the checkpoint interval take effect for the CURRENT
+  // process too, not only the next boot: the value is read when the checkpointer
+  // is (re)started.
   try {
     await client.exec("SELECT pg_reload_conf()");
   } catch {
@@ -427,6 +497,7 @@ async function tunePersistence(client: any): Promise<void> {
       "  [shared_buffers/wal_buffers are fixed in the PGlite WASM build and cannot be changed]",
   );
   if (process.env.OBOEXT_PGLITE_TUNING === "1") {
+    // Diagnostic mode: prove the values the next boot will actually see.
     for (const key of ["checkpoint_timeout", "wal_keep_size", "shared_buffers"]) {
       const v = await client.query("show " + key).then((r: any) => r.rows[0]?.[key]).catch(() => "?");
       console.log(`[db]   ${key} = ${v}`);
@@ -512,6 +583,7 @@ async function openPgliteWithRecovery(
           "or restore a backup.",
       );
     }
+    // Moved aside rather than deleted, so the wreck survives for a post-mortem.
     const wreck = dir + ".damaged-" + Date.now();
     try {
       fs.renameSync(dir, wreck);
@@ -519,6 +591,8 @@ async function openPgliteWithRecovery(
     } catch {
       // fall through: loadDataDir writes a fresh directory anyway
     }
+    // loadDataDir needs a Blob (it calls .arrayBuffer()); a Buffer does not
+    // have that method and fails with "e.arrayBuffer is not a function".
     const blob = new Blob([fs.readFileSync(snap)]);
     const client = new PGliteCtor(dir, { ...pgliteOptions(), loadDataDir: blob });
     await client.waitReady;
@@ -617,10 +691,25 @@ export function isConnectionError(err: unknown): boolean {
     msg.includes("Client has encountered a connection error") ||
     msg.includes("CONNECTION_CLOSED") ||
     msg.includes("connect ECONNREFUSED") ||
+    // postgres.js surfaces a failed connect attempt as
+    // `write CONNECT_TIMEOUT undefined:undefined` (the remoteAddress is
+    // undefined because the socket never got past the handshake). This is the
+    // exact "cold Neon compute / dead socket from a frozen lambda" symptom a
+    // serverless Postgres produces — it MUST be retried, not thrown.
     msg.includes("CONNECT_TIMEOUT") ||
+    // A *write* on a connection the server already closed surfaces as
+    // `write CONNECTION_ENDED <host>:<port>`. Neon closes idle connections
+    // whenever the compute suspends, so a pooled socket held across a warm/cold
+    // boundary fails on the first write with this signature — a connection
+    // error, not a query error. Without it here the retry never fires and one
+    // suspended compute takes down every route it touches.
     msg.includes("CONNECTION_ENDED") ||
+    // Same family, observed on a query in flight when the socket died.
     msg.includes("write CONNECTION_CLOSED") ||
     msg.includes("write ECONNRESET") ||
+    // Neon cold-start: the auth/TLS handshake itself times out before the
+    // connection is usable, surfaced as `PostgresError: Authentication timed
+    // Out`.
     msg.toLowerCase().includes("timed out")
   );
 }
@@ -635,6 +724,7 @@ async function resetPostgresClient(): Promise<void> {
   postgresClient = null;
   globalForDb.__oboeDb = undefined;
   globalForDb.__oboeReady = undefined;
+  // __oboeMigrated MUST be cleared together with the instance.
   globalForDb.__oboeMigrated = undefined;
 }
 
@@ -683,6 +773,9 @@ export async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
     } catch (err) {
       last = err;
       if (!isConnectionError(err) || i === attempts - 1) throw err;
+      // Back off like ensureDb does. Neon needs more than a few hundred ms to
+      // finish waking a suspended compute, so a single 500ms retry usually
+      // lands inside the same refusal window and fails identically.
       const backoff = [0, 500, 1500][i] ?? 1500;
       console.warn(
         `[db] query attempt ${i + 1} failed, retrying in ${backoff}ms: ${(err as Error).message}`,
@@ -709,6 +802,11 @@ export async function reconfigureDatabase(driver: Driver, url: string): Promise<
   try {
     if (postgresClient) await postgresClient.end({ timeout: 2 });
     if (pgliteClient) {
+      // checkpoint + snapshot before the close, not a bare close(): this is
+      // the same teardown the signal path performs, and skipping the
+      // checkpoint would drop whatever the WAL had not flushed - on a
+      // driver swap the directory is being abandoned, so the last clean
+      // state it ever has is this one.
       await pgliteClient.query("CHECKPOINT");
       await writeRecoverySnapshot(pgliteClient, snapshotPath(currentDataDir));
       await pgliteClient.close();
@@ -716,6 +814,8 @@ export async function reconfigureDatabase(driver: Driver, url: string): Promise<
   } catch {
     // ignore teardown errors — a fresh client is created regardless
   } finally {
+    // The old hook still points at the client being closed here; drop it so
+    // the next signal does not close the replacement.
     (globalThis as unknown as { __oboeDbUnregister?: () => void }).__oboeDbUnregister?.();
   }
   postgresClient = null;
@@ -785,9 +885,8 @@ export function ensureMigrations(): Promise<void> {
       await withDbRetry(async () => {
         if (postgresClient) {
           const drvPkg = "drizzle-orm/postgres" + "-js";
-          const migPkg = drvPkg + "/migrator";
+          const { migrate } = await import(drvPkg + "/migrator");
           const drvMod = await import(drvPkg);
-          const { migrate } = await import(migPkg);
           // Reuse the already-connected runtime pool for migrations instead of
           // opening a second connection: a cold Neon start pays one fewer TLS
           // handshake, and the pool (max>1) handles a single migration run
@@ -803,6 +902,11 @@ export function ensureMigrations(): Promise<void> {
           await migrate(globalForDb.__oboeDb, { migrationsFolder: folder });
         }
       });
+      // Best-effort and deliberately off the render path: renders only read,
+      // so the first paint must not wait ~0.3s for a sequence resync. Drift
+      // only exists after a manual import/restore, and the detached resync
+      // finishes long before any real write can land. A failure here also no
+      // longer fails the whole boot — it self-heals on the next one.
       withDbRetry(() => resyncSequences()).catch(() => {});
     })().catch((err) => {
       globalForDb.__oboeMigrated = undefined;
@@ -864,6 +968,7 @@ function retryableBuilder(builder: any): any {
       }
       const v = Reflect.get(t, prop);
       if (typeof v === "function") {
+        // keep chaining wrapped so a later `.then()` still retries
         return (...a: any[]) => retryableBuilder(v.apply(t, a));
       }
       return v;
@@ -875,6 +980,12 @@ export const db = new Proxy({} as Db, {
   get(_target, prop) {
     const val = Reflect.get(currentDb(), prop);
     if (typeof val === "function") {
+      // `db.execute(sql)` returns an already-created Promise. Wrapping that
+      // promise in a retry is a no-op — re-subscribing to a rejected promise
+      // yields the same rejection — so eager methods are re-invoked against
+      // the current instance on each attempt instead. Lazy builders (select /
+      // insert / update / delete) build no promise until awaited and are safe
+      // to defer to retryableBuilder.
       const eager = new Set([
         "execute",
         "executeRaw",
@@ -906,6 +1017,9 @@ export async function rawQuery<T = Record<string, unknown>>(
     last = m.index + m[0].length;
   }
   built.append(sql.raw(query.slice(last)));
+  // currentDb() is read *inside* the retry closure: capturing the instance out
+  // here would pin this call to the client that resetPostgresClient() is about
+  // to close, making the retry re-send to a dead pool.
   const res: unknown = await withDbRetry(() => currentDb().execute(built));
   if (Array.isArray(res)) return res as T[];
   return ((res as { rows?: T[] }).rows ?? []) as T[];
@@ -934,6 +1048,16 @@ export { schema };
  * its error for the framework's real await, and a failed warmup self-clears
  * so the next request retries.
  */
+// A build imports this module (prerender / route analysis import
+// dist/server.js) purely to inspect routes and render static pages - it must
+// NOT open the production database. The rosefd build entry sets
+// ROSEFD_BUILDING=1; under it the eager warmup is replaced by an already-resolved
+// promise so nothing here reaches for a connection. The runtime server (dev,
+// preview, prod) never sets the flag and keeps the eager warmup below, so the
+// fast cold start is unchanged. Without this guard a CI/Vercel build blocks on
+// the live database and can be killed before tools/build.mjs mirrors the
+// deploy-root public/ tree - the static layer then ships with no app JS and
+// every page sticks on its loading frame.
 const __rosefdAppReady =
   process.env.ROSEFD_BUILDING === "1" ? Promise.resolve() : ensureMigrations();
 globalForDb.__rosefdAppReady = __rosefdAppReady;

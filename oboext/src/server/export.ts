@@ -1,5 +1,3 @@
-
-
 import { rawQuery } from "./db.js";
 import { listPosts, listCategories, listTags, getSettings } from "./queries.js";
 import { adminListPages, adminGetPage } from "./pages.js";
@@ -155,7 +153,7 @@ export async function buildExportData(
     exportedAt: new Date().toISOString(),
   };
   if (scopes.includes("posts")) {
-    data.posts = await paginate((offset) => listPosts({ limit: 100, offset }), 100);
+    data.posts = await paginate((offset) => listPosts({ limit: 100, offset, full: true }), 100);
   }
   if (scopes.includes("pages")) {
 

@@ -61,8 +61,8 @@ const SCRIPT_HOSTS =
   "https://giscus.app https://utteranc.es https://cdn.jsdelivr.net https://*.disqus.com";
 const CSP_COMMON =
   "style-src 'unsafe-inline' 'self'; " +
-  "img-src 'self' data: https://picsum.photos https://www.gravatar.com https://cn.gravatar.com https://cravatar.cn https://weavatar.com https://seccdn.libravatar.org https://q1.qlogo.cn https://*.disquscdn.com; " +
-  "font-src data:; connect-src 'self' https:; frame-src https://giscus.app https://*.disqus.com; " +
+  "img-src 'self' data: https://picsum.photos https://fastly.picsum.photos https://www.gravatar.com https://cn.gravatar.com https://cravatar.cn https://weavatar.com https://seccdn.libravatar.org https://q1.qlogo.cn https://*.disquscdn.com; " +
+  "font-src 'self' data:; connect-src 'self' https:; frame-src https://giscus.app https://*.disqus.com; " +
   "form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'";
 const cspHeadersFor = (admin) => `
 export const headers = {

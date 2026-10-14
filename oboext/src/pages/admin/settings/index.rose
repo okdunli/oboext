@@ -1,15 +1,13 @@
 <script>
-  // Site settings — one form, sectioned into cards, patched via
-  // PATCH /api/settings (admin only, enforced server-side too). Selects and
-  // switches hydrate from data-val/data-on because SSR boolean/selected
-  // attributes cannot be emitted safely; see admin.js hydrateControls().
-  let s = $data(() => __rvLoad("admin.settings", {}));
-  function v(k, dflt) {
-    const x = s()[k];
-    return x == null || x === "" ? (dflt == null ? "" : dflt) : x;
-  }
-  function on(k, dflt) {
-    return (s()[k] ?? dflt) ? "1" : "0";
+  // Site settings — the whole form is generated from SITE_SETTINGS_SCHEMA by
+  // admin.js sfForm (the same engine the theme panel and plugin settings use),
+
+  // picker and the webmaster-verification inputs all come for free. The
+  // payload (resolved values + schema with runtime options injected) is
+  // embedded; saving is one PATCH /api/settings.
+  let p = $data(() => __rvLoad("admin.settings", {}));
+  function payload() {
+    return JSON.stringify({ settings: p().settings, schema: p().schema });
   }
 </script>
 
@@ -17,353 +15,28 @@
   <title>站点设置 - 管理后台</title>
 </head>
 
-<form data-adm-form="settings">
-  <div class="adm-toolbar">
-    <strong style="font-size:16px">站点设置</strong>
-    <span style="flex:1"></span>
-    <button class="adm-btn" type="submit">保存设置</button>
-  </div>
-
-  <div class="adm-section-title">常规</div>
-  <div class="adm-card">
-    <div class="adm-card-bd">
-      <div class="adm-form-grid">
-        <div class="adm-field">
-          <label>站点名称</label>
-          <input class="adm-input" name="siteTitle" value={v('siteTitle', 'oboext')}>
-        </div>
-        <div class="adm-field">
-          <label>副标题 / 标语</label>
-          <input class="adm-input" name="tagline" value={v('tagline')}>
-        </div>
-        <div class="adm-field full">
-          <label>站点描述</label>
-          <textarea class="adm-textarea" name="siteDescription" rows="2" data-dv={v('siteDescription')}></textarea>
-        </div>
-        <div class="adm-field full" data-img-field>
-          <label>Logo</label>
-          <div class="adm-imgfield">
-            <img class="adm-imgfield-prev" data-img-preview alt="" src={v('logoUrl')}>
-            <div style="flex:1;min-width:0">
-              <div style="display:flex;gap:8px">
-                <input class="adm-input" name="logoUrl" placeholder="/uploads/media/... 或 https://…" value={v('logoUrl')}>
-                <label class="adm-imgfield-btn" data-img-btn><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/upload.svg)"></span>上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
-              </div>
-              <p class="adm-imgfield-err" data-img-err></p>
-            </div>
-          </div>
-        </div>
-        <div class="adm-field full" data-img-field>
-          <label>Favicon</label>
-          <div class="adm-imgfield">
-            <img class="adm-imgfield-prev" data-img-preview alt="" src={v('faviconUrl')}>
-            <div style="flex:1;min-width:0">
-              <div style="display:flex;gap:8px">
-                <input class="adm-input" name="faviconUrl" placeholder="/uploads/media/... 或 https://…" value={v('faviconUrl')}>
-                <label class="adm-imgfield-btn" data-img-btn><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/upload.svg)"></span>上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
-              </div>
-              <p class="adm-imgfield-err" data-img-err></p>
-            </div>
-          </div>
-        </div>
-        <div class="adm-field">
-          <label>备案号</label>
-          <input class="adm-input" name="icpNumber" value={v('icpNumber')}>
-        </div>
-        <div class="adm-field full">
-          <label>页脚版权文字（支持 HTML，留空用默认）</label>
-          <textarea class="adm-textarea" name="footerText" rows="2" data-dv={v('footerText')}></textarea>
-        </div>
-      </div>
+<div class="adm-thp" data-set-panel data-set-panel-data={payload()}>
+  <div class="adm-thp-head">
+    <div>
+      <h1 class="adm-h1">站点设置</h1>
+      <p class="adm-thp-desc">站点身份、阅读、SEO、评论与代码注入。保存后立即生效。</p>
+    </div>
+    <div class="adm-thp-headbtns">
+      <button type="button" class="adm-btn" data-set-save>
+        <span data-set-save-label>保存设置</span>
+      </button>
     </div>
   </div>
 
-  <div class="adm-section-title">阅读</div>
-  <div class="adm-card">
-    <div class="adm-card-bd">
-      <div class="adm-form-grid">
-        <div class="adm-field">
-          <label>首页显示</label>
-          <select class="adm-select" name="homeDisplay" data-val={v('homeDisplay', 'latest')}>
-            <option value="latest">最新文章列表</option>
-            <option value="page">指定的静态页面</option>
-          </select>
-        </div>
-        <div class="adm-field">
-          <label>每页文章数</label>
-          <input class="adm-input" type="number" min="1" max="100" name="postsPerPage" data-num value={v('postsPerPage', 10)}>
-        </div>
-        <div class="adm-field">
-          <label>摘要字数</label>
-          <input class="adm-input" type="number" min="40" max="600" name="excerptLength" data-num value={v('excerptLength', 160)}>
-        </div>
-        <div class="adm-field">
-          <label>RSS 条目数</label>
-          <input class="adm-input" type="number" min="1" max="100" name="feedItems" data-num value={v('feedItems', 20)}>
-        </div>
-        <div class="adm-field">
-          <label>RSS 输出内容</label>
-          <select class="adm-select" name="feedContent" data-val={v('feedContent', 'excerpt')}>
-            <option value="excerpt">仅摘要</option>
-            <option value="full">全文</option>
-          </select>
-        </div>
-        <div class="adm-field">
-          <label>站点语言</label>
-          <select class="adm-select" name="language" data-val={v('language', 'zh-CN')}>
-            <option value="zh-CN">简体中文</option>
-            <option value="zh-TW">繁体中文</option>
-            <option value="en">English</option>
-            <option value="ja">日本語</option>
-          </select>
-        </div>
-        <div class="adm-field">
-          <label>时区</label>
-          <input class="adm-input" name="timezone" placeholder="Asia/Shanghai" value={v('timezone', 'Asia/Shanghai')}>
-        </div>
-        <div class="adm-field">
-          <label>日期格式</label>
-          <select class="adm-select" name="dateFormat" data-val={v('dateFormat', 'YYYY-MM-DD')}>
-            <option value="YYYY-MM-DD">2026-08-24</option>
-            <option value="YYYY年M月D日">2026年8月24日</option>
-            <option value="MMM D, YYYY">Aug 24, 2026</option>
-            <option value="D/M/YYYY">24/8/2026</option>
-          </select>
-        </div>
+  <div class="adm-thp-msg" data-set-msg></div>
+
+  <div class="adm-thp-grid">
+    <nav class="adm-thp-nav">
+      <div class="adm-thp-navgroup" data-set-nav-group>
+        <div class="adm-thp-navlist" data-set-nav></div>
       </div>
-    </div>
+    </nav>
+
+    <div class="adm-thp-body" data-set-body></div>
   </div>
-
-  <div class="adm-section-title">评论</div>
-  <div class="adm-card">
-    <div class="adm-card-bd">
-      <label class="adm-switch">
-        <div><div class="t">开放评论</div><div class="d">关闭后所有文章不再接受新评论</div></div>
-        <input type="checkbox" name="commentsEnabled" data-bool data-on={on('commentsEnabled', true)}>
-      </label>
-      <label class="adm-switch">
-        <div><div class="t">评论必须填写昵称和邮箱</div><div class="d">关闭后允许匿名评论</div></div>
-        <input type="checkbox" name="requireNameEmail" data-bool data-on={on('requireNameEmail', true)}>
-      </label>
-      <label class="adm-switch">
-        <div><div class="t">评论先审后放</div><div class="d">新评论进入待审核队列，通过后才显示</div></div>
-        <input type="checkbox" name="commentModeration" data-bool data-on={on('commentModeration', false)}>
-      </label>
-      <div class="adm-form-grid" style="margin-top:14px">
-        <div class="adm-field full">
-          <label>待审关键词</label>
-          <textarea class="adm-textarea" name="commentModerationWords" rows="2" placeholder="每行一个，如：广告、赌博" data-dv={v('commentModerationWords')}></textarea>
-          <div class="adm-hint">每行一个；命中的评论标记为待审核。</div>
-        </div>
-        <div class="adm-field full">
-          <label>评论框默认内容</label>
-          <textarea class="adm-textarea" name="commentDefaultContent" rows="2" placeholder="留空则不预填" data-dv={v('commentDefaultContent')}></textarea>
-          <div class="adm-hint">访客打开文章时评论框自动填入的文字，可自由修改后提交。</div>
-        </div>
-      </div>
-
-      <div class="adm-sub-title">评论系统</div>
-      <div class="adm-form-grid">
-        <div class="adm-field full">
-          <label>评论来源</label>
-          <select class="adm-select" name="commentProvider" data-val={v('commentProvider', 'builtin')} data-showif-trigger>
-            <option value="builtin">系统自带（内置数据库）</option>
-            <option value="artalk">Artalk（自建）</option>
-            <option value="giscus">Giscus（GitHub 讨论）</option>
-            <option value="waline">Waline（valine 继任）</option>
-            <option value="twikoo">腾讯云开发评论（私有部署）</option>
-            <option value="disqus">Disqus</option>
-            <option value="utterances">Utterances（GitHub Issues）</option>
-            <option value="none">不显示评论</option>
-          </select>
-          <div class="adm-hint">选择「系统自带」使用本站数据库存储评论；其余为第三方评论服务。</div>
-        </div>
-
-        <div class="adm-field" data-show-if="commentProvider=artalk">
-          <label>Artalk 服务端地址</label>
-          <input class="adm-input" name="artalkServer" placeholder="https://comments.example.com" value={v('artalkServer')}>
-        </div>
-        <div class="adm-field" data-show-if="commentProvider=artalk">
-          <label>Artalk 站点名称</label>
-          <input class="adm-input" name="artalkSite" placeholder="我的博客" value={v('artalkSite')}>
-        </div>
-
-        <div class="adm-field" data-show-if="commentProvider=giscus">
-          <label>Giscus 仓库</label>
-          <input class="adm-input" name="giscusRepo" placeholder="owner/repo" value={v('giscusRepo')}>
-        </div>
-        <div class="adm-field" data-show-if="commentProvider=giscus">
-          <label>仓库 ID</label>
-          <input class="adm-input" name="giscusRepoId" value={v('giscusRepoId')}>
-        </div>
-        <div class="adm-field" data-show-if="commentProvider=giscus">
-          <label>分类</label>
-          <input class="adm-input" name="giscusCategory" value={v('giscusCategory', 'General')}>
-        </div>
-        <div class="adm-field" data-show-if="commentProvider=giscus">
-          <label>分类 ID</label>
-          <input class="adm-input" name="giscusCategoryId" placeholder="DIC_kwDOExample" value={v('giscusCategoryId')}>
-        </div>
-        <div class="adm-field" data-show-if="commentProvider=giscus">
-          <label>讨论映射</label>
-          <select class="adm-select" name="giscusMapping" data-val={v('giscusMapping', 'pathname')}>
-            <option value="pathname">路径名（推荐）</option>
-            <option value="url">URL</option>
-            <option value="title">标题</option>
-            <option value="og-desc">Og 描述</option>
-            <option value="issue-number">Issue 编号</option>
-            <option value="specific-term">特定词条</option>
-          </select>
-        </div>
-        <div class="adm-field" data-show-if="commentProvider=giscus">
-          <label>启用 Reaction</label>
-          <label class="adm-switch" style="margin-top:6px">
-            <div><div class="t">显示表情回应</div></div>
-            <input type="checkbox" name="giscusReactions" data-bool data-on={on('giscusReactions', true)}>
-          </label>
-        </div>
-        <div class="adm-field full" data-show-if="commentProvider=giscus">
-          <label>主题（可选）</label>
-          <input class="adm-input" name="giscusTheme" placeholder="preferred_color_scheme / dark / light" value={v('giscusTheme')}>
-        </div>
-
-        <div class="adm-field full" data-show-if="commentProvider=waline">
-          <label>Waline 服务端地址</label>
-          <input class="adm-input" name="walineServer" placeholder="https://waline.example.com" value={v('walineServer')}>
-        </div>
-        <div class="adm-field full" data-show-if="commentProvider=twikoo">
-          <label>评论环境 ID</label>
-          <input class="adm-input" name="twikooEnvId" placeholder="your-env-id" value={v('twikooEnvId')}>
-          <div class="adm-hint">腾讯云 / Vercel / 私有部署的环境 ID 或域名。</div>
-        </div>
-        <div class="adm-field full" data-show-if="commentProvider=disqus">
-          <label>Disqus 站点短名</label>
-          <input class="adm-input" name="disqusShortname" placeholder="example" value={v('disqusShortname')}>
-        </div>
-        <div class="adm-field" data-show-if="commentProvider=utterances">
-          <label>Utterances 仓库</label>
-          <input class="adm-input" name="utterancesRepo" placeholder="owner/repo" value={v('utterancesRepo')}>
-        </div>
-        <div class="adm-field" data-show-if="commentProvider=utterances">
-          <label>Issue 映射</label>
-          <select class="adm-select" name="utterancesTerm" data-val={v('utterancesTerm', 'pathname')}>
-            <option value="pathname">路径名（推荐）</option>
-            <option value="url">URL</option>
-            <option value="title">标题</option>
-            <option value="issue-number">Issue 编号</option>
-            <option value="og-desc">Og 描述</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="adm-sub-title">头像</div>
-      <div class="adm-form-grid">
-        <div class="adm-field">
-          <label>头像源</label>
-          <select class="adm-select" name="avatarSource" data-val={v('avatarSource', 'gravatar')}>
-            <option value="gravatar">Gravatar（国际）</option>
-            <option value="cn-gravatar">Gravatar 国内镜像</option>
-            <option value="cravatar">Cravatar（酷家）</option>
-            <option value="weavatar">WeAvatar</option>
-            <option value="libravatar">Libravatar</option>
-            <option value="qq">QQ 邮箱 → QQ 头像</option>
-            <option value="none">无头像</option>
-          </select>
-          <div class="adm-hint">仅对「系统自带」评论生效。QQ 邮箱会自动解析为 QQ 头像。</div>
-        </div>
-        <div class="adm-field">
-          <label>头像尺寸</label>
-          <input class="adm-input" type="number" min="16" max="200" name="avatarSize" data-num value={v('avatarSize', 80)}>
-        </div>
-        <div class="adm-field">
-          <label>内容分级</label>
-          <select class="adm-select" name="avatarRating" data-val={v('avatarRating', 'g')}>
-            <option value="g">G</option>
-            <option value="pg">PG</option>
-            <option value="r">R</option>
-            <option value="x">X</option>
-          </select>
-        </div>
-        <div class="adm-field">
-          <label>缺省头像</label>
-          <input class="adm-input" name="avatarDefault" placeholder="identicon / mp / retro / robohash" value={v('avatarDefault', 'identicon')}>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="adm-section-title">SEO 与分享</div>
-  <div class="adm-card">
-    <div class="adm-card-bd">
-      <div class="adm-form-grid">
-        <div class="adm-field">
-          <label>标题模板</label>
-          <input class="adm-input" name="seoTitleTemplate" placeholder="文章标题 - 站点名称" value={v('seoTitleTemplate')}>
-        </div>
-        <div class="adm-field">
-          <label>默认关键词（逗号分隔）</label>
-          <input class="adm-input" name="seoKeywords" value={v('seoKeywords')}>
-        </div>
-        <div class="adm-field full">
-          <label>默认 SEO 描述</label>
-          <textarea class="adm-textarea" name="seoDefaultDescription" rows="2" data-dv={v('seoDefaultDescription')}></textarea>
-        </div>
-        <div class="adm-field">
-          <label>robots 指令</label>
-          <input class="adm-input" name="seoRobots" placeholder="index,follow" value={v('seoRobots', 'index,follow')}>
-        </div>
-        <div class="adm-field full" data-img-field>
-          <label>默认分享图</label>
-          <div class="adm-imgfield">
-            <img class="adm-imgfield-prev" data-img-preview alt="" src={v('ogImageUrl')}>
-            <div style="flex:1;min-width:0">
-              <div style="display:flex;gap:8px">
-                <input class="adm-input" name="ogImageUrl" placeholder="/uploads/media/... 或 https://…" value={v('ogImageUrl')}>
-                <label class="adm-imgfield-btn" data-img-btn><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/upload.svg)"></span>上传<input type="file" accept="image/*" class="adm-hidden-file" data-img-file></label>
-              </div>
-              <p class="adm-imgfield-err" data-img-err></p>
-            </div>
-          </div>
-        </div>
-        <div class="adm-field">
-          <label>Twitter 卡片样式</label>
-          <select class="adm-select" name="twitterCard" data-val={v('twitterCard', 'summary_large_image')}>
-            <option value="summary">summary</option>
-            <option value="summary_large_image">summary_large_image</option>
-          </select>
-        </div>
-        <div class="adm-field">
-          <label>Twitter 账号</label>
-          <input class="adm-input" name="twitterSite" placeholder="@name" value={v('twitterSite')}>
-        </div>
-        <div class="adm-field">
-          <label>统计分析 ID（如 G-XXXX）</label>
-          <input class="adm-input" name="analyticsId" value={v('analyticsId')}>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="adm-section-title">高级（自定义注入）</div>
-  <div class="adm-card">
-    <div class="adm-card-bd">
-      <div class="adm-field">
-        <label>自定义 head 注入（meta/script/link）</label>
-        <textarea class="adm-textarea" name="customHead" rows="4" data-dv={v('customHead')}></textarea>
-      </div>
-      <div class="adm-field">
-        <label>自定义页脚 HTML</label>
-        <textarea class="adm-textarea" name="customFooter" rows="3" data-dv={v('customFooter')}></textarea>
-      </div>
-      <div class="adm-field" style="margin-bottom:0">
-        <label>自定义 CSS</label>
-        <textarea class="adm-textarea" name="customCss" rows="4" data-dv={v('customCss')}></textarea>
-      </div>
-    </div>
-  </div>
-
-  <div class="adm-toolbar" style="margin-top:20px">
-    <span style="flex:1"></span>
-    <button class="adm-btn" type="submit">保存设置</button>
-  </div>
-</form>
+</div>

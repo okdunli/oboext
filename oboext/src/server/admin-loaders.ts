@@ -35,6 +35,7 @@ import {
   collectAdminMenuExtras,
   getAdminMenuPrefs,
   shellNavHtml,
+  type DashboardCardItem,
 } from "./admin-menu.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
 import { listPlugins, getPlugin, ensurePluginsLoaded } from "./plugins.js";
@@ -47,9 +48,11 @@ import { listAdminProviders, type AdminProvider } from "./oauth.js";
 import { getPermalinkConfig } from "./links.js";
 import { getMaintenanceSettings } from "./maintenance.js";
 import { listSecurityEvents } from "./security-events.js";
+import { SITE_SETTINGS_SCHEMA } from "./site-settings-schema.js";
+import { resolveSettings } from "./settings-schema.js";
 import { readdirSync } from "node:fs";
 import path from "node:path";
-import { applyFilters, HOOKS } from "./hooks.js";
+import { applyAsyncFilters, applyFilters, HOOKS } from "./hooks.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
 import { db } from "./db.js";
@@ -105,7 +108,13 @@ export async function adminMenuSettings(_p: unknown, ctx: Ctx) {
 }
 
 export async function adminDashboard(_p: unknown, ctx: Ctx) {
-  return dashboardStats(requireUser(ctx));
+  const user = requireUser(ctx);
+  const stats = await dashboardStats(user);
+  const { cards } = await applyAsyncFilters<{ cards: DashboardCardItem[] }>(
+    HOOKS.dashboardCards,
+    { cards: [] },
+  );
+  return { ...stats, cards };
 }
 
 export async function adminPosts(p: any, ctx: Ctx) {
@@ -375,7 +384,31 @@ export async function adminUsers(_p: unknown, ctx: Ctx) {
 export async function adminSettings(_p: unknown, ctx: Ctx) {
   const user = requireUser(ctx);
   if (user.role !== "admin") throw new ServiceError("权限不足", 403);
-  return getSettings();
+  const [row, themeRows, pageOut] = await Promise.all([
+    getSettings(),
+    listThemes(),
+    adminListPages(user, { limit: 200 }),
+  ]);
+  const themeOptions = themeRows.map((t) => ({ value: t.slug, label: t.name }));
+  const pageOptions = [
+    { value: "", label: "— 未选择 —" },
+    ...pageOut.items.map((p) => ({ value: String(p.id), label: p.title })),
+  ];
+  const schema = SITE_SETTINGS_SCHEMA.map((section) => ({
+    ...section,
+    fields: section.fields.map((f) =>
+      f.key === "activeThemeSlug"
+        ? { ...f, options: themeOptions }
+        : f.key === "homePageId" || f.key === "postsPageId"
+          ? { ...f, options: pageOptions }
+          : f,
+    ),
+  }));
+  const stored: Record<string, unknown> = { ...(row as Record<string, unknown>) };
+  for (const k of ["homePageId", "postsPageId"]) {
+    stored[k] = stored[k] == null ? "" : String(stored[k]);
+  }
+  return { settings: resolveSettings(schema, stored), schema };
 }
 
 export async function notFoundConfig(_p: unknown, ctx: Ctx) {

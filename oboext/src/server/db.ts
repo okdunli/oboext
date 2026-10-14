@@ -181,9 +181,13 @@ async function createDb(): Promise<any> {
   const driver: Driver = (process.env.DB_DRIVER || "pglite") as Driver;
 
   if (driver === "postgres") {
-    const connectionString = process.env.DATABASE_URL;
+    const connectionString =
+      process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
     if (!connectionString) {
-      throw new Error("DATABASE_URL is not set for DB_DRIVER=postgres.");
+      throw new Error(
+        "DATABASE_URL is not set for DB_DRIVER=postgres. " +
+          "Set DATABASE_URL (direct) or DATABASE_URL_UNPOOLED when using a pooled provider.",
+      );
     }
     const pgPkg = "post" + "gres";
     const drvPkg = "drizzle-orm/postgres" + "-js";

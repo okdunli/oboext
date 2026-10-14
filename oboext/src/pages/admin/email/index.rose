@@ -1,0 +1,127 @@
+<script>
+
+  let s = $data(() => __rvLoad("admin.notify", {}));
+  function g(path, dflt) {
+    let x = s();
+    const parts = path.split(".");
+    for (const p of parts) x = x == null ? undefined : x[p];
+    return x == null || x === "" ? (dflt == null ? "" : dflt) : x;
+  }
+  function sw(path) {
+    let x = s();
+    const parts = path.split(".");
+    for (const p of parts) x = x == null ? undefined : x[p];
+    return x ? "1" : "0";
+  }
+</script>
+
+<head>
+  <title>邮件设置 - 管理后台</title>
+</head>
+
+<form data-adm-form="notify">
+  <div class="adm-toolbar">
+    <strong style="font-size:16px">邮件设置</strong>
+    <span style="flex:1"></span>
+    <button class="adm-btn" type="submit">保存设置</button>
+  </div>
+  <p class="adm-hint" style="margin:0 0 16px;">
+    验证码邮件与评论通知由此处配置的通道投递；SMTP 密码保存时留空表示不修改。
+  </p>
+
+  <div class="adm-section-title">SMTP 发信</div>
+  <div class="adm-card">
+    <div class="adm-card-bd">
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label>SMTP 主机</label>
+          <input class="adm-input" name="smtp.host" value={g('smtp.host')} placeholder="smtp.example.com">
+        </div>
+        <div class="adm-field">
+          <label>端口</label>
+          <input class="adm-input" type="number" name="smtp.port" data-num value={g('smtp.port', 465)} min="1" max="65535">
+        </div>
+        <div class="adm-field">
+          <label>加密方式</label>
+          <select class="adm-select" name="smtp.security" data-val={g('smtp.security', 'TLS')}>
+            <option value="TLS">TLS（465 隐式）</option>
+            <option value="STARTTLS">STARTTLS（587/25 升级）</option>
+            <option value="NONE">NONE（明文，仅内网自测）</option>
+          </select>
+        </div>
+        <div class="adm-field">
+          <label>用户名</label>
+          <input class="adm-input" name="smtp.user" value={g('smtp.user')}>
+        </div>
+        <div class="adm-field">
+          <label>密码（留空不修改）</label>
+          <input class="adm-input" type="password" name="smtp.pass" value="" autocomplete="new-password">
+        </div>
+        <div class="adm-field">
+          <label>发件人（留空同用户名）</label>
+          <input class="adm-input" name="smtp.from" value={g('smtp.from')} placeholder="名字 &lt;noreply@example.com&gt;">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-section-title">邮件通道</div>
+  <div class="adm-card">
+    <div class="adm-card-bd">
+      <label class="adm-switch"><span><span class="t">启用邮件通道</span><span class="d">验证码邮件与评论通知的总开关</span></span><input type="checkbox" name="email.enabled" data-on={sw('email.enabled')} data-bool></label>
+      <div class="adm-field">
+        <label>投递方式</label>
+        <select class="adm-select" name="email.via" data-val={g('email.via', 'smtp')}>
+          <option value="smtp">SMTP 直发</option>
+          <option value="webhook">自定义 Webhook</option>
+        </select>
+      </div>
+      <div data-show-if="email.via=webhook">
+        <div class="adm-field">
+          <label>Webhook 地址</label>
+          <input class="adm-input" name="email.webhook.url" value={g('email.webhook.url')} placeholder="https://…">
+        </div>
+        <div class="adm-form-grid">
+          <div class="adm-field">
+            <label>方法</label>
+            <select class="adm-select" name="email.webhook.method" data-val={g('email.webhook.method', 'POST')}>
+              <option value="POST">POST</option>
+              <option value="GET">GET</option>
+              <option value="PUT">PUT</option>
+            </select>
+          </div>
+          <div class="adm-field">
+            <label>请求体模板</label>
+            <input class="adm-input" name="email.webhook.body" value={g('email.webhook.body')}>
+            <p class="adm-hint" style="margin:4px 0 0;">{"支持 {{target}} {{code}} {{purpose}} 占位符。"}</p>
+          </div>
+        </div>
+        <div class="adm-field">
+          <label>请求头（一行一个 Key: Value，或 JSON）</label>
+          <textarea class="adm-textarea" name="email.webhook.headers" rows="2" data-dv={g('email.webhook.headers')}></textarea>
+        </div>
+      </div>
+      <div class="adm-toolbar" style="margin:12px 0 0;">
+        <input class="adm-input" style="max-width:280px;" data-notify-test-input="email" placeholder="测试收件邮箱">
+        <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="notify-test" data-channel="email"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/send.svg)"></span>发送测试邮件</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="adm-section-title">邮箱验证码开关</div>
+  <div class="adm-card">
+    <div class="adm-card-bd">
+      <div class="adm-form-grid">
+        <div class="adm-field">
+          <label class="adm-switch"><span><span class="t">注册强制邮箱验证</span></span><input type="checkbox" name="register.emailVerify" data-on={sw('register.emailVerify')} data-bool></label>
+        </div>
+        <div class="adm-field">
+          <label class="adm-switch"><span><span class="t">允许邮箱验证码登录</span></span><input type="checkbox" name="login.emailVerify" data-on={sw('login.emailVerify')} data-bool></label>
+        </div>
+      </div>
+      <p class="adm-hint" style="margin:10px 0 0;">
+        邮箱验证码登录需邮件通道已启用。会员注册服务在写库前消费对应验证码。
+      </p>
+    </div>
+  </div>
+</form>

@@ -1,0 +1,34 @@
+<script>
+  // /api/media/variants
+  //   GET  ?id=N  variant status - which .w400/.w800/.w1600 siblings exist
+  //   POST ?id=N  regenerate the missing ones, then return the new status
+  // A literal route, so it wins over [id].rose for this path.
+  import { apiGate, jsonFail } from "@server/admin";
+  import { getMediaVariants, regenerateMediaVariants, regenerateAllVariants } from "@server/media";
+
+  function qId(request) {
+    const n = Number(new URL(request.url).searchParams.get("id"));
+    return Number.isInteger(n) && n > 0 ? n : 0;
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const id = qId(request);
+      if (!id) return jsonFail("无效 id", 400);
+      return getMediaVariants(getContext().user, id);
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      // ?all=1 is the library-wide catch-up: every image missing a variant
+      // gets one. Otherwise ?id=N regenerates that single item.
+      if (new URL(request.url).searchParams.get("all") === "1") {
+        return regenerateAllVariants(getContext().user);
+      }
+      const id = qId(request);
+      if (!id) return jsonFail("无效 id", 400);
+      return regenerateMediaVariants(getContext().user, id);
+    });
+  }
+</script>

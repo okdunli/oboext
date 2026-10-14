@@ -2461,6 +2461,53 @@
     updatePreview();
   }
 
+  function initSettingsPanel() {
+    var root = document.querySelector("[data-set-panel]");
+    if (!root || root.__setbound) return;
+    root.__setbound = true;
+    var panel;
+    try { panel = JSON.parse(root.getAttribute("data-set-panel-data") || "{}"); } catch (e) { return; }
+    if (!panel.schema || !panel.schema.length) return;
+
+    function setMsg(kind, text) {
+      var el = root.querySelector("[data-set-msg]");
+      el.textContent = text || "";
+      el.className = "adm-thp-msg" + (kind ? " is-" + kind : "");
+      if (text) setTimeout(function () { if (el.textContent === text) el.textContent = ""; }, 4000);
+    }
+
+    var form = sfForm(root, {
+      sections: panel.schema,
+      draft: panel.settings || {},
+      navTargets: [{ el: root.querySelector("[data-set-nav-group]"), sections: panel.schema }],
+      bodyEl: root.querySelector("[data-set-body]"),
+    });
+
+    root.querySelector("[data-set-save]").addEventListener("click", async function () {
+      var btn = root.querySelector("[data-set-save]");
+      var label = root.querySelector("[data-set-save-label]");
+      btn.disabled = true;
+      label.textContent = "保存中…";
+      try {
+        var payload = form.collect();
+        ["homePageId", "postsPageId"].forEach(function (k) {
+          if (!(k in payload)) return;
+          payload[k] = payload[k] === "" || payload[k] == null ? null : Number(payload[k]);
+        });
+        await api("PATCH", "/api/settings", payload);
+        setMsg("ok", "设置已保存");
+        toast("设置已保存", "ok");
+      } catch (err) {
+        setMsg("err", err.message);
+      } finally {
+        btn.disabled = false;
+        label.textContent = "保存设置";
+      }
+    });
+
+    form.renderAll();
+  }
+
   function initOAuthBindings() {
     var box = document.querySelector("[data-oauth-bindings]");
     if (!box || box.__bound) return;
@@ -3288,6 +3335,7 @@
     initMenuSettings();
     initThemeManager();
     initThemePanel();
+    initSettingsPanel();
     initPluginSettings();
     initOAuthBindings();
     initIconExplorer();

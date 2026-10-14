@@ -107,9 +107,12 @@
 
 /* The header search is hidden on narrow screens: the sidebar one takes over.
    Both forms share .df-search-form, so the rule has to stay scoped to the
-   media query - an unscoped display:none hides the sidebar field too. */
+   media query - an unscoped display:none hides the sidebar field too. The
+   drawer's field (df-search-form-mobile) also shares the class and exists
+   exactly at these widths, so it is excluded as well; leaving it out hid the
+   drawer search form and the expanded mobile menu lost its search box. */
 @media (max-width: 639px) {
-  .df-search-form:not(.df-search-form-block) { display: none; }
+  .df-search-form:not(.df-search-form-block):not(.df-search-form-mobile) { display: none; }
 }
 .df-search-form-block { display: block; margin-left: 0; }
 

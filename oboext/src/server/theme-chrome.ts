@@ -402,8 +402,9 @@ const SHARED_FORM_BASELINE = `
   .emoji-panel .panel{ width:min(290px, calc(100vw - 78px)); }
 }
 
-.emoji-panel-wrap{ display:contents; }
+.emoji-panel-wrap{ position:relative; display:inline-block; width:0; height:0; vertical-align:middle; }
 .emoji-panel-wrap .emoji-panel{
+  left:0; bottom:calc(100% + 10px);
   transform-origin:0 100%;
   transition:opacity .18s ease, transform .22s cubic-bezier(.34,1.56,.64,1);
   will-change:opacity, transform;
@@ -2150,7 +2151,7 @@ function bmixPostPage(parts: PostPageParts): string {
     (title2 ? `<span class="block truncate">${esc(title2)}</span>` : "") +
     `</div>` +
     `<div class="metas">` +
-    `<span>${bmixIc("heart", 12)} ${p.likes ?? 0}</span>` +
+    `<span class="bm-like-count" data-likes-for="${p.id}">${bmixIc("heart", 12)} <b class="bm-like-n">${p.likes ?? 0}</b></span>` +
     `<span class="ml-8">${bmixIc("comments", 12)} ${p.commentsCount ?? 0}</span>` +
     `<span class="ml-8">${bmixIc("eye", 12)} ${p.views ?? 0}</span>` +
     (date ? `<span class="ml-8">${bmixIc("clock", 12)} ${date}</span>` : "") +

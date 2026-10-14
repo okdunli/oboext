@@ -127,6 +127,13 @@
       "when": 1790500000000,
       "tag": "0017_media_tags_sort",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790586400000,
+      "tag": "0018_query_indexes",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,20 @@
+-- Whether a guest comment must carry a link.
+--
+-- Separate from require_name_email rather than folded into it: name and email
+-- identify the author, the link is optional extra, and an admin who wants the
+-- first two enforced rarely wants the third. One combined switch cannot express
+-- "nickname + email required, link optional", which is the common setting.
+--
+-- DEFAULT false keeps existing behaviour: the field has always been optional,
+-- and flipping it on would start rejecting comments that used to post.
+--
+-- Two things this file got wrong first, both of which cost a boot failure:
+--
+-- 1. The table is site_settings, not settings. `pgTable("site_settings", ...)`
+--    in schema.ts is the authority; the TypeScript export is named `siteSettings`
+--    and the drizzle row type is called settings all over the loaders, so
+--    "settings" is the name you reach for and it does not exist.
+-- 2. It needs a statement-breakpoint. drizzle splits a migration file on that
+--    marker and sends each piece as one query; without it the whole file -
+--    comments included - arrives as a single statement.
+ALTER TABLE "site_settings" ADD COLUMN IF NOT EXISTS "require_author_url" boolean DEFAULT false NOT NULL;

@@ -6,21 +6,26 @@
  * emits zero .rose / HTML pages - every page reads the live database per
  * request through $data(). It only prepares static, content-free resources:
  *
- *   oboext/theme.css         skyscraper.css with the two woff2 fonts
- *                             inlined as data URIs + award badge rules
+ *   oboext/theme.css         themes/skyscraper/skyscraper.css with the two woff2
+ *                             fonts inlined as data URIs + award badge rules
  *   oboext/public/theme.css  same, served at /public/theme.css
  *   oboext/public/avatar*.png
  *   oboext/public/noflash.js anti dark-mode-flash bootstrap (external, so
  *                             the strict CSP only needs script-src 'self')
+ *
+ * Theme assets are read from the theme's OWN directory (themes/<slug>/), never
+ * from a shared top-level seed/. A theme must be self-contained so it can be
+ * installed or removed as one unit; seed/ now holds only demo fixtures
+ * (seed-source.json) and is not on the asset path at all.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const OBOEXT = join(ROOT, 'oboext');
 const CHROME_THEME = 'skyscraper';
 const THEME_DIR = join(ROOT, 'themes', CHROME_THEME);
-const OBOEXT = join(ROOT, 'oboext');
 const PUBLIC = join(OBOEXT, 'public');
 mkdirSync(PUBLIC, { recursive: true });
 
@@ -50,7 +55,15 @@ ${entryLines.join('\n')}
   console.log(`[gen] plugin entries: ${entryLines.length}`);
 }
 
-let themeCss = readFileSync(join(THEME_DIR, `${CHROME_THEME}.css`), 'utf8');
+const themeCssPath = join(THEME_DIR, `${CHROME_THEME}.css`);
+if (!existsSync(themeCssPath)) {
+  console.error(
+    `[gen] FATAL: ${CHROME_THEME}.css not found in themes/${CHROME_THEME}/ (${themeCssPath}). ` +
+      'The site-wide chrome stylesheet must live in the theme folder.',
+  );
+  process.exit(1);
+}
+let themeCss = readFileSync(themeCssPath, 'utf8');
 for (const name of ['skyscraper-icons.woff2', 'passero-one.woff2']) {
   const fp = join(THEME_DIR, 'assets', 'fonts', name);
   if (existsSync(fp)) {
@@ -59,6 +72,8 @@ for (const name of ['skyscraper-icons.woff2', 'passero-one.woff2']) {
       `url("/assets/fonts/${name}")`,
       `url("data:font/woff2;base64,${b64}")`,
     );
+  } else {
+    console.warn(`[gen] WARN: font missing themes/${CHROME_THEME}/assets/fonts/${name}`);
   }
 }
 const emojiCss = join(THEME_DIR, 'assets', 'emoji-panel.css');
@@ -76,6 +91,7 @@ copyFileSync(join(OBOEXT, 'theme.css'), join(PUBLIC, 'theme.css'));
 for (const name of ['avatar.png', 'avatar@2x.png']) {
   const fp = join(THEME_DIR, 'assets', name);
   if (existsSync(fp)) copyFileSync(fp, join(PUBLIC, name));
+  else console.warn(`[gen] WARN: avatar missing themes/${CHROME_THEME}/assets/${name}`);
 }
 
 writeFileSync(

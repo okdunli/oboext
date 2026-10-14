@@ -3158,8 +3158,10 @@ html:not(.is-mac) *::-webkit-scrollbar-thumb{ background-color:#828c9666; }
 /* Scoped to the header form on purpose. The sidebar form carries the SAME
    class plus .df-search-form-block, so an unscoped display:none here took the
    sidebar field with it on narrow screens - leaving a phone-width page with no
-   search box at all, since the header one is the thing being hidden. */
-@media (max-width: 639px) { .df-search-form:not(.df-search-form-block) { display: none; } }
+   search box at all, since the header one is the thing being hidden. The
+   drawer's field (df-search-form-mobile) shares the class too and lives BELOW
+   this breakpoint, so it is excluded just the same. */
+@media (max-width: 639px) { .df-search-form:not(.df-search-form-block):not(.df-search-form-mobile) { display: none; } }
 .df-search-form-block { display: block; margin-left: 0; }
 
 .df-search-box {

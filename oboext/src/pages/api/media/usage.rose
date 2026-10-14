@@ -1,0 +1,15 @@
+<script>
+  // /api/media/usage
+  //   GET ?id=N  where this media is referenced (featured image or inline).
+  // A literal route, so it wins over [id].rose for this path.
+  import { apiGate, jsonFail } from "@server/admin";
+  import { getMediaUsage } from "@server/media";
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const n = Number(new URL(request.url).searchParams.get("id"));
+      if (!Number.isInteger(n) || n <= 0) return jsonFail("无效 id", 400);
+      return getMediaUsage(getContext().user, n);
+    });
+  }
+</script>

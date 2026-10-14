@@ -18,6 +18,55 @@ import { inArray } from "drizzle-orm";
 import { db } from "./db.js";
 import { media } from "./schema.js";
 import { listPosts } from "./queries.js";
+import { uploadsAbsPath } from "./storage.js";
+import fsMod from "node:fs";
+import pathMod from "node:path";
+
+/**
+ * F2e (responsive variants for uploads): the sibling `.wNNN` files beside an
+ * uploaded image (generated at upload time by media.ts) become a srcset on
+ * the featured-image <img>. The lookup is memoized for the process lifetime:
+ * variants are written once at upload and never change afterwards, so an
+ * entry that found none stays correct too. Only /uploads URLs participate -
+ * public-dir images are handled by the framework compiler's own srcset pass.
+ */
+const variantCache = new Map<string, string>();
+
+/** Drop the memoized srcset lookup for one uploads URL (after variants land). */
+export function invalidateVariantCache(url: string): void {
+  variantCache.delete(url);
+}
+
+export function imgVariantAttrs(url: string): string {
+  if (!url || !url.startsWith("/uploads/")) return "";
+  const hit = variantCache.get(url);
+  if (hit !== undefined) return hit;
+  let attrs = "";
+  try {
+    const abs = uploadsAbsPath(url);
+    const ext = abs ? pathMod.extname(abs) : "";
+    if (abs && /\.(jpe?g|png)$/i.test(abs)) {
+      const dir = pathMod.dirname(abs);
+      const base = pathMod.basename(abs, ext);
+      const dirUrl = url.slice(0, url.length - (base + ext).length);
+      const widths: Array<{ w: number; u: string }> = [];
+      for (const f of fsMod.readdirSync(dir)) {
+        const mm = new RegExp(
+          `^${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.w(\\d+)${ext.replace(".", "\\.")}$`,
+          "i",
+        ).exec(f);
+        const w = mm ? Number(mm[1]) : 0;
+        if (w > 0) widths.push({ w, u: `${dirUrl}${base}.w${w}${ext}` });
+      }
+      widths.sort((a, b) => a.w - b.w);
+      if (widths.length) attrs = ` srcset="${widths.map((x) => `${esc(x.u)} ${x.w}w`).join(", ")}"`;
+    }
+  } catch {
+    attrs = "";
+  }
+  variantCache.set(url, attrs);
+  return attrs;
+}
 
 export const esc = (s: unknown): string =>
   String(s ?? "")
@@ -415,7 +464,7 @@ export function awardBadge(n: number): string {
 
 export function postCard(p: PostView, award = 0): string {
   const img = p.featuredImage
-    ? `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"><img src="${esc(p.featuredImage)}" crossorigin="anonymous"></a>`
+    ? `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"><img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)} crossorigin="anonymous"></a>`
     : `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"></a>`;
   return (
     `<div class="${CARD_COLS}"><div class="post-card">` +
@@ -433,7 +482,7 @@ export function postCard(p: PostView, award = 0): string {
 
 export function nestedCard(p: PostView): string {
   const img = p.featuredImage
-    ? `<img src="${esc(p.featuredImage)}" crossorigin="anonymous">`
+    ? `<img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)} crossorigin="anonymous">`
     : "";
   return (
     `<div class="post-card-nested-col"><div class="post-card is-nested">` +
@@ -487,6 +536,24 @@ export function postHead(p: PostView, siteTitle: string, siteDescription: string
   const url = `${origin}${p.url}`;
   const author = p.author?.name;
   const iso = (v: Date | string | null | undefined) => new Date(v ?? p.publishedAt!).toISOString();
+  const crumbs: Array<{ name: string; url: string }> = [
+    { name: siteTitle, url: `${origin}/` },
+  ];
+  if (p.categories?.[0]) crumbs.push({ name: p.categories[0].name, url: `${origin}${p.categories[0].url}` });
+  crumbs.push({ name: p.title, url });
+  const posting: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    headline: p.title,
+    description: desc,
+    datePublished: iso(p.publishedAt),
+    dateModified: iso(p.updatedAt || p.publishedAt),
+    mainEntityOfPage: { "@type": "WebPage", "@id": url },
+    author: author ? { "@type": "Person", name: author } : undefined,
+    publisher: { "@type": "Organization", name: siteTitle },
+  };
+  if (p.featuredImage) posting.image = [p.featuredImage];
+  if (p.tags?.length) posting.keywords = p.tags.map((t) => t.name).join(", ");
   return [
     `<title>${esc(fullTitle)}</title>`,
     `<meta name="description" content="${esc(desc)}">`,
@@ -504,6 +571,17 @@ export function postHead(p: PostView, siteTitle: string, siteDescription: string
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
     p.featuredImage ? `<meta name="twitter:image" content="${esc(p.featuredImage)}">` : "",
+    jsonLd(posting),
+    jsonLd({
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      itemListElement: crumbs.map((c, i) => ({
+        "@type": "ListItem",
+        position: i + 1,
+        name: c.name,
+        item: c.url,
+      })),
+    }),
   ].filter(Boolean).join("");
 }
 
@@ -775,6 +853,17 @@ function fmtDateSlash(v: Date | string | null | undefined): string {
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
 }
 
+/**
+ * One `application/ld+json` script tag carrying `obj` as compact JSON.
+ * `<` is escaped to `\u003c` so a value containing `</script>` (a title, an
+ * excerpt) can never close the tag early — JSON is valid with the escape and
+ * every JSON-LD consumer decodes it back.
+ */
+export function jsonLd(obj: unknown): string {
+  const json = JSON.stringify(obj).replace(/</g, "\\u003c");
+  return `<script type="application/ld+json">${json}</script>`;
+}
+
 export function pageHead(p: PageView, siteTitle: string, siteDescription: string, origin: string): string {
   const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
   const desc = p.seoDescription || p.excerpt || siteDescription;
@@ -794,6 +883,21 @@ export function pageHead(p: PageView, siteTitle: string, siteDescription: string
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
     p.featuredImage ? `<meta name="twitter:image" content="${esc(p.featuredImage)}">` : "",
+    jsonLd({
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      name: fullTitle,
+      description: desc,
+      url,
+    }),
+    jsonLd({
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      itemListElement: [
+        { "@type": "ListItem", position: 1, name: siteTitle, item: `${origin}/` },
+        { "@type": "ListItem", position: 2, name: p.title, url },
+      ],
+    }),
   ]
     .filter(Boolean)
     .join("");

@@ -356,3 +356,16 @@ export async function rawQuery<T = Record<string, unknown>>(
 }
 
 export { schema };
+
+/**
+ * Boot-time warmup (T11 follow-up): kick the memoized ensureMigrations() at
+ * module load, so PGlite opens, migrations apply and sequences resync while
+ * the server is still starting — instead of the first request paying the
+ * whole 3s+ cold path. ensureMigrations() is idempotent (one memoized promise
+ * on globalThis) and every later awaiter shares this very promise, so this
+ * is purely a scheduling change with zero behavioral delta. The detached
+ * catch only prevents an unused-promise unhandled rejection; the memoized
+ * promise keeps its error for the middleware's real await, and a failed
+ * warmup self-clears so the next request retries.
+ */
+void ensureMigrations().catch(() => {});

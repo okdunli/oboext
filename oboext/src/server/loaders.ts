@@ -46,6 +46,7 @@ import { maintenanceGate, type MaintenanceSettings } from "./maintenance.js";
 import { renderUserCenter, renderUserCenterGuest } from "./account.js";
 import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
 import { getAdminSecurity } from "./security.js";
+import { can } from "./admin.js";
 import { getThemeChrome, publicAssetHref, bluemixNotFoundPage, type MenuItem } from "./theme-chrome.js";
 
 export type Ctx = {
@@ -239,6 +240,7 @@ async function chromeData(pathname: string) {
     },
     R.widgetAreaHtml(footerWidgets, "sk-footer-widgets"),
   );
+
   const customCss = typeof settings.customCss === "string" ? settings.customCss.trim() : "";
   const customHead = typeof settings.customHead === "string" ? settings.customHead.trim() : "";
   const customFooter =
@@ -318,18 +320,36 @@ async function sideWidgetsFor(themeSlug: string): Promise<string> {
 
 async function bmixDrawerPosts(themeSlug: string): Promise<PostView[] | undefined> {
   if (themeSlug !== "bluemix") return undefined;
+  const kvD = (globalThis as any).__rosefdKvApi?.kv;
+  const key = "sidebar:drawer";
+  const hit = kvD?.get(key) as PostView[] | undefined;
+  if (hit) return hit;
   const { items } = await listPosts({ status: "published", limit: 8 });
+  kvD?.set(key, items, 60);
   return items;
 }
 
 async function defaultSidebarData(want: boolean, showCatIcons = false): Promise<{ posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons: boolean } | undefined> {
   if (!want) return undefined;
+  const kvS = (globalThis as any).__rosefdKvApi?.kv;
+  const sKey = `sidebar:default:${showCatIcons}`;
+  const sHit = kvS?.get(sKey) as { items: PostView[]; tagRows: TaxRef[]; catRows: TaxRef[]; cfg: any } | undefined;
+  if (sHit) {
+    const { items, tagRows, catRows, cfg } = sHit;
+    return {
+      posts: items,
+      tags: tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
+      cats: catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) })),
+      showCatIcons,
+    };
+  }
   const [{ items }, tagRows, catRows, cfg] = await Promise.all([
     listPosts({ status: "published", limit: 5 }),
     listTags(),
     listCategories(),
     getPermalinkConfig(),
   ]);
+  kvS?.set(sKey, { items, tagRows, catRows, cfg }, 60);
   return {
     posts: items,
     tags: tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
@@ -380,17 +400,50 @@ async function home(ctx?: Ctx) {
   ]);
 
   const homeLimit = themeSlug === "pseudolinear" ? 30 : 12;
-  const [all, popular, random, catRows] = await Promise.all([
-    listPosts({ status: "published", limit: homeLimit }),
-    listPosts({ status: "published", limit: 4, orderBy: "views" }),
-    randomPosts(20),
-    listCategories(),
-  ]);
+  const homeKey = `home:${themeSlug}:${homeLimit}`;
+  const kv = (globalThis as any).__rosefdKvApi?.kv;
+  let all: Awaited<ReturnType<typeof listPosts>>;
+  let popular: Awaited<ReturnType<typeof listPosts>>;
+  let catRows: Awaited<ReturnType<typeof listCategories>>;
+  const cachedHome = kv?.get(homeKey) as
+    | { all: typeof all; popular: typeof popular; catRows: typeof catRows }
+    | undefined;
+  if (cachedHome) {
+    ({ all, popular, catRows } = cachedHome);
+  } else {
+    [all, popular, catRows] = await Promise.all([
+      listPosts({ status: "published", limit: homeLimit }),
+      listPosts({ status: "published", limit: 4, orderBy: "views" }),
+      listCategories(),
+    ]);
+    kv?.set(homeKey, { all, popular, catRows }, 60);
+  }
+  let random: Awaited<ReturnType<typeof randomPosts>>;
+  if (cachedHome?.random) {
+    random = cachedHome.random;
+  } else {
+    random = await randomPosts(20);
+    kv?.set(homeKey, { all, popular, catRows, random }, 60);
+  }
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const items = all.items;
   const tc = getThemeChrome(themeSlug);
 
-  const homeHead = `<link rel="canonical" href="${R.esc(ctx?.origin ?? "")}">`;
+  const origin0 = ctx?.origin ?? "";
+  const homeHead =
+    `<link rel="canonical" href="${R.esc(origin0)}">` +
+    R.jsonLd({
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      name: settings.siteTitle ?? "",
+      description: settings.siteDescription ?? "",
+      url: origin0,
+      potentialAction: {
+        "@type": "SearchAction",
+        target: `${origin0}/search?q={search_term_string}`,
+        "query-input": "required name=search_term_string",
+      },
+    });
   if (themeSlug !== "bluemix") {
     const tagRows = await listTags();
     const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
@@ -569,15 +622,19 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     listCategories(),
   ]);
   if (!category) return { notFound: true };
-
   const isSk = themeSlug === "skyscraper";
   const catPerPage = isSk ? settings.postsPerPage || 10 : themeSlug === "codeman" || themeSlug === "pseudolinear" ? 30 : 12;
-  const { items, total } = await listPosts({
+  const catKey = `cat:${payload.slug}:${page}:${themeSlug}`;
+  const kvCat = (globalThis as any).__rosefdKvApi?.kv;
+  const cachedCat = kvCat?.get(catKey) as { items: any[]; total: number } | undefined;
+  const { items, total } = cachedCat ?? await listPosts({
     status: "published",
     categorySlug: payload.slug,
     limit: catPerPage,
     offset: isSk ? (page - 1) * catPerPage : 0,
+    ...(isSk ? {} : { page }),
   });
+  if (!cachedCat) kvCat?.set(catKey, { items, total }, 120);
   const totalPages = Math.max(1, Math.ceil(total / catPerPage));
   const catUrl = categoryUrlFor(cfg, category);
   const pluginHead = await pluginHeadHtml({
@@ -624,8 +681,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
       sidebarData: await defaultSidebarData(themeSlug === "default", ts.useCustomIcons === true),
       settings,
       themeSettings: ts,
-      
-      
+
       titleIcon: themeSlug === "bluemix"
         ? (ts.useCustomIcons !== false ? category.icon : null)
         : (ts.useCustomIcons === true ? category.icon : null),
@@ -644,9 +700,7 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
     getActiveThemeSettings(),
   ]);
   if (!tag) return { notFound: true };
-  
-  
-  
+
   const isSk = themeSlug === "skyscraper";
   const tagPerPage = isSk ? settings.postsPerPage || 10 : 12;
   const { items, total } = await listPosts({
@@ -670,15 +724,14 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
     ],
   });
   const tc = getThemeChrome(themeSlug);
-  
-  
+
   const contentTc = isSk ? tc : getThemeChrome("default");
   return {
     headTitle: `标签：#${tag.name} - ${settings.siteTitle ?? ""}`,
     pluginHead,
     main: contentTc.listPage({
       title: `标签：#${tag.name}`,
-      
+
       sub: isSk ? `共 ${total} 篇 · 第 ${page}/${totalPages} 页` : "",
       items,
       page,
@@ -688,7 +741,7 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
       variant: "term",
       widgets: await sideWidgetsFor(themeSlug),
       drawerPosts: await bmixDrawerPosts(themeSlug),
-      
+
       sidebarData: await defaultSidebarData(!isSk, ts.useCustomIcons === true),
       settings,
       themeSettings: ts,
@@ -702,11 +755,7 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   const cleaned = q;
   const settings0 = await getSettings();
   const themeSlug = await getActiveThemeSlug();
-  
-  
-  
-  
-  
+
   const isBm = themeSlug === "bluemix";
   const isSk = themeSlug === "skyscraper";
   const perPage = isBm
@@ -739,21 +788,40 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
       : "";
   const settings = await getSettings();
   const ts = await getActiveThemeSettings();
-  
-  
+
   const searchSiteTitle = settings.siteTitle ?? "";
+  const searchHighlight =
+    `<script>(function(){var done=false;function run(){if(done)return;done=true;` +
+    `var m=location.search.match(/[?&]q=([^&]*)/);if(!m)return;var q;` +
+    `try{q=decodeURIComponent(m[1])}catch(e){return}` +
+    `var words=q.trim().split(/\\s+/).filter(function(w){return w.length>0})` +
+    `.map(function(w){return w.replace(/[.*+?^\${}()|[\\]\\\\]/g,'\\\\$&')});` +
+    `if(!words.length)return;` +
+    `var re=new RegExp('('+words.join('|')+')','gi');` +
+    `var has=new RegExp(words.join('|'),'i');` +
+    `var root=document.querySelector('main')||document.body;if(!root)return;` +
+    `var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(n){` +
+    `var p=n.parentNode;if(!p||/^(script|style|mark)$/i.test(p.nodeName))return NodeFilter.FILTER_REJECT;` +
+    `return n.nodeValue&&has.test(n.nodeValue)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;}});` +
+    `var hits=[];while(w.nextNode())hits.push(w.currentNode);` +
+    `hits.forEach(function(n){var s=n.nodeValue,last=0,mm,frag=document.createDocumentFragment();` +
+    `re.lastIndex=0;while((mm=re.exec(s))){if(mm.index>last)frag.appendChild(document.createTextNode(s.slice(last,mm.index)));` +
+    `var mk=document.createElement('mark');mk.textContent=mm[0];frag.appendChild(mk);` +
+    `last=mm.index+mm[0].length;if(!mm[0].length)re.lastIndex++;}` +
+    `if(last<s.length)frag.appendChild(document.createTextNode(s.slice(last)));` +
+    `if(n.parentNode)n.parentNode.replaceChild(frag,n);});}` +
+    `if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run);else run();})();</script>`;
   const searchHead =
     `<meta property="og:url" content="${R.esc(ctx?.origin ?? "")}">` +
     `<meta property="og:site_name" content="${R.esc(searchSiteTitle)}">` +
-    `<meta property="og:locale" content="zh_CN">`;
+    `<meta property="og:locale" content="zh_CN">` +
+    searchHighlight;
   return {
     head: searchHead,
     main: getThemeChrome(themeSlug || "skyscraper").listPage({
-      
-      
+
       title: cleaned ? (isBm ? `搜索 “${cleaned}” · ${total} 篇` : `搜索：“${cleaned}”`) : "搜索",
-      
-      
+
       sub: isBm || themeSlug === "codeman" || themeSlug === "pseudolinear"
         ? ""
         : cleaned
@@ -774,7 +842,7 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
       query: cleaned,
       widgets: await sideWidgetsFor(themeSlug),
       drawerPosts: await bmixDrawerPosts(themeSlug),
-      
+
       sidebarData: await defaultSidebarData(themeSlug === "default", ts.useCustomIcons === true),
       settings,
       themeSettings: ts,
@@ -784,11 +852,19 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
 }
 
 async function postDetail(payload: { slug: string }, ctx: Ctx) {
-  const post = await getPost(payload.slug);
+  let post = await getPost(payload.slug);
+  let previewing = false;
+  if (!post && ctx?.user) {
+    const u = ctx.user as { id: number; role: import("./schema.js").Role };
+    const candidate = await getPost(payload.slug, { preview: true });
+    if (candidate && (can(u.role, "content:update:any") || candidate.authorId === u.id)) {
+      post = candidate;
+      previewing = true;
+    }
+  }
   if (!post) return { notFound: true };
   const themeSlug0 = await getActiveThemeSlug();
-  
-  
+
   const relatedN = themeSlug0 === "codeman" || themeSlug0 === "pseudolinear" ? 5 : 4;
   const [related, settings, items, themeSlug, popular, random, cfg] = await Promise.all([
     relatedPosts(post, relatedN),
@@ -799,8 +875,7 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     randomPosts(12),
     getPermalinkConfig(),
   ]);
-  
-  
+
   const relatedTaxonomy =
     themeSlug === "default" ? await relatedByTaxonomy(post.id, 4) : undefined;
   if (ctx.ip || ctx.ua) {
@@ -847,8 +922,7 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     ],
   };
   const tc = getThemeChrome(themeSlug);
-  
-  
+
   const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
   const bodyHtml = await R.buildPostBody(post, "post", highlight);
   const metaHtml = metaPayload.items.length
@@ -858,15 +932,14 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     ? `<div style="margin-top:32px;display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border);padding-top:24px">${(post.tags || []).map((t) => `<a href="${R.esc(t.url || tagUrlFor(cfg, t))}" style="font-size:12px;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:4px 12px;border-radius:9999px">#${R.esc(t.name)}</a>`).join("")}</div>`
     : "";
   const shareHtml = R.shareBar(post, settings.siteTitle ?? "", settings.siteDescription ?? "");
-  
-  
+
   const defMetaHtml = metaPayload.items.length
     ? `<div class="mt-2 flex flex-wrap items-center gap-4 text-sm text-[var(--muted)]">${metaPayload.items.map((m) => `<span>${R.esc(m.label)}：${R.esc(m.value)}</span>`).join("")}</div>`
     : "";
   const defTagsHtml = (post.tags || []).length
     ? `<div class="mt-8 flex flex-wrap gap-2 border-t border-[var(--border)] pt-6">${(post.tags || []).map((t) => `<a href="${R.esc(t.url || tagUrlFor(cfg, t))}" class="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]">#${R.esc(t.name)}</a>`).join("")}</div>`
     : "";
-  
+
   const isDefault = themeSlug === "default";
   const isBluemix = themeSlug === "bluemix";
   let postBottom = "";
@@ -881,8 +954,13 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
     sidebarWidgets = R.widgetAreaHtml(sideItems, isBluemix ? "bmx-ad-area" : "space-y-6");
     if (isDefault) ts = await getActiveThemeSettings();
   }
+  const previewBanner = previewing
+    ? `<div style="position:fixed;top:0;left:0;right:0;z-index:2147483000;background:#d97706;color:#fff;padding:6px 16px;text-align:center;font:600 14px/1.5 system-ui,sans-serif">` +
+      `Preview mode: this content is not yet published (status: ${R.esc(post.status)}${post.publishedAt && new Date(post.publishedAt) > new Date() ? `, scheduled for ${new Date(post.publishedAt).toLocaleString("zh-CN")}` : ""}) — visible to administrators and the author only` +
+      `</div>`
+    : "";
   return {
-    main: tc.postPage({
+    main: previewBanner + tc.postPage({
       post,
       bodyHtml,
       related,
@@ -900,7 +978,7 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
       widgets: await sideWidgetsFor(themeSlug),
       postBottom,
       sidebarWidgets,
-      
+
       sidebarData: isDefault ? await defaultSidebarData(true, ts?.useCustomIcons === true) : undefined,
       settings,
       canonical: `${ctx.origin}${post.url}`,
@@ -914,7 +992,7 @@ async function postDetail(payload: { slug: string }, ctx: Ctx) {
 async function pageDetail(payload: { slug: string }, ctx: Ctx) {
   const page = await getPublishedPage(payload.slug);
   if (!page) return { notFound: true };
-  
+
   const recentLimit = (await getActiveThemeSlug()) === "bluemix" ? 4 : 5;
   const [settings, recent, items, themeSlug] = await Promise.all([
     getSettings(),
@@ -954,7 +1032,7 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
     ],
   };
   const tc = getThemeChrome(themeSlug);
-  
+
   const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
   return {
     main: tc.pagePage({
@@ -962,7 +1040,7 @@ async function pageDetail(payload: { slug: string }, ctx: Ctx) {
       bodyHtml: await R.buildPostBody(page, "page", highlight),
       recent: recent.items,
       commentsHtml,
-      
+
       widgets: await sideWidgetsFor(themeSlug),
     }),
     head:
@@ -997,19 +1075,31 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
   const year = Number(payload.year) || 0;
   const month = Number(payload.month) || 0;
   const esc = R.esc;
-  const [settings, index] = await Promise.all([getSettings(), archiveGroups()]);
-  const { total } = await listPosts({ status: "published", limit: 1, pinned: false });
+  const archKey = `archives:${year}:${month}`;
+  const kv = (globalThis as any).__rosefdKvApi?.kv;
+  const cached = kv?.get(archKey) as
+    | { settings: any; index: any; total: number; items: any[] }
+    | undefined;
+  let settings: any;
+  let index: any;
+  let total: number;
+  let items: any[];
+  if (cached) {
+    ({ settings, index, total, items } = cached);
+  } else {
+    [settings, index] = await Promise.all([getSettings(), archiveGroups()]);
+    ({ total } = await listPosts({ status: "published", limit: 1, pinned: false }));
+    ({ items } = await listPosts({
+      status: "published",
+      year: year || undefined,
+      month: month && month >= 1 && month <= 12 ? month : undefined,
+      limit: 1000,
+      pinned: false,
+    }));
+    kv?.set(archKey, { settings, index, total, items }, 300);
+  }
   const filtered = !!(year || month);
 
-  const { items } = await listPosts({
-    status: "published",
-    year: year || undefined,
-    month: month && month >= 1 && month <= 12 ? month : undefined,
-    limit: 1000,
-    pinned: false,
-  });
-
-  
   const buckets = new Map<string, typeof items>();
   for (const e of items) {
     const d = e.publishedAt ? new Date(e.publishedAt) : null;
@@ -1085,17 +1175,14 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
     `</div>${aside}</div>`;
 
   const siteTitle = settings.siteTitle ?? "";
-  
-  
-  
+
   const head =
     `<meta name="description" content="${esc(siteTitle)} 的全部文章按时间归档">` +
     `<meta property="og:url" content="${esc(ctx?.origin ?? "")}">` +
     `<meta property="og:site_name" content="${esc(siteTitle)}">` +
     `<meta property="og:locale" content="zh_CN">`;
   return {
-    
-    
+
     headTitle: `文章归档 - ${siteTitle}`,
     head,
     main,
@@ -1143,11 +1230,14 @@ async function feed(ctx: Ctx): Promise<string> {
         const extra = full
           ? `\n      <content:encoded>${cdata(await R.buildPostBody(p, kind))}</content:encoded>`
           : "";
+        const cats = "author" in p && p.tags?.length
+          ? p.tags.map((t) => `\n      <category>${escXml(t.name)}</category>`).join("")
+          : "";
         return (
           `    <item>\n      <title>${escXml(p.title)}</title>\n      <link>${escXml(ctx.origin)}${escXml(p.url)}</link>` +
           `\n      <guid>${escXml(ctx.origin)}${escXml(p.url)}</guid>` +
           `\n      <pubDate>${(p.publishedAt ? new Date(p.publishedAt) : new Date()).toUTCString()}</pubDate>` +
-          `\n      <description>${escXml(p.excerpt ?? "")}</description>${extra}\n    </item>`
+          `\n      <description>${escXml(p.excerpt ?? "")}</description>${cats}${extra}\n    </item>`
         );
       }),
     )
@@ -1453,7 +1543,9 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
       break;
   }
   if (out.notFound) return null;
-  return { kind: res.kind === "blogIndex" ? "blog" : res.kind, ...out };
+  const chrome = await loaders.chrome({}, ctx);
+
+  return { kind: res.kind === "blogIndex" ? "blog" : res.kind, ...out, bodyOpen: chrome.bodyOpen, bodyClose: chrome.bodyClose };
 }
 
 async function loginCard() {

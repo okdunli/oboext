@@ -14,6 +14,7 @@
  */
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
+import { invalidateContentCaches } from "./cache.js";
 import {
   posts,
   pages,
@@ -443,6 +444,7 @@ export async function createPost(user: SessionUser, input: PostInput) {
     .returning();
   await setTaxonomies(row.id, normIds(input.categoryIds), normIds(input.tagIds));
   if (input.metas) await setPostMetas(row.id, normMetas(input.metas));
+  invalidateContentCaches();
   return adminGetPost(user, row.id);
 }
 
@@ -509,6 +511,7 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
   if (input.categoryIds || input.tagIds)
     await setTaxonomies(id, normIds(input.categoryIds), normIds(input.tagIds));
   if (input.metas !== undefined) await setPostMetas(id, normMetas(input.metas));
+  invalidateContentCaches();
   return adminGetPost(user, id);
 }
 
@@ -517,6 +520,7 @@ export async function deletePost(user: SessionUser, id: number) {
   if (!canModifyContent(user.role, existing.authorId, user.id))
     throw new ServiceError("权限不足", 403);
   await db.delete(posts).where(eq(posts.id, id));
+  invalidateContentCaches();
   return { id };
 }
 
@@ -796,6 +800,7 @@ export async function updateComment(
       await bumpCommentCount(existing.postType, existing.postId, -1);
   }
   const [row] = await db.select().from(comments).where(eq(comments.id, id));
+  invalidateContentCaches();
   return row;
 }
 
@@ -807,6 +812,7 @@ export async function deleteComment(user: SessionUser | null, id: number) {
   if (existing.status === "published")
     await bumpCommentCount(existing.postType, existing.postId, -1);
   await db.delete(comments).where(eq(comments.id, id));
+  invalidateContentCaches();
   return { id };
 }
 
@@ -886,6 +892,7 @@ export async function createCategory(
       parentId: input.parentId ?? null,
     })
     .returning();
+  invalidateContentCaches();
   return row;
 }
 
@@ -916,6 +923,7 @@ export async function updateCategory(
     })
     .where(eq(categories.id, id));
   const [row] = await db.select().from(categories).where(eq(categories.id, id));
+  invalidateContentCaches();
   return row;
 }
 
@@ -923,6 +931,7 @@ export async function deleteCategory(user: SessionUser, id: number) {
   requireCap(user, "taxonomy:manage");
   await db.update(categories).set({ parentId: null }).where(eq(categories.parentId, id));
   await db.delete(categories).where(eq(categories.id, id));
+  invalidateContentCaches();
   return { id };
 }
 
@@ -947,6 +956,7 @@ export async function createTag(user: SessionUser, input: { name: string; slug?:
   const base = slugify(input.slug || name);
   const slug = uniqueSlug(base, await takenTagSlugs(base));
   const [row] = await db.insert(tags).values({ name, slug }).returning();
+  invalidateContentCaches();
   return row;
 }
 
@@ -966,12 +976,14 @@ export async function updateTag(user: SessionUser, id: number, input: Partial<{ 
     .set({ name: input.name ?? existing.name, slug })
     .where(eq(tags.id, id));
   const [row] = await db.select().from(tags).where(eq(tags.id, id));
+  invalidateContentCaches();
   return row;
 }
 
 export async function deleteTag(user: SessionUser, id: number) {
   requireCap(user, "taxonomy:manage");
   await db.delete(tags).where(eq(tags.id, id));
+  invalidateContentCaches();
   return { id };
 }
 
@@ -1025,6 +1037,9 @@ export async function updateSettings(user: SessionUser, input: Record<string, un
     .where(eq(siteSettings.id, 1))
     .returning();
   invalidateSettings();
+  if (typeof input.activeThemeSlug === "string") {
+    invalidateRenderCache();
+  }
   return row;
 }
 

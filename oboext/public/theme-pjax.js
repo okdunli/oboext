@@ -10,8 +10,11 @@
  *           (5 bouncing bars) while the fetch is in flight (OVERLAY_MIN_MS=450)
  *         → swap innerHTML, frame.pf-enter (content descends from above)
  *         → body.bmx-nav-done then cleared.
- * Other themes keep the previous simple swap (their own entrance keyframe —
- * pl-rise / cm-typein — still replays because the root scrolls itself in).
+ * Other themes now use a brief fade-out → swap → fade-in animation
+ * (180ms each way) so cross-page navigation is visibly smooth even when the
+ * theme's own entrance keyframe (pl-rise / cm-typein) would otherwise not
+ * replay — the root scrolls itself in but the content area still needs a
+ * transition cue.
  */
 (function () {
   "use strict";
@@ -161,7 +164,13 @@
         main.innerHTML = got.next.innerHTML;
       }
     } else {
+      main.style.transition = "opacity 180ms ease";
+      main.style.opacity = "0";
+      await wait(180);
+      if (s !== seq) return;
       main.innerHTML = got.next.innerHTML;
+      main.getBoundingClientRect();
+      main.style.opacity = "1";
     }
     const t = got.doc.querySelector("title");
     if (t) document.title = t.textContent;

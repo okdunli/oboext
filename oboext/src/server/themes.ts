@@ -465,6 +465,7 @@ export async function setActiveTheme(id: number): Promise<Theme> {
     .update(siteSettings)
     .set({ activeThemeSlug: theme.slug, updatedAt: new Date() })
     .where(eq(siteSettings.id, 1));
+  invalidateThemeDiscovery();
   return theme;
 }
 

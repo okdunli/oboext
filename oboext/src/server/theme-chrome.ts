@@ -192,10 +192,10 @@ let cssCache = new Map<string, { css: string; mtime: number }>();
 function readThemeCss(slug: string, file: string): { css: string; mtime: number } {
   const key = slug + ":" + file;
   const cached = cssCache.get(key);
-  if (cached) return cached;
   try {
     const fp = path.join(THEMES_DIR, slug, file);
     const st = fs.statSync(fp);
+    if (cached && cached.mtime === st.mtimeMs) return cached;
     const css = fs.readFileSync(fp, "utf-8");
     const entry = { css, mtime: st.mtimeMs };
     cssCache.set(key, entry);

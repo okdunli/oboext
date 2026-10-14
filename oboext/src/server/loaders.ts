@@ -1,18 +1,11 @@
-/**
- * Isomorphic view-model layer.
- *
- * Server: pages call `__rvLoad(key, payload)` (injected by rosezm.config.js),
- * which dispatches into this map with the per-request context bag.
- * Browser: the same helper GETs /api/data, whose handler calls dispatch().
- * Nothing here ever reaches the client bundle (api/data.rose is server-only).
- *
- * Every loader reads the live database on demand. No snapshots, no baking.
- */
+// Isomorphic view-model layer.
 import {
   archiveGroups,
+  archiveItems,
   counts,
   getCategoryBySlug,
-  getPost,
+  getPostRow,
+  hydrate,
   getSettings,
   getTagBySlug,
   incrementViews,
@@ -20,19 +13,22 @@ import {
   listCategories,
   listPosts,
   listPostComments,
+  listPostCommentsCached,
   listTags,
   popularPosts,
   randomPosts,
   relatedPosts,
   relatedByTaxonomy,
+  searchSingleHit,
   type PostView,
+  type PostRow,
   type TaxRef,
 } from "./queries.js";
 import { dbStats } from "./db.js";
 import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, resolveSitePath, paginate, type PermalinkConfig } from "./links.js";
 import { resolveVirtualRoute, type VirtualSiteRoute } from "./virtual-routes.js";
 import { resolveCommentConfig } from "./comments-config.js";
-import { getPublishedPage, listPublishedPages } from "./pages.js";
+import { getPublishedPageRow, hydrate as hydratePage, listPublishedPages } from "./pages.js";
 import * as R from "./render.js";
 import * as admin from "./admin-loaders.js";
 import { getMenuByLocation } from "./menus.js";
@@ -43,6 +39,7 @@ import { skyscraperBridgeRoot, skyscraperBridgeDark } from "./theme-bridge.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { getNotFoundSettings } from "./not-found-config.js";
+import { memoQuery, peekMemo } from "./cache.js";
 import { getPublicRegisterConfig } from "./members.js";
 import { maintenanceGate, type MaintenanceSettings } from "./maintenance.js";
 import { renderUserCenter, renderUserCenterGuest } from "./account.js";
@@ -60,6 +57,8 @@ export type Ctx = {
   user?: unknown;
 };
 
+// ------------------------------------------------------------- plugin hooks
+
 export type HeadContext = {
   kind: "home" | "post" | "page" | "archive" | "taxonomy" | "search";
   siteTitle: string;
@@ -74,9 +73,12 @@ export type HeadContext = {
   breadcrumbs?: { label: string; href: string }[];
 };
 
-async function pluginFooterHtml(): Promise<string> {
+async function pluginFooterHtml(kind: string): Promise<string> {
   await ensurePluginsLoaded();
-  const payload = applyFilters<{ html: string[] }>(HOOKS.footerHtml, { html: [] });
+  const payload = applyFilters<{ html: string[]; kind: string }>(HOOKS.footerHtml, {
+    html: [],
+    kind,
+  });
   const joined = payload.html.join("\n");
   if (!joined) return "";
   return `<div id="oboe-footer-hooks" aria-hidden="true" style="display:none">${joined}</div>`;
@@ -169,14 +171,43 @@ function chromeSkipsHead(pathname: string, cfg: PermalinkConfig): boolean {
   return bases.some((b) => pathname.indexOf(b + "/") === 0);
 }
 
+function chromePageKind(pathname: string, cfg: PermalinkConfig): string {
+  if (pathname === "/") return "home";
+  if (pathname.indexOf("/search") === 0) return "search";
+  const base = (b: string) => ("/" + b).replace(/\/+$/, "") + "/";
+  if (cfg.postBase && pathname.indexOf(base(cfg.postBase)) === 0) return "post";
+  if (cfg.pageBase && pathname.indexOf(base(cfg.pageBase)) === 0) return "page";
+  if (cfg.categoryBase && pathname.indexOf(base(cfg.categoryBase)) === 0) return "taxonomy";
+  if (cfg.tagBase && pathname.indexOf(base(cfg.tagBase)) === 0) return "taxonomy";
+  return "archive";
+}
+
 const pageNum = (v: unknown): number => Math.max(1, Number(v) || 1);
 
+// ------------------------------------------------------------------- chrome
+
+// Built-in sidebar used until an admin defines a "sidebar" menu; mirrors
+// SKY_SIDEBAR_FALLBACK in themes/skyscraper/Layout.tsx, with the index URL
+// driven by the permalink config so a renamed prefix rewires it too.
 const sidebarFallback = (cfg: PermalinkConfig): R.SkyItem[] => [
   { id: "s1", label: "首页", url: "/" },
   { id: "s2", label: "所有文章", url: blogIndexUrlFor(cfg) },
 ];
 
+// Plain trusted-string chrome pieces. chrome() hands them to the .rose
+// templates (emitted via {@html}); the 404 route rides the same chrome
+// through the framework's normal render pipeline.
 async function chromeData(pathname: string) {
+  // The two widget-area reads gate on the theme slug; chaining them off a
+  // pre-issued themeSlug promise folds the old second wave into the opening
+  // one. They used to issue only after every read below had resolved - a
+  // full extra RTT whenever the 30s sidebar memos had expired.
+  const themeSlugP = safe(getActiveThemeSlug());
+  const widgetsP = safe(
+    themeSlugP.then((s) =>
+      Promise.all([getAreaWidgets(s, "sidebar"), getAreaWidgets(s, "footer")]),
+    ),
+  );
   const [
     settings,
     tagRows,
@@ -196,16 +227,28 @@ async function chromeData(pathname: string) {
     popularPosts(5),
     getPermalinkConfig(),
     getMenuByLocation("sidebar"),
-    getActiveThemeSlug(),
+    themeSlugP,
     getActiveThemeRenderConfig(),
     getActiveThemeSettings(),
     getMenuByLocation("header"),
     getMenuByLocation("footer"),
   ]);
-  const [sideWidgets, footerWidgets] = await Promise.all([
-    getAreaWidgets(themeSlug, "sidebar"),
-    getAreaWidgets(themeSlug, "footer"),
-  ]);
+  const [sideWidgets, footerWidgets] = await widgetsP;
+  // Active-theme design tokens, emitted after /public/theme.css so saved
+  // overrides win. customCss is admin-authored and follows on purpose.
+  // Public paths only — admin keeps its own admin.css design.
+  //
+  // FRAMEWORK LIMITATION (rosezm 0.2.3, reported in rosezm/BUG.md):
+  // <head> blocks merge ONLY title/meta/link/base — mergeHeadBlocks
+  // (shell.ts) regexes those tags and the client applyHead() requires a
+  // name/property/rel/charset attribute — so a <style> in <head> is silently
+  // dropped on both server and client. The :root variables ride the proven
+  // body raw-HTML channel at the top of <body> instead; a :root selector
+  // applies identically from a body-positioned stylesheet (HTML5 allows
+  // <style> in body), so the visual result is pixel-identical.
+  // Skyscraper's stylesheet consumes its private --sk-* scale; derive it
+  // from the saved generic tokens so the appearance panel actually repaints
+  // (light + dark blocks). See theme-bridge.ts.
   const skBase = (getThemeManifest(themeSlug)?.config ?? {}) as Parameters<
     typeof skyscraperBridgeRoot
   >[1];
@@ -229,11 +272,16 @@ async function chromeData(pathname: string) {
   const menuItems: R.SkyItem[] =
     sideMenu && sideMenu.items.length ? (sideMenu.items as R.SkyItem[]) : sidebarFallback(cfg);
   const tc = getThemeChrome(themeSlug);
+  // Theme JS, mtime-stamped. Built here (not as `{chrome().x}` attributes in
+  // the .rose layout) because the template compiler only interpolates
+  // attributes it can resolve statically — a raw-HTML channel is the proven
+  // path (same as bodyFix/nav/bodyOpen).
   const themeScripts =
-    (themeSlug === "skyscraper" ? `<script src="/public/theme.js"></script>` : "") +
-    (themeSlug !== "skyscraper" ? `<script src="${publicAssetHref("theme-pjax.js")}"></script>` : "") +
-    (themeSlug === "bluemix" ? `<script src="${publicAssetHref("theme-bluemix.js")}"></script>` : "") +
-    `<script src="${publicAssetHref("comments.js")}"></script>`;
+    `<script src="${publicAssetHref("csrf.js")}" defer></script>` +
+    (themeSlug === "skyscraper" ? `<script src="${publicAssetHref("theme.js")}" defer></script>` : "") +
+    (themeSlug !== "skyscraper" ? `<script src="${publicAssetHref("theme-pjax.js")}" defer></script>` : "") +
+    (themeSlug === "bluemix" ? `<script src="${publicAssetHref("theme-bluemix.js")}" defer></script>` : "") +
+    `<script src="${publicAssetHref("comments.js")}" defer></script>`;
   const headerItems: MenuItem[] = (headerMenu?.items ?? []) as MenuItem[];
 
   const footerHtml = tc.footer(
@@ -245,6 +293,10 @@ async function chromeData(pathname: string) {
     R.widgetAreaHtml(footerWidgets, "sk-footer-widgets"),
   );
 
+  // renders customCss + customHead at body open and customFooter + the
+  // analytics tag at body end, so the same markup order is kept here. Both
+  // ride raw-HTML channels: <style>/<script> in <head> are dropped by the
+  // framework's head merge, body-positioned ones are not.
   const customCss = typeof settings.customCss === "string" ? settings.customCss.trim() : "";
   const customHead = typeof settings.customHead === "string" ? settings.customHead.trim() : "";
   const customFooter =
@@ -263,6 +315,10 @@ async function chromeData(pathname: string) {
     siteBodyEnd,
     themeSlug,
     cssHref: tc.cssHref(),
+    // The inlined copy of the same stylesheet. Optional on the interface: a
+    // theme that does not implement cssInline() yields "", and the layout then
+    // emits only the <link>. Called through the same tc the rest of the chrome
+    // comes from, so the two cannot drift onto different themes.
     cssInline: tc.cssInline ? tc.cssInline() : "",
     themeScripts,
     bodyFix: tc.bodyFix() + siteBodyOpen,
@@ -293,8 +349,9 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
   const [d, cfg] = await Promise.all([chromeData(pathname), getPermalinkConfig()]);
   const isAdmin = pathname.indexOf("/admin") === 0;
   const blogIndex = blogIndexUrlFor(cfg);
+  // Independent reads: fetch them together instead of two serial awaits.
   const [pluginFooterRaw, pluginHead] = await Promise.all([
-    isAdmin ? "" : pluginFooterHtml(),
+    isAdmin ? "" : pluginFooterHtml(chromePageKind(pathname, cfg)),
     isAdmin || chromeSkipsHead(pathname, cfg)
       ? ""
       : pluginHeadHtml(chromeHeadContext(pathname, d.siteTitle, origin, blogIndex)),
@@ -330,6 +387,10 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
   };
 }
 
+// --------------------------------------------------------------------- home
+
+// -------- bluemix home helpers (mirror themes/bluemix/HomePage.tsx logic) --------
+
 async function sideWidgetsFor(themeSlug: string): Promise<string> {
 
   if (themeSlug !== "codeman" && themeSlug !== "pseudolinear") return "";
@@ -339,6 +400,8 @@ async function sideWidgetsFor(themeSlug: string): Promise<string> {
 
 async function bmixDrawerPosts(themeSlug: string): Promise<PostView[] | undefined> {
   if (themeSlug !== "bluemix") return undefined;
+  // Sidebar reads run on every page: memoize 60s (new posts surface on the
+  // next refresh, and the drawer is not a feed).
   const kvD = (globalThis as any).__rosezmKvApi?.kv;
   const key = "sidebar:drawer";
   const hit = kvD?.get(key) as PostView[] | undefined;
@@ -363,6 +426,8 @@ async function defaultSidebarData(want: boolean, showCatIcons = false): Promise<
       catCounts: catCounts ?? new Map<number, number>(),
     };
   }
+  // The counts ride the same Promise.all as the rows: one more scalar query
+  // next to the taxonomy reads, rather than a round trip per category.
   const [{ items }, tagRows, catRows, cfg, catCounts] = await Promise.all([
     listPosts({ status: "published", limit: 5 }),
     listTags(),
@@ -414,43 +479,60 @@ function bmToRankPost(p: any): { id: number; url: string; title: string; thumbna
   };
 }
 
-async function home(ctx?: Ctx) {
-  const [settings, themeSlug, cfg] = await Promise.all([
-    getSettings(),
-    getActiveThemeSlug(),
-    getPermalinkConfig(),
-  ]);
+type HomeBundle = {
+  all: Awaited<ReturnType<typeof listPosts>>;
+  popular: Awaited<ReturnType<typeof listPosts>>;
+  catRows: Awaited<ReturnType<typeof listCategories>>;
+  random: Awaited<ReturnType<typeof randomPosts>>;
+};
 
-  const homeLimit = themeSlug === "pseudolinear" ? 30 : 12;
-  const homeKey = `home:${themeSlug}:${homeLimit}`;
+async function home(ctx?: Ctx) {
+  // Everything home reads is independent of everything else it reads: the old
+  // shape gated three waves behind each other (settings/themeSlug first, the
+  // list queries second, the sidebar batch third), so a cold home paid ~3
+  // Neon RTTs on top of each list's own hydration. One Promise.all now issues
+  // every main query at once; only the lists' hydration (it needs the post
+  // ids first) still forms a second wave. homeLimit was the one real
+  // coupling - resolved by always fetching the pseudolinear maximum (30) and
+  // slicing per theme below. Reads that used to be gated on themeSlug (theme
+  // settings, per-category counts) run unconditionally: they ride the same
+  // wave, so an unused read costs server work but no wall time.
+  // The bundle (lists + categories + shuffle pool) is theme-independent and
+  // memoized through the framework KV primitive for 60s - a shuffle that
+  // changes once a minute is still a shuffle to any visitor.
   const kv = (globalThis as any).__rosezmKvApi?.kv;
-  let all: Awaited<ReturnType<typeof listPosts>>;
-  let popular: Awaited<ReturnType<typeof listPosts>>;
-  let catRows: Awaited<ReturnType<typeof listCategories>>;
-  const cachedHome = kv?.get(homeKey) as
-    | { all: typeof all; popular: typeof popular; catRows: typeof catRows }
-    | undefined;
-  if (cachedHome) {
-    ({ all, popular, catRows } = cachedHome);
-  } else {
-    [all, popular, catRows] = await Promise.all([
-      listPosts({ status: "published", limit: homeLimit }),
-      listPosts({ status: "published", limit: 4, orderBy: "views" }),
-      listCategories(),
+  const cachedHome = kv?.get("home:bundle") as HomeBundle | undefined;
+  // Widget area chains off the themeSlug read: the re-read rides the opening
+  // wave, and for themes that render sidebar widgets (codeman, pseudolinear)
+  // the area query issues mid-wave instead of after it. Returns "" without
+  // querying for the other themes (default, skyscraper, bluemix).
+  const widgetsP = getActiveThemeSlug().then(sideWidgetsFor);
+  const [settings, themeSlug, cfg, tagRows, ts, catCounts, all, popular, catRows, random] =
+    await Promise.all([
+      getSettings(),
+      getActiveThemeSlug(),
+      getPermalinkConfig(),
+      listTags(),
+      getActiveThemeSettings(),
+      categoryPostCounts(),
+      cachedHome ? Promise.resolve(cachedHome.all) : listPosts({ status: "published", limit: 30 }),
+      cachedHome
+        ? Promise.resolve(cachedHome.popular)
+        : listPosts({ status: "published", limit: 4, orderBy: "views" }),
+      cachedHome ? Promise.resolve(cachedHome.catRows) : listCategories(),
+      cachedHome ? Promise.resolve(cachedHome.random) : randomPosts(20),
     ]);
-    kv?.set(homeKey, { all, popular, catRows }, 60);
-  }
-  let random: Awaited<ReturnType<typeof randomPosts>>;
-  if (cachedHome?.random) {
-    random = cachedHome.random;
-  } else {
-    random = await randomPosts(20);
-    kv?.set(homeKey, { all, popular, catRows, random }, 60);
-  }
+  if (!cachedHome) kv?.set("home:bundle", { all, popular, catRows, random }, 60);
+  const homeLimit = themeSlug === "pseudolinear" ? 30 : 12;
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
-  const items = all.items;
+  const items = all.items.slice(0, homeLimit);
   const tc = getThemeChrome(themeSlug);
 
+  // non-bluemix themes render from the slim hero/latest split; skip the extra
+  // queries so their home stays cheap.
+  // mirror buildEntityMetadata(kind:"home")：canonical = origin。
+  // WebSite JSON-LD rides the home head: SearchAction is only truthful here
+  // (the /search route is the sitewide query target).
   const origin0 = ctx?.origin ?? "";
   const homeHead =
     `<link rel="canonical" href="${R.esc(origin0)}">` +
@@ -467,11 +549,10 @@ async function home(ctx?: Ctx) {
       },
     });
   if (themeSlug !== "bluemix") {
-    const tagRows = await listTags();
+    // tagRows/ts/catCounts ride the opening wave (see above); widgetsP was
+    // issued alongside it.
+    const widgets = await widgetsP;
     const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
-
-const ts = themeSlug === "pseudolinear" || themeSlug === "default" ? await getActiveThemeSettings() : undefined;
-    const catCounts = themeSlug === "default" ? await categoryPostCounts() : undefined;
     return {
       head: homeHead,
       main: tc.home({
@@ -481,17 +562,19 @@ const ts = themeSlug === "pseudolinear" || themeSlug === "default" ? await getAc
         liked: popular.items,
         random,
         cats,
-tags,
+        tags,
         catCounts,
         total: all.total,
-        widgets: await sideWidgetsFor(themeSlug),
+        widgets,
         settings,
         themeSettings: ts,
       }),
     };
   }
 
-  const ts = await getActiveThemeSettings();
+  // ---- bluemix full two-column home (banner + sidebar + catnav + rankings + sections) ----
+  // `ts` rides the opening wave (see top of home()); the rest of the branch
+  // below depends on it only through pure-JS row building.
   const blogIndex = blogIndexUrlFor(cfg);
   const showHero = ts.showHero !== false;
   const recentCount = bmClamp(ts.homeRecentCount, 8, 1, 24);
@@ -512,28 +595,39 @@ tags,
       rows.push({ category, title: String(r?.title ?? "").trim() || category.name, icon: typeof r?.icon === "string" && r.icon.trim() ? r.icon.trim() : null });
     }
   }
-  const [recent, ...sectionLists] = await Promise.all([
+  // recent, the per-category sections, the three ranking lists and the two
+  // widget areas are mutually independent once `ts` is known - one wave
+  // instead of three (each used to be a full Neon RTT on a cold home).
+  const showRankings = ts.showRankings !== false;
+  type RankList = Awaited<ReturnType<typeof listPosts>>;
+  // Array destructuring cannot place a rest element mid-pattern, so the
+  // combined wave is sliced by index (rows.length is dynamic).
+  const results = await Promise.all([
     listPosts({ status: "published", limit: Math.max(recentCount, bannerMax, 8) }),
     ...rows.map((r) => listPosts({ status: "published", categorySlug: r.category.slug, limit: catCount })),
-  ]);
+    showRankings ? listPosts({ status: "published", orderBy: "comments", limit: 3, pinned: false }) : Promise.resolve(undefined),
+    showRankings ? listPosts({ status: "published", orderBy: "likes", limit: 3, pinned: false }) : Promise.resolve(undefined),
+    showRankings ? listPosts({ status: "published", orderBy: "views", limit: 3, pinned: false }) : Promise.resolve(undefined),
+    getAreaWidgets(themeSlug, "home-top"),
+    getAreaWidgets(themeSlug, "sidebar"),
+  ]) as unknown[];
+  const recent = results[0] as RankList;
+  const sectionLists = results.slice(1, 1 + rows.length) as RankList[];
+  const rc = results[1 + rows.length] as RankList | undefined;
+  const rl = results[2 + rows.length] as RankList | undefined;
+  const rv = results[3 + rows.length] as RankList | undefined;
+  const homeTopItems = results[4 + rows.length] as Awaited<ReturnType<typeof getAreaWidgets>>;
+  const homeSideItems = results[5 + rows.length] as Awaited<ReturnType<typeof getAreaWidgets>>;
   const sections = rows
     .map((row, i) => ({ row, posts: (sectionLists[i]?.items ?? []) as any[] }))
     .filter((s) => s.posts.length > 0);
-
-  const showRankings = ts.showRankings !== false;
-  let rankings: { most_comments: any[]; most_likes: any[]; most_reads: any[] } | null = null;
-  if (showRankings) {
-    const [rc, rl, rv] = await Promise.all([
-      listPosts({ status: "published", orderBy: "comments", limit: 3, pinned: false }),
-      listPosts({ status: "published", orderBy: "likes", limit: 3, pinned: false }),
-      listPosts({ status: "published", orderBy: "views", limit: 3, pinned: false }),
-    ]);
-    rankings = {
-      most_comments: rc.items.map(bmToRankPost),
-      most_likes: rl.items.map(bmToRankPost),
-      most_reads: rv.items.map(bmToRankPost),
-    };
-  }
+  const rankings: { most_comments: any[]; most_likes: any[]; most_reads: any[] } | null = showRankings
+    ? {
+        most_comments: (rc as RankList).items.map(bmToRankPost),
+        most_likes: (rl as RankList).items.map(bmToRankPost),
+        most_reads: (rv as RankList).items.map(bmToRankPost),
+      }
+    : null;
   const rankOrder = bmRankOrderFrom(ts.rankOrder);
   const rankTabs = {
     labels: {
@@ -544,11 +638,6 @@ tags,
     order: rankOrder,
     defaultTab: bmRankDefaultFrom(ts.rankDefault, rankOrder[0]),
   };
-
-  const [homeTopItems, homeSideItems] = await Promise.all([
-    getAreaWidgets(themeSlug, "home-top"),
-    getAreaWidgets(themeSlug, "sidebar"),
-  ]);
 
   return {
     head: homeHead,
@@ -574,13 +663,21 @@ tags,
   };
 }
 
+// ------------------------------------------------------------- list routing
+
 async function blogList(payload: { page?: number }, ctx?: Ctx) {
-  const [settings, themeSlug, cfg, catRows, all] = await Promise.all([
+  // Sidebar batch pre-issues off the themeSlug/themeSettings reads below, so
+  // its queries overlap the pager window's wave instead of following it.
+  const themeSlugP = safe(getActiveThemeSlug());
+  const tsP = safe(getActiveThemeSettings());
+  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default");
+  const [settings, themeSlug, cfg, catRows, all, ts] = await Promise.all([
     getSettings(),
-    getActiveThemeSlug(),
+    themeSlugP,
     getPermalinkConfig(),
     listCategories(),
     listPosts({ status: "published", limit: 5, orderBy: "views" }),
+    tsP,
   ]);
 
   const perPage =
@@ -598,7 +695,7 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const blogIndex = blogIndexUrlFor(cfg);
-  const ts = await getActiveThemeSettings();
+  const [widgets, drawerPosts, sidebarData] = await sideP;
   const tc = getThemeChrome(themeSlug);
 
   const siteTitle = settings.siteTitle ?? "";
@@ -625,9 +722,9 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
       bannerMax: bmClamp(ts.bannerMaxCount, 5, 1, 10),
       activeHref: blogIndex,
       variant: "blog",
-      widgets: await sideWidgetsFor(themeSlug),
-      drawerPosts: await bmixDrawerPosts(themeSlug),
-      sidebarData: await defaultSidebarData(themeSlug === "default", ts.useCustomIcons === true),
+      widgets,
+      drawerPosts,
+      sidebarData,
       settings,
       themeSettings: ts,
 
@@ -638,16 +735,24 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
 
 async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) {
   const page = pageNum(payload.page);
-  const [category, settings, cfg, themeSlug, catRows] = await Promise.all([
+  // Sidebar batch pre-issues off the themeSlug/themeSettings reads below
+  // (same pattern as blogList).
+  const themeSlugP = safe(getActiveThemeSlug());
+  const tsP = safe(getActiveThemeSettings());
+  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default");
+  const [category, settings, cfg, themeSlug, catRows, ts] = await Promise.all([
     getCategoryBySlug(payload.slug),
     getSettings(),
     getPermalinkConfig(),
-    getActiveThemeSlug(),
+    themeSlugP,
     listCategories(),
+    tsP,
   ]);
   if (!category) return { notFound: true };
   const isSk = themeSlug === "skyscraper";
   const catPerPage = isSk ? settings.postsPerPage || 10 : themeSlug === "codeman" || themeSlug === "pseudolinear" ? 30 : 12;
+  // Category listing: memoize the page's post window for 2 minutes (a new
+  // post surfaces on refresh or an admin write invalidates by TTL).
   const catKey = `cat:${payload.slug}:${page}:${themeSlug}`;
   const kvCat = (globalThis as any).__rosezmKvApi?.kv;
   const cachedCat = kvCat?.get(catKey) as { items: any[]; total: number } | undefined;
@@ -674,7 +779,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     ],
   });
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
-  const ts = await getActiveThemeSettings();
+  const [widgets, drawerPosts, sidebarData] = await sideP;
   const tc = getThemeChrome(themeSlug);
 
   const sub = isSk
@@ -700,9 +805,9 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
       bannerMax: bmClamp(ts.bannerMaxCount, 5, 1, 10),
       activeHref: catUrl,
       variant: "category",
-      widgets: await sideWidgetsFor(themeSlug),
-      drawerPosts: await bmixDrawerPosts(themeSlug),
-      sidebarData: await defaultSidebarData(themeSlug === "default", ts.useCustomIcons === true),
+      widgets,
+      drawerPosts,
+      sidebarData,
       settings,
       themeSettings: ts,
 
@@ -716,12 +821,17 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
 
 async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
   const page = pageNum(payload.page);
+  // Sidebar batch pre-issues off the themeSlug/themeSettings reads below
+  // (same pattern as blogList/categoryList).
+  const themeSlugP = safe(getActiveThemeSlug());
+  const tsP = safe(getActiveThemeSettings());
+  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s !== "skyscraper");
   const [tag, settings, cfg, themeSlug, ts] = await Promise.all([
     getTagBySlug(payload.slug),
     getSettings(),
     getPermalinkConfig(),
-    getActiveThemeSlug(),
-    getActiveThemeSettings(),
+    themeSlugP,
+    tsP,
   ]);
   if (!tag) return { notFound: true };
 
@@ -747,6 +857,7 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
       { label: `#${tag.name}`, href: tagUrl },
     ],
   });
+  const [widgets, drawerPosts, sidebarData] = await sideP;
   const tc = getThemeChrome(themeSlug);
 
   const contentTc = isSk ? tc : getThemeChrome("default");
@@ -763,10 +874,10 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
       hrefFor: (n) => paginate(tagUrl, n),
       showPager: isSk ? total > tagPerPage : false,
       variant: "term",
-      widgets: await sideWidgetsFor(themeSlug),
-      drawerPosts: await bmixDrawerPosts(themeSlug),
+      widgets,
+      drawerPosts,
 
-      sidebarData: await defaultSidebarData(!isSk, ts.useCustomIcons === true),
+      sidebarData,
       settings,
       themeSettings: ts,
     }),
@@ -777,8 +888,16 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   const q = (payload.q ?? "").trim();
   const page = pageNum(payload.page);
   const cleaned = q;
-  const settings0 = await getSettings();
-  const themeSlug = await getActiveThemeSlug();
+  // All reads below (settings, themeSlug, sidebar batch) pre-issue here so
+  // they pipeline with the results query instead of queueing behind it; the
+  // old shape awaited settings -> themeSlug serially, then re-read both
+  // (getSettings twice, themeSettings alone) after the results wave.
+  const settingsP = safe(getSettings());
+  const themeSlugP = safe(getActiveThemeSlug());
+  const tsP = safe(getActiveThemeSettings());
+  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default");
+  const settings0 = await settingsP;
+  const themeSlug = await themeSlugP;
 
   const isBm = themeSlug === "bluemix";
   const isSk = themeSlug === "skyscraper";
@@ -799,6 +918,9 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
       })
     : { items: [] as PostView[], total: 0 };
   const totalPages = Math.max(1, Math.ceil(total / perPage));
+  // unique hit jumps straight to the post (?all=1 keeps the list). The
+  // middleware 302s cold GETs; this branch only arms the client-side
+  // location.replace during SPA navigation (middleware never runs there).
   if (cleaned && !payload.all && total === 1 && page === 1 && items[0]?.url) {
     return { redirect: items[0].url };
   }
@@ -810,10 +932,11 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
           cleaned,
         )}&all=1">查看全部结果</a></div>`
       : "";
-  const settings = await getSettings();
-  const ts = await getActiveThemeSettings();
+  const [settings, ts] = await Promise.all([settingsP, tsP]);
+  const [widgets, drawerPosts, sidebarData] = await sideP;
 
   const searchSiteTitle = settings.siteTitle ?? "";
+  // F4: search-term highlight.
   const searchHighlight =
     `<script>(function(){var done=false;function run(){if(done)return;done=true;` +
     `var m=location.search.match(/[?&]q=([^&]*)/);if(!m)return;var q;` +
@@ -864,10 +987,10 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
       variant: "search",
       titleIcon: isBm ? null : "search",
       query: cleaned,
-      widgets: await sideWidgetsFor(themeSlug),
-      drawerPosts: await bmixDrawerPosts(themeSlug),
+      widgets,
+      drawerPosts,
 
-      sidebarData: await defaultSidebarData(themeSlug === "default", ts.useCustomIcons === true),
+      sidebarData,
       settings,
       themeSettings: ts,
       emptyHint: isBm && !cleaned ? "输入关键词，从右上角搜索框或导航搜索寻找内容。" : undefined,
@@ -875,43 +998,107 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   };
 }
 
+// -------------------------------------------------------------- post detail
+
+// Attach a no-op rejection handler so a read orphaned by the notFound
+// early-return cannot surface as an unhandled rejection; the returned
+// promise still rejects for the real consumer below.
+function safe<T>(p: Promise<T>): Promise<T> {
+  p.catch(() => {});
+  return p;
+}
+
+// Pre-issued sidebar batch shared by the list loaders (blog/category/tag/
+// search): the widget-area, drawer-post and sidebar reads all gate on the
+// theme slug, so calling this at the top of a loader chains them off the
+// themeSlug/themeSettings reads and their queries issue mid-wave instead of
+// forming their own wave after the loader's main reads. Await the returned
+// promise where the batch used to sit; the noop catch keeps a notFound
+// early return from orphaning it.
+function sidebarBatchP(
+  themeSlugP: Promise<string>,
+  tsP: Promise<Record<string, unknown>>,
+  want: (themeSlug: string) => boolean,
+): Promise<[string, PostView[] | undefined, Awaited<ReturnType<typeof defaultSidebarData>>]> {
+  const p = Promise.all([themeSlugP, tsP]).then(([s, t]) =>
+    Promise.all([
+      sideWidgetsFor(s),
+      bmixDrawerPosts(s),
+      defaultSidebarData(want(s), t.useCustomIcons === true),
+    ]),
+  );
+  p.catch(() => {});
+  return p;
+}
+
 async function postDetail(
-  payload: { slug: string; preloaded?: PostView | null },
+  payload: { slug: string; preloaded?: PostRow | null },
   ctx: Ctx,
 ) {
-  let post = payload.preloaded ?? (await getPost(payload.slug));
+  // Pre-issue every read that does not depend on the post row: they pipeline
+  // with getPostRow instead of queueing behind it. The old shape chained three
+  // serial links before the reads wave (getPost -> themeSlug -> wave), each a
+  // full Neon RTT on a cold view; the themeSlug read in particular sat
+  // between the post fetch and the wave doing nothing but gating it.
+  const themeSlugP = safe(getActiveThemeSlug());
+  const settingsP = safe(getSettings());
+  const popularP = safe(popularPosts(4));
+  const randomP = safe(randomPosts(12));
+  const cfgP = safe(getPermalinkConfig());
+  // resolveSitePath already ran the same lookup to decide this is a post —
+  // it hands over the RAW row, and hydration joins the reads wave below:
+  // hydrating in resolveSitePath (the old getPost) cost a dedicated round
+  // trip between the row select and everything else on a cold view.
+  let row = payload.preloaded ?? (await getPostRow(payload.slug));
+  // F7 (draft/scheduled preview): a manager (content:update:any) or the
+  // post's own author may open the public URL of an unpublished post and see
+  // it with a preview banner - everyone else keeps the 404. Covers drafts,
+  // archived posts and scheduled (future publishedAt) posts alike.
   let previewing = false;
-  if (!post && ctx?.user) {
+  if (!row && ctx?.user) {
     const u = ctx.user as { id: number; role: import("./schema.js").Role };
-    const candidate = await getPost(payload.slug, { preview: true });
-    if (candidate && (can(u.role, "content:update:any") || candidate.authorId === u.id)) {
-      post = candidate;
+    const candidate = await getPostRow(payload.slug, { preview: true });
+    if (candidate && (can(u.role, "content:update:any") || candidate.post.authorId === u.id)) {
+      row = candidate;
       previewing = true;
     }
   }
-  if (!post) return { notFound: true };
-  const themeSlug0 = await getActiveThemeSlug();
+  if (!row) return { notFound: true };
+  const themeSlug = await themeSlugP;
+  const postId = row.post.id;
 
-  const relatedN = themeSlug0 === "codeman" || themeSlug0 === "pseudolinear" ? 5 : 4;
-  const [related, settings, items, themeSlug, popular, random, cfg] = await Promise.all([
-    relatedPosts(post, relatedN),
-    getSettings(),
-    listPostComments(post.id, "post"),
-    getActiveThemeSlug(),
-    popularPosts(4),
-    randomPosts(12),
-    getPermalinkConfig(),
-  ]);
-
-  const relatedTaxonomy =
-    themeSlug === "default" ? await relatedByTaxonomy(post.id, 4) : undefined;
-  if (ctx.ip || ctx.ua) {
-    try {
-      await incrementViews(post.id, ctx.ip, ctx.ua);
-    } catch {
-      /* */
+  const relatedN = themeSlug === "codeman" || themeSlug === "pseudolinear" ? 5 : 4;
+  // Only three themes render `related` (bluemix / pseudolinear / codeman);
+  // the default theme's post page reads relatedTaxonomy alone and skyscraper
+  // reads neither. Computing the date-based set unconditionally ran ~6
+  // pointless queries per post view on every per-cookie render-cache miss.
+  const usesRelated = themeSlug === "bluemix" || themeSlug === "pseudolinear" || themeSlug === "codeman";
+  // The view-count write used to be awaited AFTER the reads block — a whole
+  // extra serial round trip on Neon (~550ms) tacked onto every render-cache
+  // miss. It reads nothing the reads produce, so it rides the same wave and
+  // is still awaited (best effort: a stats failure never breaks the page).
+  const viewsWrite = (async () => {
+    if (ctx.ip || ctx.ua) {
+      try {
+        await incrementViews(postId, ctx.ip, ctx.ua);
+      } catch {
+        /* */
+      }
     }
-  }
+  })();
+  // The wave: hydration of the raw row rides WITH the comments/related reads
+  // instead of ahead of them - one Neon round trip fewer on a cold view.
+  const [post, related, settings, items, popular, random, cfg, relatedTaxonomy] = await Promise.all([
+    hydrate(row),
+    usesRelated ? relatedPosts(postId, relatedN) : Promise.resolve([] as PostView[]),
+    settingsP,
+    listPostCommentsCached(postId, "post"),
+    popularP,
+    randomP,
+    cfgP,
+    themeSlug === "default" ? relatedByTaxonomy(postId, 4) : Promise.resolve(undefined),
+    viewsWrite,
+  ]);
   const config = resolveCommentConfig(settings);
   const u = ctx.user as { id?: number; name?: string; email?: string } | undefined;
   const me = u && u.id ? { id: u.id, name: u.name ?? "", email: u.email ?? "" } : null;
@@ -932,6 +1119,7 @@ async function postDetail(
     avatar: config.avatar,
     config: { ...config },
   });
+  // post.meta filter (reading-time, . ): plugin rows on the meta line.
   const metaPayload = applyFilters<{ post: unknown; items: R.MetaItem[] }>(HOOKS.postMeta, {
     post: { ...post, plainText: R.blocksToPlainText(post.content) },
     items: [],
@@ -956,6 +1144,10 @@ async function postDetail(
 
   const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
   const bodyHtml = await R.buildPostBody(post, "post", highlight);
+  // Reading time from the rendered body: CJK counts per character (~400/min),
+  // everything else per word (~200/min). Floor of 1 so short posts still read
+  // as "about a minute". Rides the postMeta payload so every theme's meta row
+  // (defMetaHtml, bluemix hero badges) picks it up in one place.
   {
     const plain = bodyHtml.replace(/<[^>]+>/g, " ");
     const cjk = (plain.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) ?? []).length;
@@ -980,18 +1172,32 @@ async function postDetail(
 
   const isDefault = themeSlug === "default";
   const isBluemix = themeSlug === "bluemix";
-  let postBottom = "";
-  let sidebarWidgets = "";
-  let ts: Awaited<ReturnType<typeof getActiveThemeSettings>> | undefined;
-  if (isDefault || isBluemix) {
-    const [bottomItems, sideItems] = await Promise.all([
-      getAreaWidgets(themeSlug, "post-bottom"),
-      getAreaWidgets(themeSlug, "sidebar"),
-    ]);
-    postBottom = R.widgetAreaHtml(bottomItems, isBluemix ? "model-wrapper bmx-ad-area" : "space-y-6");
-    sidebarWidgets = R.widgetAreaHtml(sideItems, isBluemix ? "bmx-ad-area" : "space-y-6");
-    if (isDefault) ts = await getActiveThemeSettings();
-  }
+  // Bluemix renders both areas too (PostPage.tsx: sidebar after PostSidebar. All reads are independent — one batch instead of serial awaits).
+  const widgetAreas = isDefault || isBluemix;
+  // The default theme's sidebar bundle is five more queries on a cold 60s window, and it needs the theme settings only to read `useCustomIcons`.
+  const tsP = isDefault ? safe(getActiveThemeSettings()) : null;
+  const sideDataP = tsP
+    ? tsP.then((t) => defaultSidebarData(true, t?.useCustomIcons === true))
+    : null;
+  const [widgets, bottomItems, sideItems, pluginHead, sidebarData] = await Promise.all([
+    sideWidgetsFor(themeSlug),
+    widgetAreas
+      ? getAreaWidgets(themeSlug, "post-bottom")
+      : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),
+    widgetAreas
+      ? getAreaWidgets(themeSlug, "sidebar")
+      : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),
+    pluginHeadHtml(headContext),
+    sideDataP ?? Promise.resolve(undefined),
+  ]);
+  const postBottom = widgetAreas
+    ? R.widgetAreaHtml(bottomItems, isBluemix ? "model-wrapper bmx-ad-area" : "space-y-6")
+    : "";
+  const sidebarWidgets = widgetAreas
+    ? R.widgetAreaHtml(sideItems, isBluemix ? "bmx-ad-area" : "space-y-6")
+    : "";
+  // F7: the preview banner rides the rendered main for managers/authors on
+  // unpublished posts only - a fixed bar over the theme's own chrome.
   const previewBanner = previewing
     ? `<div style="position:fixed;top:0;left:0;right:0;z-index:2147483000;background:#d97706;color:#fff;padding:6px 16px;text-align:center;font:600 14px/1.5 system-ui,sans-serif">` +
       `Preview mode: this content is not yet published (status: ${R.esc(post.status)}${post.publishedAt && new Date(post.publishedAt) > new Date() ? `, scheduled for ${new Date(post.publishedAt).toLocaleString("zh-CN")}` : ""}) — visible to administrators and the author only` +
@@ -1008,40 +1214,51 @@ async function postDetail(
       commentsHtml,
       metaHtml,
       defMetaHtml,
+      // post.meta filter values (reading-time, . ) ride the bluemix hero card's.
+      // badge row (original parity: PostPage.tsx meta={{ ..., badges }}).
       metaBadges: metaPayload.items.map((m) => m.value),
       metaItems: metaPayload.items,
       tagsHtml,
       defTagsHtml,
       shareHtml,
       blogIndex: blogIndexUrlFor(cfg),
-      widgets: await sideWidgetsFor(themeSlug),
+      widgets,
       postBottom,
       sidebarWidgets,
 
-      sidebarData: isDefault ? await defaultSidebarData(true, ts?.useCustomIcons === true) : undefined,
+      sidebarData,
       settings,
       canonical: `${ctx.origin}${post.url}`,
     }),
     head:
       R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl) +
-      (await pluginHeadHtml(headContext)),
+      pluginHead,
   };
 }
 
+// -------------------------------------------------------------- page detail
+
 async function pageDetail(
-  payload: { slug: string; preloaded?: import("./pages.js").PageView | null },
+  payload: { slug: string; preloaded?: import("./pages.js").Page | null },
   ctx: Ctx,
 ) {
-  const page =
-    payload.preloaded ?? (await getPublishedPage(payload.slug));
-  if (!page) return { notFound: true };
+  // Same reuse contract as postDetail: resolveSitePath already fetched the
+  // RAW page row to route here, and hydration joins the reads wave instead
+  // of running ahead of it. themeSlug/settings pre-issue so they pipeline
+  // with the page fetch; recentLimit's coupling to the theme resolves
+  // through the promise chain instead of a serial await.
+  const themeSlugP = safe(getActiveThemeSlug());
+  const settingsP = safe(getSettings());
+  const row = payload.preloaded ?? (await getPublishedPageRow(payload.slug));
+  if (!row) return { notFound: true };
 
-  const recentLimit = (await getActiveThemeSlug()) === "bluemix" ? 4 : 5;
-  const [settings, recent, items, themeSlug] = await Promise.all([
-    getSettings(),
-    listPosts({ status: "published", limit: recentLimit }),
-    listPostComments(page.id, "page"),
-    getActiveThemeSlug(),
+  const [page, settings, recent, items, themeSlug] = await Promise.all([
+    hydratePage(row),
+    settingsP,
+    themeSlugP
+      .then((s) => listPosts({ status: "published", limit: s === "bluemix" ? 4 : 5 })),
+    listPostCommentsCached(row.id, "page"),
+    themeSlugP,
   ]);
   const config = resolveCommentConfig(settings);
   const u = ctx.user as { id?: number; name?: string; email?: string } | undefined;
@@ -1081,20 +1298,27 @@ async function pageDetail(
   const tc = getThemeChrome(themeSlug);
 
   const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
+  const [bodyHtml, widgets, pluginHead] = await Promise.all([
+    R.buildPostBody(page, "page", highlight),
+    sideWidgetsFor(themeSlug),
+    pluginHeadHtml(headContext),
+  ]);
   return {
     main: tc.pagePage({
       page,
-      bodyHtml: await R.buildPostBody(page, "page", highlight),
+      bodyHtml,
       recent: recent.items,
       commentsHtml,
 
-      widgets: await sideWidgetsFor(themeSlug),
+      widgets,
     }),
     head:
       R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl) +
-      (await pluginHeadHtml(headContext)),
+      pluginHead,
   };
 }
+
+// ---------------------------------------------------------------- archives
 
 const CALENDAR_DAYS_SVG =
   `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-calendar-days" style="color:var(--accent)">` +
@@ -1122,27 +1346,38 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
   const year = Number(payload.year) || 0;
   const month = Number(payload.month) || 0;
   const esc = R.esc;
+  // Archives scans up to 1000 posts on every visit: memoize the whole read
+  // set for 5 minutes (archives change rarely, and a new post shows up on the
+  // next refresh or an admin write).
   const archKey = `archives:${year}:${month}`;
   const kv = (globalThis as any).__rosezmKvApi?.kv;
   const cached = kv?.get(archKey) as
     | { settings: any; index: any; total: number; items: any[] }
     | undefined;
   let settings: any;
-  let index: any;
+  let index: { year: number; months: { month: number; count: number }[]; total: number }[];
   let total: number;
   let items: any[];
   if (cached) {
     ({ settings, index, total, items } = cached);
   } else {
-    [settings, index] = await Promise.all([getSettings(), archiveGroups()]);
-    ({ total } = await listPosts({ status: "published", limit: 1, pinned: false }));
-    ({ items } = await listPosts({
-      status: "published",
-      year: year || undefined,
-      month: month && month >= 1 && month <= 12 ? month : undefined,
-      limit: 1000,
-      pinned: false,
-    }));
+    // counts() is the same scalar the old `listPosts({ limit: 1 })` read out of
+    // its window total - identical predicate (status=published + publishedAt
+    // null-or-past) - but as ONE memoized scalar subquery instead of a whole
+    // list pipeline: the limit-1 call still ran the pinned resolution (2
+    // queries), the main select, attachTaxonomies (2) and attachPostMetas, then
+    // threw all but the count away. It shares its cache entry with the sidebar
+    // widgets, so a cold /archives render drops ~8 round trips to Neon.
+    [settings, index, { posts: total }, items] = await Promise.all([
+      getSettings(),
+      archiveGroups(),
+      counts(),
+      archiveItems({
+        year: year || undefined,
+        month: month && month >= 1 && month <= 12 ? month : undefined,
+        limit: 1000,
+      }),
+    ]);
     kv?.set(archKey, { settings, index, total, items }, 300);
   }
   const filtered = !!(year || month);
@@ -1242,15 +1477,10 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
  * the page itself, which can only render.
  */
 export async function searchRedirect(q: string): Promise<string | null> {
-  const cleaned = q.trim();
-  if (!cleaned) return null;
-  const { items, total } = await listPosts({
-    status: "published",
-    search: cleaned,
-    limit: 20,
-  });
-  return total === 1 && items[0]?.url ? items[0].url : null;
+  return searchSingleHit(q);
 }
+
+// ----------------------------------------------------- sitemap / feed / robots
 
 function escXml(s: string): string {
   return s
@@ -1263,11 +1493,13 @@ function escXml(s: string): string {
 async function feed(ctx: Ctx): Promise<string> {
   const settings = await getSettings();
   const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
+  // feedContent=full ships the body: listPosts strips content by default, so
+  // the flag must reach the query, not just the renderer below.
+  const full = settings.feedContent === "full";
   const [{ items }, { items: pageItems }] = await Promise.all([
-    listPosts({ status: "published", limit: feedItems, pinned: false }),
+    listPosts({ status: "published", limit: feedItems, pinned: false, full }),
     listPublishedPages({ limit: feedItems }),
   ]);
-  const full = settings.feedContent === "full";
   const cdata = (html: string) =>
     `<![CDATA[${html.replace(/]]>/g, "]]]]><![CDATA[>")}]]>`;
   const xmlItems = (
@@ -1277,6 +1509,8 @@ async function feed(ctx: Ctx): Promise<string> {
         const extra = full
           ? `\n      <content:encoded>${cdata(await R.buildPostBody(p, kind))}</content:encoded>`
           : "";
+        // real categories: the post's own tags (pages have none); "author" in
+        // p is the discriminated check - PostView has it, PageView does not
         const cats = "author" in p && p.tags?.length
           ? p.tags.map((t) => `\n      <category>${escXml(t.name)}</category>`).join("")
           : "";
@@ -1370,16 +1604,22 @@ async function manifest(_ctx: Ctx): Promise<string> {
 }
 
 async function notFound(_p: unknown, _ctx: Ctx) {
-  const [settings, site, themeSlug] = await Promise.all([
+  // The recent-posts fetch rides the same parallel wave as the settings reads:
+  // it only costs an extra query when showRecent is off (the result is simply
+  // dropped), while awaiting it behind the settings reads cost one serial
+  // round trip on every 404.
+  const [settings, site, themeSlug, recentResult] = await Promise.all([
     getNotFoundSettings(),
     getSettings(),
     getActiveThemeSlug(),
+    listPosts({ status: "published", limit: 6 }),
   ]);
   const themed = themeSlug === "bluemix";
   let recent: Array<{ url: string; title: string }> = [];
   if (settings.showRecent) {
-    const result = await listPosts({ status: "published", limit: themed ? 5 : 6 });
-    recent = (result.items || []).map((p: PostView) => ({ url: p.url, title: p.title }));
+    recent = (recentResult.items || [])
+      .slice(0, themed ? 5 : 6)
+      .map((p: PostView) => ({ url: p.url, title: p.title }));
   }
   return {
     settings,
@@ -1389,6 +1629,8 @@ async function notFound(_p: unknown, _ctx: Ctx) {
     skin: themed ? bluemixNotFoundPage({ settings, recent }) : "",
   };
 }
+
+// ---------------------------------------------------- root catch-all resolver
 
 function virtualRouteView(route: VirtualSiteRoute, ctx: Ctx) {
   const title = route.seoTitle || route.title;
@@ -1486,7 +1728,7 @@ function registerView(config: {
     `<p class="oboe-reg-note">注册即代表同意站点规则 · <a href="/" style="color:var(--primary-color,#4f46e5)">返回首页</a></p>` +
     `</form>` +
     `</div>` +
-    `<script src="/public/register.js" defer></script>`;
+    `<script src="${publicAssetHref("register.js")}" defer></script>`;
   return { head, main };
 }
 
@@ -1520,6 +1762,10 @@ function maintenanceView(settings: MaintenanceSettings) {
   return main;
 }
 
+/** How long a confirmed path miss suppresses re-probing. The write and the
+ *  read below must agree, so it lives here rather than as two literals. */
+const PATH_MISS_TTL = 60_000;
+
 async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
   if (process.env.OBOEXT_DEBUG_RESOLVE) {
     const sm = (globalThis as any).__rosezm_signalMap as Map<string, unknown> | undefined;
@@ -1528,8 +1774,16 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
       "mapSize:", sm?.size);
   }
   const raw = (payload.segments ?? []).map((s) => String(s));
+  // Bots probe unknown paths far more than humans follow broken links, and
+  // they come back. A confirmed miss is remembered for 60s so a repeat hit
+  // skips the per-type probes and the notFound render's reads entirely;
+  // invalidateContentCaches() drops these on every content write, so a page
+  // created at a previously-missed URL is reachable at once.
+  const missKey = `pathmiss:${raw.join("/")}`;
+  if (raw.length && peekMemo<boolean>(missKey, PATH_MISS_TTL) === true) return null;
   const res = await resolveSitePath(raw);
   if (!res) {
+    if (raw.length) await memoQuery(missKey, PATH_MISS_TTL, async () => true);
     const decoded = raw
       .map((s) => {
         try {
@@ -1583,7 +1837,7 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
       out = await home();
       break;
     case "post":
-      out = await postDetail({ slug: res.post.slug, preloaded: res.post }, ctx);
+      out = await postDetail({ slug: res.post.post.slug, preloaded: res.post }, ctx);
       break;
     case "page":
       out = await pageDetail({ slug: res.page.slug, preloaded: res.page }, ctx);
@@ -1599,8 +1853,15 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
       break;
   }
   if (out.notFound) return null;
+  // _layout.rose supplies bodyOpen/bodyClose for the catch-all too — the
+  // framework wraps every page in its directory's layout, so the layout's
+  // $data("chrome") already ran in this render. Invoking loaders.chrome()
+  // here rebuilt the whole chrome a second time (~12-24 DB queries) for
+  // values nothing consumed.
   return { kind: res.kind === "blogIndex" ? "blog" : res.kind, ...out };
 }
+
+// ----------------------------------------------------------------- registry
 
 async function loginCard() {
   const sec = await getAdminSecurity();
@@ -1617,6 +1878,30 @@ async function loginBrand() {
   return { siteTitle: settings.siteTitle ?? "" };
 }
 
+/**
+ * Boot warmup's dynamic URLs: one real post, one category page, one tag page.
+ *
+ * The framework's warm loop only renders fixed routes, and the catch-all's
+ * 404 probe never reaches the entity tables (post metas, taxonomy joins,
+ * comments) — the first crawler of a real post page paid those tables'
+ * first-touch plan compile. Surfaced to the prod server through the loader
+ * registry as `warmUrls`. Every read here is memoized, so on a warm process
+ * this costs nothing and returns stable paths.
+ */
+export async function warmEntityUrls(): Promise<string[]> {
+  const [posts, cats, tags, cfg] = await Promise.all([
+    listPosts({ status: "published", limit: 1 }),
+    listCategories(),
+    listTags(),
+    getPermalinkConfig(),
+  ]);
+  return [
+    posts.items[0]?.url,
+    cats[0] ? categoryUrlFor(cfg, cats[0]) : undefined,
+    tags[0] ? tagUrlFor(cfg, tags[0]) : undefined,
+  ].filter((u): u is string => typeof u === "string" && u.startsWith("/"));
+}
+
 export const loaders = {
   chrome,
   loginCard,
@@ -1631,6 +1916,7 @@ export const loaders = {
   archives,
   notFound,
   resolve,
+  // admin screens (all per-request DB reads, session-gated)
   "admin.session": admin.adminSession,
   "admin.dashboard": admin.adminDashboard,
   "admin.posts": admin.adminPosts,
@@ -1666,6 +1952,8 @@ export type LoaderKey = keyof typeof loaders;
 
 /** Server-only dispatch used by pages and by /api/data. */
 export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unknown> {
+  // Admin screens bring their own shell (pages/admin/_layout.rose): skip the
+  // public chrome's DB work entirely and hand the root layout an empty stub.
   if (key === "chrome" && ctx.pathname && ctx.pathname.indexOf("/admin") === 0) {
     return {
       siteTitle: "管理后台",

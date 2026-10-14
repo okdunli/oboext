@@ -1,13 +1,4 @@
-/**
- * Theme-aware chrome rendering.
- *
- * Each theme provides its own nav/wrapper/footer HTML structure and content
- * builders. The active theme's chrome is assembled by `buildChrome()` and
- * consumed by `_layout.rose` via the `chrome` loader.
- *
- * Skyscraper keeps its existing renderers in render.ts; the other four themes
- * have their builders here.
- */
+// Theme-aware chrome rendering.
 import fs from "fs";
 import path from "path";
 import type { PostView, TaxRef } from "./queries.js";
@@ -16,34 +7,14 @@ import * as R from "./render.js";
 import { esc, fmtDate } from "./render.js";
 import { mimeFor, PUBLIC_DIR } from "./storage.js";
 
+// -------------------------------------------------------------------- types
+
 export interface ThemeChrome {
   slug: string;
   cssHref(): string;
-  /**
-   * The full stylesheet, inlined into `<head>` as a `<style>` block.
-   *
-   * A `<link rel=stylesheet>` is render-blocking by definition: the parser
-   * stops at it, so the browser must fetch it before painting anything. On a
-   * throttled 4G connection that one request was the critical path - a
-   * Lighthouse run measured /theme-style/default at 542ms, ahead of every
-   * script on the page, and Speed Index (3.9s) was the only metric that
-   * dropped below 100. Inlining trades that round trip for a larger document;
-   * the CSS is identical either way, and the document is already brotli'd, so
-   * the extra bytes cost less than the serialized fetch did.
-   *
-   * Empty string = no inline block, and the caller still emits the <link>. The
-   * default theme inlines; the others (skyscraper's prebuilt /public/theme.css,
-   * and the themes whose markup has no <head> slot for it) keep the link.
-   */
+  // The full stylesheet, inlined into `<head>` as a `<style>` block.
   cssInline?(): string;
-  /**
-   * Raw CSS that must apply as early as possible (the theme's base
-   * background/colour, before the external stylesheet lands). Contract: this
-   * returns CSS **declarations only** — it is wrapped in a `<style>` element by
-   * `bodyFixHtml()` before being injected via `{@html ...}`. Returning a bare
-   * CSS string straight into the layout renders it as a visible text node
-   * (every theme used to leak `body{background:…}` at the top of the page).
-   */
+  // Raw CSS that must apply as early as possible (the theme's base background/colour, before the external stylesheet lands).
   bodyFix(): string;
   headExtra(): string;
   nav(settings: Record<string, any>, menuItems: MenuItem[]): string;
@@ -90,6 +61,7 @@ export type HomeParts = {
 
   widgets?: string;
   settings: Record<string, unknown>;
+  // bluemix full-home extras (ignored by the other themes)
   recent?: PostView[];
   sections?: { row: { category: TaxRef; title: string; icon: string | null }; posts: PostView[] }[];
   rankings?: { most_comments: RankPost[]; most_likes: RankPost[]; most_reads: RankPost[] } | null;
@@ -208,6 +180,8 @@ export type PagePageParts = {
   widgets?: string;
 };
 
+// ------------------------------------------------------------------- helpers
+
 const THEMES_DIR = path.join(process.cwd(), "themes");
 
 let cssCache = new Map<string, { css: string; mtime: number }>();
@@ -218,6 +192,8 @@ function readThemeCss(slug: string, file: string): { css: string; mtime: number 
   try {
     const fp = path.join(THEMES_DIR, slug, file);
     const st = fs.statSync(fp);
+    // mtime changed (dev edit / theme upload): drop the stale entry so the
+    // ?v= version query picks the new bytes instead of serving the old CSS.
     if (cached && cached.mtime === st.mtimeMs) return cached;
     const css = fs.readFileSync(fp, "utf-8");
     const entry = { css, mtime: st.mtimeMs };
@@ -228,6 +204,7 @@ function readThemeCss(slug: string, file: string): { css: string; mtime: number 
   }
 }
 
+// T5: preload a theme's declared fonts (manifest.json "fonts": [...]) so the browser fetches them alongside the stylesheet instead of after it .
 function fontPreloadLinks(slug: string): string {
   try {
     const m = JSON.parse(fs.readFileSync(path.join(THEMES_DIR, slug, "manifest.json"), "utf-8")) as { fonts?: string[] };
@@ -240,6 +217,7 @@ function fontPreloadLinks(slug: string): string {
 }
 
 function themeCssHref(slug: string): string {
+  // Skyscraper's stylesheet is the build-time generated /public/theme.css (tools/gen.mjs inlines its fonts), so it never rides /theme-style/<slug>.
   if (slug === "skyscraper") return publicAssetHref("theme.css");
   const main = readThemeCss(slug, slug + ".css");
   let v = String(Math.round(main.mtime));
@@ -251,15 +229,30 @@ function themeCssHref(slug: string): string {
 }
 
 /**
- * /public/<file> with an mtime cache-buster. The theme JS files are served
- * straight off disk, so during development an edit + reload can silently keep
- * running the previous copy (the browser has no reason to revalidate). Stamping
- * the mtime makes every edit take effect immediately.
+ * Version stamp for /public/<file>. Served with an `immutable` year-long cache,
+ * so the stamp must change with the bytes or returning visitors keep the old
+ * build. Vercel freezes file mtimes to a fixed epoch, so an mtime stamp is
+ * constant across deploys — we stamp a content hash instead. Cache keyed by
+ * byte size so the file is only re-read when its length changes.
  */
+const assetVersionCache = new Map<string, { size: number; v: string }>();
+function fnv1a32(buf: Buffer): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < buf.length; i++) {
+    h ^= buf[i];
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
 export function publicAssetHref(file: string): string {
   try {
-    const st = fs.statSync(path.join(PUBLIC_DIR, file));
-    return `/public/${file}?v=${Math.round(st.mtimeMs)}`;
+    const fp = path.join(PUBLIC_DIR, file);
+    const st = fs.statSync(fp);
+    const cached = assetVersionCache.get(file);
+    if (cached && cached.size === st.size) return `/public/${file}?v=${cached.v}`;
+    const v = fnv1a32(fs.readFileSync(fp));
+    assetVersionCache.set(file, { size: st.size, v });
+    return `/public/${file}?v=${v}`;
   } catch {
     return `/public/${file}`;
   }
@@ -279,16 +272,9 @@ const GLOBALS_BODY_UTILITIES = `.min-h-screen{min-height:100vh}
 @media (min-width:1280px){.xl\\:hidden{display:none}}
 `;
 
+
 const SHARED_FORM_BASELINE = `
-/* ===========================================================================
-   Built-in comment form — shared structural baseline
-   Markup: src/server/render.ts builtinCommentsHtml (.comment-form). Selectors
-   stay low-specificity on purpose: bluemix / codeman / pseudolinear ship their
-   own higher-specificity overrides; this block only guarantees a usable form
-   (bordered .input box, icon guest row, right-aligned submit) in themes
-   without form CSS — default / skyscraper —
-   using the generic theme tokens (--surface, --border, --accent, …).
-   =========================================================================== */
+// =========================================================================== Built-in comment form — shared structural baseline Markup.
 .comment-form{ display:block; margin:20px 0; }
 .comment-form .input{
   background:var(--surface);
@@ -309,11 +295,7 @@ const SHARED_FORM_BASELINE = `
 }
 .comment-form textarea::-moz-placeholder{ color:var(--muted); }
 .comment-form textarea::placeholder{ color:var(--muted); }
-/* The toolbar: emoji trigger on the left, actions on the right, one row.
-   .funcs and .form-actions used to be siblings in the form, both block-level,
-   so the emoji button sat on its own full-width line with the submit below it.
-   They are now children of .sf-toolbar, which is what puts them side by side -
-   the flex here is the fix, not a cosmetic adjustment. */
+// The toolbar: emoji trigger on the left, actions on the right, one row.
 .comment-form .sf-toolbar{
   display:flex; align-items:center; justify-content:space-between;
   gap:12px; margin-top:8px;
@@ -323,9 +305,7 @@ const SHARED_FORM_BASELINE = `
   display:flex; justify-content:flex-end; align-items:center; gap:8px;
   margin-top:0;
 }
-/* Below the two-column breakpoint the row still holds - the emoji button is
-   36px and the submit is intrinsic - but the gap has to shrink or the pair
-   wraps on a 320px screen. */
+// Below the two-column breakpoint the row still holds - the emoji button is 36px and the submit is intrinsic - but the gap has to shrink or the pair.
 @media (max-width:420px){
   .comment-form .sf-toolbar{ gap:8px; }
 }
@@ -401,28 +381,7 @@ const SHARED_FORM_BASELINE = `
 .sf-comment-me-email{ font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
 .comment-form .funcs button.is-active{ color:var(--accent); }
-/* Emoji popover visibility + the open/close motion.
-
-   NOTE ON WHAT ACTUALLY FIXED THE FIRST-OPEN ANIMATION: it was NOT this block.
-   An earlier version of this comment claimed the wrapper "had no rule at all in
-   this theme" and added display:none / opacity:0 / a transition here. Both claims
-   were wrong, and the rules were inert: further down this same stylesheet
-   already declares
-
-     .emoji-panel-wrap{ position:relative; display:inline-block; ... }
-     .emoji-panel-wrap:not(.is-in) .emoji-panel{ opacity:0; transform:...; }
-
-   at equal specificity but LATER in source order, so they won every conflict -
-   the display:none never applied and the opacity:0 / transition were already
-   provided. Verified in the served document, not reasoned about.
-
-   The real cause was ordering in comments.js: it used to add .is-in FIRST and
-   only build the panel after /api/emojis resolved, so the transition ran against
-   an empty host and the panel simply appeared. Building the panel first and
-   adding the class afterwards (comments.js toggleEmoji) is what makes the first
-   open match the later ones. The motion itself is :not(.is-in) below.
-
-   Kept only the reduced-motion opt-out, which nothing else declares. */
+// Emoji popover visibility + the open/close motion. NOTE ON WHAT ACTUALLY FIXED THE FIRST-OPEN ANIMATION: it was NOT this block.
 @media (prefers-reduced-motion:reduce){
   .emoji-panel-wrap .emoji-panel{ transition:none; }
 }
@@ -494,19 +453,100 @@ const SHARED_FORM_BASELINE = `
 }
 `;
 
-export function themeCssContent(slug: string): string {
-  if (slug === "skyscraper") return "";
-  const main = readThemeCss(slug, slug + ".css");
-  let css = main.css;
-  try {
-    const extra = readThemeCss(slug, slug + "-extra.css");
-    if (extra.css) css += "\n" + extra.css;
-  } catch { /* no extra */ }
-  
-  
-  return SHARED_FORM_BASELINE + GLOBALS_BODY_UTILITIES + css;
+// Comments are ~23KB of the default theme's assembled sheet (11.9KB in
+// default.css, 8.2KB in default-extra.css, the rest in the shared baseline),
+// and brotli cannot squeeze prose - they cost ~8KB of every transferred
+// document (measured: the home page goes 31.2KB -> 23.0KB brotli). Removing
+// them changes no selector and no declaration.
+//
+// Whitespace is deliberately left alone. Collapsing it safely means reasoning
+// about quoted strings ("Apple Color Emoji", url() data URIs), calc() operands
+// (a space around + / - is required) and descendant selectors (a > b vs a>b) -
+// a regex that gets any of those wrong breaks a theme silently in production.
+// The bytes it would win are already free once the document is compressed.
+function stripCssComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
+// The assembled sheet is byte-identical for every request until a theme file
+// changes, and assembling it concatenates ~100KB and runs the comment pass over
+// the result. Keyed on both source mtimes: a theme edit (dev, or an upload
+// through admin) changes the key and the next request rebuilds.
+let cssContentCache = new Map<string, string>();
+
+function minifyCss(css: string): string {
+  const noComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  let out = "";
+  let depth = 0;
+  let quote = "";
+  for (let i = 0; i < noComments.length; i++) {
+    const ch = noComments[i];
+    if (quote) {
+      out += ch;
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    if (ch === "(") {
+      depth++;
+      out += ch;
+      continue;
+    }
+    if (ch === ")") {
+      depth = depth > 0 ? depth - 1 : 0;
+      out += ch;
+      continue;
+    }
+    if (depth > 0) {
+      out += /\s/.test(ch) ? (out[out.length - 1] === " " ? "" : " ") : ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      const last = out[out.length - 1];
+      if (last !== undefined && last !== " " && last !== "{" && last !== "}" && last !== ";" && last !== ":" && last !== ",") {
+        out += " ";
+      }
+      continue;
+    }
+    if (ch === "{" || ch === "}" || ch === ";" || ch === ":" || ch === ",") {
+      if (out[out.length - 1] === " ") out = out.slice(0, -1);
+      out += ch;
+      continue;
+    }
+    out += ch;
+  }
+  return out.replace(/;}/g, "}").trim();
+}
+
+export function themeCssContent(slug: string): string {
+  // Skyscraper is served from /public/theme.css, not this route. Returning ""
+  // made /theme-style/skyscraper answer 404 with a 9-byte body, which reads
+  // like a broken deploy; the middleware maps falsy to that bare 404, so the
+  // empty string is load-bearing and only the comment was missing.
+  if (slug === "skyscraper") return "";
+  // readThemeCss answers { css: "", mtime: 0 } for a missing file, so the
+  // optional -extra.css needs no try/catch and its mtime is a valid key half.
+  const main = readThemeCss(slug, slug + ".css");
+  const extra = readThemeCss(slug, slug + "-extra.css");
+  const key = slug + ":" + main.mtime + ":" + extra.mtime;
+  const hit = cssContentCache.get(key);
+  if (hit !== undefined) return hit;
+  const body = extra.css ? main.css + "\n" + extra.css : main.css;
+  const out = minifyCss(stripCssComments(SHARED_FORM_BASELINE + GLOBALS_BODY_UTILITIES + body));
+  // One entry per theme is plenty: a theme edit replaces it, never grows it.
+  cssContentCache = new Map([[key, out]]);
+  return out;
+}
+
+// ------------------------------------------------------------------- assets
+// Serve /theme-assets/<slug>/<rel...> from themes/<slug>/assets/<rel...> on
+// disk — direct port of the original app app/theme-assets/[...path]/route.ts
+// (rankings medals, theme fonts, vendor scripts). GET/HEAD only; a crafted
+// path that escapes the themes root is rejected (403/404).
 export function serveThemeAsset(urlPath: string, method = "GET"): Response {
   const notFound = () =>
     new Response("Not found", {
@@ -563,11 +603,16 @@ function pagerHtml(page: number, totalPages: number, hrefFor: (p: number) => str
   return `<nav class="ob-pager">${prev}<span class="pager-info">第 ${page}/${totalPages} 页</span>${next}</nav>`;
 }
 
+// ============================================================= SKYSCRAPER
+
 const skyscraperChrome: ThemeChrome = {
   slug: "skyscraper",
   cssHref: () => publicAssetHref("theme.css"),
   bodyFix: () => "",
-  headExtra: () => fontPreloadLinks("bluemix") + `<script src="/public/noflash.js"></script>`,
+  // Original parity (Layout.tsx:59,108): restore the saved color scheme
+  // BEFORE first paint — an external head script (no defer) runs ahead of
+  // the body, so dark-mode visitors never flash the light theme.
+  headExtra: () => fontPreloadLinks("bluemix") + `<script src="${publicAssetHref("noflash.js")}" defer></script>`,
   nav: (settings) => R.topNav(settings),
   bodyOpen: () =>
     `<div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">`,
@@ -602,8 +647,28 @@ const skyscraperChrome: ThemeChrome = {
     R.pagePage(parts.page, parts.recent, parts.commentsHtml, parts.bodyHtml),
 };
 
+// ================================================================ DEFAULT
+//
+// Faithful port of themes/default (Layout.tsx + HomePage.tsx + PostCard + Sidebar
+// + PostPage). We keep the exact utility classes the original emits and
+// implement them in themes/default/default.css (token-driven), so the two
+// stacks share one visual contract. rosezm builders receive no category/tag
+// sidebar rows on list/post pages, so content flows single-column while the
+// header/hero/card/footer — the visible "face" — match the original exactly.
+
+// Anti-FOUC base tint only — mirrors the theme stylesheet's own `body` rule
+// (pre-CSS-frame flash guard); no `!important`, no forced override on <html>.
 const defaultBodyFix = `<style id="rv-body-fix">body{background:var(--bg,#09090b);color:var(--text,#f4f4f5)}</style>`;
 
+// ---------------------------------------------------------------------------
+// Fallback icons for categories and nav items.
+//
+// Categories/menus ship from the database with `icon: null` unless an editor
+// set one in admin, which left the front end with bare text (the "no icons"
+// symptom). When an item has no icon of its own we fall back to a slug-derived
+// glyph so the UI looks complete out of the box; an explicitly set icon always
+// wins. Every name here is verified present in public/icons/*.svg.
+// ---------------------------------------------------------------------------
 const CATEGORY_ICON_MAP: Record<string, string> = {
   prose: "book-open",
   poetry: "feather",
@@ -673,6 +738,9 @@ function searchField(
     `<span class="df-search-box">` +
     lucideSvg("search", 16, dfSearchIcon()) +
     `<input name="q" placeholder="${esc(placeholder)}" class="df-search-input" autocomplete="off"` +
+    // role=combobox + aria-* is what turns the field into a combobox for a
+    // screen reader; without it the suggestion list appears with no announced
+    // relationship to the input. aria-expanded is flipped by theme-pjax.js.
     ` role="combobox" aria-expanded="false" aria-autocomplete="list"` +
     ` aria-controls="${panelId}" aria-label="${esc(label)}">` +
     `<kbd class="df-search-kbd">/</kbd>` +
@@ -709,14 +777,31 @@ function defaultMenuUl(
   highlight = true,
 ): string {
   if (!items.length) return "";
+  // The menu item's own icon leads the label. It was dropped here, so an icon
+  // saved in admin/menus never reached the front end at all.
   const link = (it: MenuItem, extra: string) => {
     const mic = menuIconName(it);
     const ic = mic
       ? `<span class="df-menu-ic">${lucideSvg(mic, 14)}</span>`
       : "";
+    // "Where am I" is decided HERE, on the server, from the real pathname -
+    // not in the browser from a scroll observer. The header is re-rendered on
+    // every navigation but the page body is swapped by pjax, so a client-side
+    // highlight would always be one navigation behind, and it would need the
+    // section list to exist before it could run at all.
+    //
+    // Trailing slashes are normalised on both sides: "/category/x/" and
+    // "/category/x" are the same page to a reader, and treating them as
+    // different leaves the highlight off on one of them.
     const norm = (s: string) => s.split("?")[0].split("#")[0].replace(/\/+$/, "") || "/";
     const cur = norm(path);
     const href = norm(it.url || "");
+    // Two forms, and the exact match has to be listed separately: the prefix
+    // test alone ("does the current path start with href + /") is false for a
+    // path that EQUALS href, so "/links" would never light up its own item.
+    // That is not a corner case - it is the common case, every top-level page.
+    // "/" is excluded from the prefix branch on purpose, or it would match
+    // every path on the site and light up "Home" everywhere.
     const isCurrent =
       highlight &&
       (cur === "/"
@@ -746,10 +831,24 @@ function defaultNav(settings: Record<string, any>, items: MenuItem[]): string {
     settings.logoUrl
       ? `<img src="${esc(settings.logoUrl)}" alt="${title}" class="h-7 w-auto">`
       : `<span class="flex h-8 w-8 items-center justify-center rounded-lg" style="background:var(--accent);color:var(--accent-text)">${(title || "").charAt(0).toUpperCase()}</span>${title}`;
+  // No "" fallback here. norm("") maps to "/", so an absent __pathname made
+  // the home item match on EVERY page - the highlight said "you are here" for
+  // a position the server never actually knew. A missing path now highlights
+  // nothing, which is the honest answer; the header still renders.
   const here = settings.__pathname == null ? "" : String(settings.__pathname);
   const menu = defaultMenuUl(items, "df-menu-list", here);
   const hasMenu = items.length > 0;
 
+  // Mobile menu: the desktop nav is hidden below md, so narrow viewports had
+  // no way to reach the menu at all. A <details> disclosure needs no script
+  // (the theme ships no nav JS) and keeps the same markup for both layouts.
+  //
+  // It carries the search field too, not just the links. Without it a phone
+  // visitor had to leave the menu to search at all: the header search box is
+  // inside `hidden ... md:block`, so it does not exist below md, and the
+  // sidebar one is further down the page. The field is a second copy with its
+  // own suggestion panel id - the header one drives df-suggest-header and
+  // two elements must never share a panel.
   const mobileMenu = hasMenu
     ? `<details class="dfm-menu md:hidden">` +
       `<summary class="dfm-burger" aria-label="打开菜单">${lucideSvg("menu", 20)}</summary>` +
@@ -765,6 +864,14 @@ function defaultNav(settings: Record<string, any>, items: MenuItem[]): string {
     `<div class="relative mx-auto flex max-w-5xl items-center gap-4 px-4 py-3">` +
     `<a href="/" class="flex items-center gap-2 text-lg font-bold tracking-tight ${headingClass}">${brandLink}</a>` +
     `<nav class="ml-2 hidden flex-1 md:block">${menu}</nav>` +
+    // The search form carries ml-auto so it stays right-aligned; on narrow
+    // viewports the burger follows it and takes the trailing slot.
+    // The glyph is a flex item inside a bordered pill rather than an
+    // absolutely-positioned overlay: absolute positioning depended on a
+    // `relative` wrapper plus a pl-9 pad, and any ancestor that failed to
+    // establish the containing block let the icon escape the field.
+    // The <kbd> advertises the "/" shortcut that theme-default.js binds, so the
+    // affordance is visible before the visitor presses anything.
     searchField("df-suggest-header", "搜索…", "搜索文章", "df-search-form") +
     mobileMenu +
     `</div></header>`;
@@ -783,6 +890,11 @@ function defaultFooter(settings: Record<string, any>, widgetsHtml: string): stri
     `<div class="mx-auto max-w-5xl">` +
     (widgetsHtml ? `<div class="mb-6">${widgetsHtml}</div>` : "") +
     (menu ? `<nav class="mb-4">${menu}</nav>` : "") +
+    // --muted (zinc-400), not text-zinc-500. Lighthouse flagged this line:
+    // zinc-500 on the footer background is the only contrast failure left on
+    // the page, and it held accessibility at 96/100. Every other muted-text
+    // position in this theme already uses the variable, so this was the odd one
+    // out rather than a considered choice.
     `<p class="text-xs text-[var(--muted)]">${copy}</p>` +
     `</div></footer>`;
 }
@@ -790,6 +902,8 @@ function defaultFooter(settings: Record<string, any>, widgetsHtml: string): stri
 function defaultCatPill(c: { name: string; url?: string; icon?: string | null }): string {
   const label = esc(c.name);
   const cls = "df-cat-pill";
+  // The category's own icon leads the pill. It was dropped here before, so a
+  // category that had an icon set still rendered as bare text on the cards.
   const ic = `<span class="df-cat-pill-ic">${lucideSvg(catIconName(c), 12)}</span>`;
   return c.url
     ? `<a href="${esc(c.url)}" class="${cls}">${ic}${label}</a>`
@@ -849,6 +963,16 @@ function defaultHome(parts: HomeParts): string {
 }
 
 function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settings: Record<string, unknown>, showCatIcons = false, catCounts?: Map<number, number>): string {
+  // ---- Category tree -------------------------------------------------------
+  // The DB carries a real hierarchy (parentId), and the flat list this used to
+  // render threw it away: a parent row and its children looked like unrelated
+  // peers, so the sidebar read as 18 loose links instead of 5 groups.
+  //
+  // Roots are the rows with no parentId, plus any row whose parentId points at a
+  // category that no longer exists - an orphan still has to be reachable, and
+  // dropping it would hide content behind a link nobody can see. Children are
+  // nested under their parent; anything unreachable (a cycle from bad data) is
+  // promoted to a root rather than disappearing.
   const byId = new Map(cats.map((c) => [c.id, c]));
   const childOf = new Map<number, TaxRef[]>();
   const roots: TaxRef[] = [];
@@ -860,12 +984,19 @@ function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settin
       roots.push(c);
     }
   }
+  // A child reachable from two parents (impossible with a single parentId, but
+  // cheap to rule out) or looped back to a root would render twice. Mark every
+  // category that is claimed by exactly one parent as placed, then treat any
+  // unplaced row as a root - that covers both a cycle and a row whose parent
+  // chain dangles.
   const placed = new Set<number>();
   for (const [, kids] of childOf) for (const k of kids) placed.add(k.id);
   for (const c of cats) if (!placed.has(c.id) && !roots.includes(c)) roots.push(c);
 
   const countOf = (c: TaxRef): number | undefined => (catCounts ? catCounts.get(c.id) : undefined);
 
+  // One row of the tree: icon, name, count. `depth` drives the indent so a
+  // child reads as belonging to its parent.
   const catRow = (c: TaxRef, depth: number): string => {
     const n = countOf(c);
     return `<a href="${esc(c.url)}" class="df-cat df-cat-d${depth} text-[var(--text)] hover:text-[var(--accent)]">` +
@@ -875,6 +1006,20 @@ function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settin
       `</a>`;
   };
 
+  // A group is a <details> element rather than a div + button: expand/collapse
+  // then works with zero JavaScript, is keyboard-operable, keeps its state
+  // across a pjax swap (the markup is re-inserted, not recreated), and needs no
+  // id (which would collide once several sidebars render).
+  //
+  // The summary carries ONLY the disclosure control. A <summary> may not wrap
+  // an <a> (interactive content inside a summary is not reachable - activating
+  // the link toggles the group instead of navigating, and the browser is free
+  // to drop the anchor entirely), so the parent's own link sits beside it as a
+  // sibling. That also gives the parent row a real click target, which the
+  // group-toggle-only version lacked.
+  //
+  // `open` on the first groups only: a 5-group tree all-collapsed looks broken,
+  // all-open is taller than the sidebar.
   let openLeft = 2;
   const catTree = roots
     .map((r) => {
@@ -883,6 +1028,9 @@ function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settin
       if (!kids.length) {
         return `<li class="df-cat-li df-cat-li-leaf">${catRow(r, 0)}</li>`;
       }
+      // A group's count is the sum of its own posts and its children's: a parent
+      // usually holds no posts of its own, so showing only its own would make
+      // every group read as zero.
       const total = kids.reduce((sum, k) => sum + (countOf(k) ?? 0), 0) + (n ?? 0);
       const open = openLeft-- > 0;
       const sub = kids.map((k) => `<li class="df-cat-li">${catRow(k, 1)}</li>`).join("");
@@ -895,12 +1043,15 @@ function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settin
         `</summary>` +
         `<ul class="df-cat-sub">${sub}</ul>` +
         `</details>` +
+        // The parent is also a destination: its own page lists whatever is
+        // filed directly under it.
         `<a href="${esc(r.url)}" class="df-cat df-cat-parent text-[var(--text)] hover:text-[var(--accent)]" aria-label="${esc(r.name)}分类页">` +
         `<span class="df-cat-ic">${lucideSvg(catIconName(r), 14)}</span></a>` +
         `</li>`;
     })
     .join("");
 
+  // ---- Recent posts & tags -------------------------------------------------
   const recentLis = recent
     .map(
       (p) =>
@@ -919,6 +1070,12 @@ function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settin
   const card = (inner: string, cls = "") => `<section class="df-card ${cls}">${inner}</section>`;
 
   return `<aside class="df-aside">` +
+    // The sidebar search is a real field, not a decorative box: the label is
+    // screen-reader only, and the icon sits inside the bordered pill as a flex
+    // item (an absolutely-positioned overlay escaped the field whenever its
+    // containing block was not established). It keeps its own <label for> and
+    // the -block box modifier, so it is NOT routed through searchField() -
+    // that helper exists for the two copies that share a shape.
     `<form action="/search" method="get" class="df-search-form df-search-form-block" role="search">` +
     `<label class="df-sr-only" for="df-aside-q">搜索文章</label>` +
     `<span class="df-search-box df-search-box-block">` +
@@ -927,6 +1084,8 @@ function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settin
     ` role="combobox" aria-expanded="false" aria-autocomplete="list"` +
     ` aria-controls="df-suggest-aside" aria-label="搜索文章">` +
     `<kbd class="df-search-kbd">/</kbd>` +
+    // Its own panel id: all three fields are on the same page and each drives
+    // the list it points at.
     `<div class="df-suggest" id="df-suggest-aside" hidden></div>` +
     `</span></form>` +
     card(
@@ -938,6 +1097,7 @@ function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settin
     card(cardHead("clock", "最新文章") + `<ul class="df-recent-list">${recentLis || `<li class="df-empty">暂无文章</li>`}</ul>`) +
     `</aside>`;
 }
+
 
 function defaultPager(page: number, totalPages: number, hrefFor: (p: number) => string): string {
   if (totalPages <= 1) return "";
@@ -1052,6 +1212,7 @@ function defaultListPage(parts: ListParts): string {
     `</div>${sidebar}</div>`;
 }
 
+
 /**
  * The share block's markup. NO script here.
  *
@@ -1068,15 +1229,25 @@ function defaultListPage(parts: ListParts): string {
  * class of bug; this entry is the second consumer of the same rule.
  */
 function defaultShareButtons(title: string, url: string): string {
+  // https, not http: on an HTTPS site an http:// share link is mixed content,
+  // so the browser either blocks it or first loads it over plaintext, leaking
+  // the visited URL and getting the visitor flagged by Weibo's own gateway.
   const wb = `https://service.weibo.com/share/share.php?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`;
+  // x.com/intent/post is the current endpoint; intent/tweet still redirects, but linking the retired one is an extra hop for no reason.
   const x = `https://x.com/intent/post?url=${encodeURIComponent(url)}&text=${encodeURIComponent(title)}`;
   const mail = `mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(url)}`;
   const btn = "df-share-btn";
+  // data-url is left empty on purpose: theme-pjax.js falls back to
+  // location.href, which is the page the visitor is actually looking at. The
+  // server-rendered absolute URL is the page as of render time, and pjax has
+  // no way to rewrite an attribute on the markup it swaps in.
   return `<div class="df-share">` +
     `<span class="df-share-label">${lucideSvg("share-2", 15)}分享</span>` +
     `<button type="button" data-share-copy title="复制文章链接" class="${btn}">` +
     `${lucideSvg("link", 13)}<span data-share-label>复制链接</span></button>` +
     `<a href="${esc(wb)}" target="_blank" rel="noopener noreferrer" class="${btn}">微博</a>` +
+    // Plain text: lucide's `x` is the close glyph, and a brand logo is not
+    // worth shipping an icon file for.
     `<a href="${esc(x)}" target="_blank" rel="noopener noreferrer" class="${btn}" aria-label="分享到 X">X</a>` +
     `<a href="${esc(mail)}" class="${btn}">${lucideSvg("mail", 13)}邮件</a>` +
     `</div>`;
@@ -1119,6 +1290,10 @@ function defaultPostPage(parts: PostPageParts): string {
     ...(firstCat ? [{ label: firstCat.name, href: firstCat.url }] : []),
     { label: p.title },
   ]);
+  // Table of contents from the body's own h2/h3 anchors (addHeadingIds stamps
+  // id="<slug>-h<n>" at render). Native <details>: no JS, collapsed by default
+  // so short-ish posts with one or two headings stay uncluttered. Hidden
+  // entirely when the body has fewer than two headings.
   const tocItems = [...parts.bodyHtml.matchAll(/<h([23])[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/h\1>/g)]
     .map((m) => ({ level: Number(m[1]), id: m[2], text: m[3].replace(/<[^>]*>/g, "").trim() }))
     .filter((h) => h.text);
@@ -1137,6 +1312,9 @@ function defaultPostPage(parts: PostPageParts): string {
       : "";
   return `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><article>` +
     `<header class="mb-6">` +
+    // No "back to home" link above the title. The header already carries the
+    // site brand as a link to "/", so this was a second control to the same
+    // place competing with the breadcrumb right below it.
     crumb +
     (cats ? `<div class="mb-3 mt-3 flex flex-wrap gap-2 text-xs">${cats}</div>` : "") +
     `<h1 class="text-3xl font-bold leading-tight text-[var(--text)]">${esc(p.title)}</h1>` +
@@ -1175,6 +1353,10 @@ function defaultPagePage(parts: PagePageParts): string {
 const defaultChrome: ThemeChrome = {
   slug: "default",
   cssHref: () => themeCssHref("default"),
+  // Inlined; see ThemeChrome.cssInline. This is the theme the measurement was
+  // taken on, and it is also the one whose CSS is assembled from three sources
+  // (the shared form baseline, the body utilities and two files) - so a single
+  // <link> was the only way to ship it, and the only thing on the critical path.
   cssInline: () => themeCssContent("default"),
   bodyFix: () => defaultBodyFix,
   headExtra: () => "",
@@ -1188,6 +1370,8 @@ const defaultChrome: ThemeChrome = {
   postPage: defaultPostPage,
   pagePage: defaultPagePage,
 };
+
+// ============================================================= PSEUDOLINEAR
 
 const pseudoBodyFix = `<style id="rv-body-fix">body, html { background: #0c0d1a !important; color: #f3f1ff !important; }</style>`;
 
@@ -1527,7 +1711,15 @@ const pseudolinearChrome: ThemeChrome = {
   pagePage: pseudoPagePage,
 };
 
+// ================================================================= CODEMAN
+//
+// Faithful port of themes/codeman (Layout + HomePage + ListPages + PostPage).
+// The TTY/CRT aesthetic: cm-section shells, N° reverse-numbered cards, prompt
+// eyebrows. Widgets render inside cm-side blocks exactly like the original.
+
+
 const cmBodyFix = `<style id="rv-body-fix">body,html{background:#050a06 !important;color:#9bff7a !important}</style>`;
+
 
 function cmDate(v: Date | string | null | undefined): string {
   if (!v) return "—";
@@ -1540,6 +1732,8 @@ const cmPad = (n: number, w = 3) => String(n).padStart(w, "0");
 
 function cmNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
+  // Original parity (CodeManNav.tsx:9-12,22): an unconfigured header menu
+  // falls back to the home/blog pair instead of an empty terminal bar.
   const list: MenuItem[] = items.length
     ? items
     : [
@@ -1572,12 +1766,14 @@ function cmFooter(settings: Record<string, any>): string {
     `</div></div></footer>`;
 }
 
+
 function cmSection(eyebrow: string, small: string, count: string, inner: string): string {
   return `<section class="cm-section"><div class="cm-section-head">` +
     `<h2>${esc(eyebrow)} <small>${small}</small></h2>` +
     (count ? `<span class="cm-count">${count}</span>` : "") +
     `</div>${inner}</section>`;
 }
+
 
 function cmPostCard(p: PostView, idx: number, total: number): string {
   const cat = (p.categories || [])[0];
@@ -1590,6 +1786,7 @@ function cmPostCard(p: PostView, idx: number, total: number): string {
     `<a href="${esc(p.url)}" class="cm-read">cat ${esc(slug)}</a>` +
     `</article>`;
 }
+
 
 function cmPostRow(p: PostView, idx: number, total: number): string {
   return `<div class="cm-row">` +
@@ -1621,6 +1818,7 @@ function cmPager(page: number, totalPages: number, hrefFor: (p: number) => strin
     `</nav>`;
 }
 
+
 function cmWidgets(widgetsHtml: string, withSmall = true): string {
   const h2 = withSmall
     ? `<h2>widgets <small>// optional modules</small></h2>`
@@ -1628,6 +1826,7 @@ function cmWidgets(widgetsHtml: string, withSmall = true): string {
   return `<section class="cm-section"><div class="cm-section-head">${h2}</div>` +
     `<div class="cm-side">${widgetsHtml}</div></section>`;
 }
+
 
 function cmMiniCard(p: PostView, idx: number, total: number): string {
   return `<a href="${esc(p.url)}" class="cm-card" style="min-height:0">` +
@@ -1684,6 +1883,9 @@ function cmListPage(parts: ListParts): string {
   const isSearch = parts.variant === "search";
   const pager = parts.showPager !== false ? cmPager(parts.page, parts.totalPages, parts.hrefFor) : "";
   
+  //   blog     → total = ${published}
+  //   category → ${items.length} files
+  //   search   → ${items.length} matches / "—"
   let small: string;
   let count: string;
   let body: string;
@@ -1815,6 +2017,8 @@ const codemanChrome: ThemeChrome = {
   pagePage: cmPagePage,
 };
 
+// ================================================================= BLUEMIX
+
 function bmixNavActive(settings: Record<string, any>, url: string): boolean {
   let path = String(settings.__pathname ?? "/");
   const base = String(settings.__basePath ?? "").replace(/\/+$/, "");
@@ -1920,6 +2124,8 @@ function bmixFooter(settings: Record<string, any>, widgetsHtml: string): string 
     `</div></footer>`;
 }
 
+// -------------------------------------------------------------------- bluemix
+
 const BMIX_PALETTE = ["#3b6ea5","#5f7ad1","#e0853b","#7a5fa8","#3aa37f","#b5548f","#c75f5f","#58595b","#2d8f9e","#6f8f3a"];
 function _hash(s: string): number { let h = 0; for (let i = 0; i < s.length; i++) { h = (h << 5) - h + s.charCodeAt(i); h |= 0; } return Math.abs(h); }
 function _hex2rgb(hex: string): [number, number, number] { let h = hex.replace(/#/g, ""); if (h.length === 6) return [parseInt(h.substr(0, 2), 16), parseInt(h.substr(2, 2), 16), parseInt(h.substr(4, 2), 16)]; if (h.length === 3) return [parseInt(h[0] + h[0], 16), parseInt(h[1] + h[1], 16), parseInt(h[2] + h[2], 16)]; return [0, 0, 0]; }
@@ -1930,7 +2136,9 @@ function _hx(h: number, s: number, l: number): string { const [r, g, b] = _hsl2r
 function _rg(h: number, s: number, l: number, a: number): string { const [r, g, b] = _hsl2rgb(h, s, l); return `rgba(${r},${g},${b},${a})`; }
 function _mix(v: number, range: [number, number]): number { return (v / 100) * (range[1] - range[0]) + range[0]; }
 
+
 const BMIX_CARD_THEME_META_KEY = "bluemix_card_theme";
+
 
 function bmixNormalizeHex(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -1979,11 +2187,13 @@ function bmixSplitTitle(raw: string): { title1: string; title2: string } {
   return { title1: raw, title2: "" };
 }
 
+
 function bmixYmd(v: Date | string | null | undefined): string {
   if (!v) return "";
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? "" : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
 }
+
 
 const BMIX_ICON_ALIAS: Record<string, string> = {
   comments: "message-square-text",
@@ -2030,9 +2240,12 @@ function bmixIc(icon: string, size: number, marginRight = 0): string {
   return `<svg ${common}>${circle}<path d="${paths[icon] || paths.bookmark}"/></svg>`;
 }
 
+
 const iconFileCache = new Map<string, string | null>();
 
+
 const LUCIDE_CLASS_ALIAS: Record<string, string> = { "share-2": "share2" };
+
 
 /**
  * Class for icons rendered inside prose/meta rows.
@@ -2090,6 +2303,7 @@ function lucideSvg(name: string, px: number, cls = "", styleExtra = ""): string 
     .replace(/(<svg\b[^>]*)>/, `$1 style="${style}">`);
 }
 
+
 function bmixIconFile(name: string | null | undefined, size: number, cls = ""): string {
   if (!name) return "";
   const key = String(name).trim();
@@ -2099,6 +2313,7 @@ function bmixIconFile(name: string | null | undefined, size: number, cls = ""): 
 
 function bmixPostCard(p: PostView, idx: number): string {
   const t = bmixCardTone(p.slug || p.url, idx, 1, p.metas);
+  // mirror PostCard.tsx useArtworkTint(wrapRef, themeColor ? undefined : image, 1)：
   
   const preset = bmixThemeColorFromMeta(p.metas?.[BMIX_CARD_THEME_META_KEY]) ? ' data-bmx-preset="1"' : "";
   const darkCls = t.dark ? " is-dark" : "";
@@ -2125,6 +2340,7 @@ function bmixSectionTitle(text: string): string {
   return `<div class="cat-title flex items-center large"><div class="icon flex default mr-5 ml-2"></div><div class="content text-primary-gray text-bulge-primary-gray">${esc(text)}</div></div>`;
 }
 
+
 function bmixPager(page: number, total: number, hrefFor: (p: number) => string): string {
   if (total <= 1) return "";
   const show = {
@@ -2149,8 +2365,12 @@ function bmixPager(page: number, total: number, hrefFor: (p: number) => string):
     cells.join("") + `</ul></div>`;
 }
 
+// ---------------------------------------------------- bluemix home sub-builders
+// (mirror themes/bluemix/{Banner,ThemeSidebar,CatNav,Rankings,HomePage}.tsx DOM)
+
 function bmixHeroScene(p: PostView, i: number): string {
   const { title1, title2 } = bmixSplitTitle(p.title);
+  // mirror Banner.tsx：cardToneFor(h.slug, {bluemix_card_theme: h.themeColor}, i)
   
   const t = bmixCardTone(p.slug || p.url, i, 0.8, p.metas);
   const preset = bmixThemeColorFromMeta(p.metas?.[BMIX_CARD_THEME_META_KEY]) ? ' data-bmx-preset="1"' : "";
@@ -2249,6 +2469,7 @@ function bmRankPane(
   return `<div class="rankings">${firstCard}${others}</div>`;
 }
 
+
 function bmixStripTag(title: string): string {
   return String(title ?? "").replace(/\[[^\]]+\]/, "");
 }
@@ -2307,6 +2528,8 @@ function bmixHomeSidebar(posts: PostView[], settings: Record<string, unknown>, t
     "linear-gradient(135deg,#7ba3e0,#b59df0)";
   const isGradient = avatarRaw.startsWith("linear-gradient");
   const avatarStyle = isGradient ? `background-image:${avatarRaw}` : `background-image:${cssUrl(avatarRaw)}`;
+  // Original ThemeSidebar.tsx wraps the avatar in a link when sidebarAvatarLink
+  // is set (external links get target/rel); the <a> carries the same style.
   const avatarHref = typeof (ts as any)?.sidebarAvatarLink === "string" ? (ts as any).sidebarAvatarLink.trim() : "";
   const external = /^https?:\/\//i.test(avatarHref);
   const avatarNode = avatarHref
@@ -2352,6 +2575,8 @@ function bmixHome(parts: HomeParts): string {
   const banner = showHero ? bmixBanner(recent, bannerMax) : "";
   const rankings = bmixRankings(parts.rankings, parts.rankTabs);
   const sections = (parts.sections || []).map((s) => `<div class="bmx-reveal">${bmixSection(s.row.title, s.row.category.url, s.row.icon, s.posts)}</div>`).join("");
+  // Original HomePage.tsx places the `home-top` area between the banner and the
+  // two-column body (className "container-np bmx-ad-area").
   const homeTop = parts.homeTop || "";
   return `<div class="home">` +
     banner +
@@ -2469,6 +2694,7 @@ function bmixPostToc(toc: { id: string; text: string; level: number }[]): string
  *  switches to popular/random. Both panes render server-side; theme-bluemix.js
  *  toggles visibility with a light slide-in animation. */
 
+
 function bmixCommentHead(count: number): string {
   return `<div class="cat-title flex items-center large"><div class="custom-icon mr-5">${bmixIc("comments", 14)}</div>` +
     `<div class="content text-primary-gray text-bulge-primary-gray">${count} 条回应</div>` +
@@ -2501,16 +2727,21 @@ function bmixPostPage(parts: PostPageParts): string {
   const p = parts.post;
   const { html: bodyHtml, toc } = bmixHeadings(parts.bodyHtml, p.slug || "post");
   const { title1, title2 } = bmixSplitTitle(p.title);
+  // mirror PostPage.tsx: cardToneFor(post.slug, post.metas, 0) —— bgAlpha 0.8。
   const t = bmixCardTone(p.slug || p.url, 0, 0.8, p.metas);
   const vars = Object.entries(t.vars).map(([k, v]) => `${k}:${v}`).join(";");
   const darkCls = t.dark ? " is-dark" : "";
   const hasImage = !!p.featuredImage;
   const imgUrl = hasImage ? esc(p.featuredImage!) : "";
   const date = fmtDate(p.publishedAt);
+  // post.meta filter values (reading-time, . ) — the hero badge row; empty.
+  // unless a plugin contributes, exactly like the original PostPage.tsx.
   const badges = parts.metaBadges ?? [];
   const bg = p.featuredImage
     ? `<div class="bg-wrapper"><img class="bg" src="${imgUrl}" alt="${esc(p.title)}" loading="eager"></div>`
     : `<div class="bg-wrapper"></div>`;
+  // mirror PostPage.tsx skipTint={hasThemeColor}: a preset card theme pins
+  // the surface, so the client artwork sampler must not repaint it.
   const presetAttr = bmixThemeColorFromMeta(p.metas?.[BMIX_CARD_THEME_META_KEY]) ? ' data-bmix-preset="1"' : "";
   const heroCard = `<div class="card-container${darkCls} bg-blur" data-bmix-hero${presetAttr} style="${vars}">` +
     bg +
@@ -2530,6 +2761,10 @@ function bmixPostPage(parts: PostPageParts): string {
     (hasImage ? `<img src="${imgUrl}" alt="" >` : "") +
     `</div></div></div>`;
   const sidebar = bmixPostSidebar(toc, p, parts.related || [], parts.popular || [], parts.random || []);
+  // Original PostPage.tsx appends the `sidebar` widget area after PostSidebar
+  // and renders `post-bottom` between the article and the comment block; both
+  // arrive pre-wrapped from the loader (className bmx-ad-area /
+  // model-wrapper bmx-ad-area) so the wrapper classes live in one place.
   const sideWidgets = parts.sidebarWidgets || "";
   const postBottom = parts.postBottom || "";
   return `<div class="single"><div data-post-type="article">` +
@@ -2553,6 +2788,7 @@ function bmixPostPage(parts: PostPageParts): string {
     `</div></div></div></div>`;
 }
 
+
 function bmixPageSideRow(p: PostView): string {
   const img = p.featuredImage
     ? `background-image:${cssUrl(p.featuredImage)}`
@@ -2565,6 +2801,7 @@ function bmixPageSideRow(p: PostView): string {
     `<span class="text-success">${bmixIc("eye", 10)} ${p.views ?? 0}</span>` +
     `</span></span></div>`;
 }
+
 
 function bmixPagePage(parts: PagePageParts): string {
   const p = parts.page;
@@ -2627,6 +2864,7 @@ function bmixPagePage(parts: PagePageParts): string {
     comments +
     `</div></div></div></div>`;
 }
+
 
 export function bluemixNotFoundPage(parts: {
   settings: { title: string; message: string; showSearch: boolean; showRecent: boolean };
@@ -2716,6 +2954,8 @@ const bluemixChrome: ThemeChrome = {
     `<main id="sk-main"><div class="pf-route-frame pf-init" data-bmx-frame>`,
   
   bodyClose: (settings, footerHtml) => {
+    // Original Layout.tsx:177-183 emits the theme's analytics code verbatim as
+    // the last child of the theme wrapper, after the footer.
     const analytics = typeof settings.analyticsCode === "string" ? settings.analyticsCode.trim() : "";
     return (
       `</div></main>` +
@@ -2733,6 +2973,8 @@ const bluemixChrome: ThemeChrome = {
   postPage: bmixPostPage,
   pagePage: bmixPagePage,
 };
+
+// ================================================================== REGISTRY
 
 const registry = new Map<string, ThemeChrome>();
 registry.set("skyscraper", skyscraperChrome);

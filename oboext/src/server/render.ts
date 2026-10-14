@@ -1,12 +1,4 @@
-/**
- * Server-side HTML builders for the skyscraper theme — a straight port of
- * tools/gen.mjs's pure functions, but fed by LIVE PostView rows (camelCase,
- * permalink-aware .url) instead of a build-time JSON snapshot.
- *
- * Everything here returns trusted strings assembled from escaped fields;
- * block "html" content is author-trusted by design (same contract as the
- * original serializeBlocks). Templates emit these strings via `{@html}`.
- */
+// Server-side HTML builders for the skyscraper theme — a straight port of tools/gen.mjs's pure functions.
 import type { Block } from "./schema.js";
 import type { PostView, TaxRef } from "./queries.js";
 import type { PageView } from "./pages.js";
@@ -22,21 +14,14 @@ import { uploadsAbsPath } from "./storage.js";
 import fsMod from "node:fs";
 import pathMod from "node:path";
 
-
 export function extractSubtitle(title: string): string {
+  // Match pattern: "prefix 123 · subtitle · subsubtitle"
   const match = title.match(/^(.+?)\s+\d+\s*·\s*(.+)$/);
   if (!match) return "";
   return match[2].trim();
 }
 
-/**
- * F2e (responsive variants for uploads): the sibling `.wNNN` files beside an
- * uploaded image (generated at upload time by media.ts) become a srcset on
- * the featured-image <img>. The lookup is memoized for the process lifetime:
- * variants are written once at upload and never change afterwards, so an
- * entry that found none stays correct too. Only /uploads URLs participate -
- * public-dir images are handled by the framework compiler's own srcset pass.
- */
+// F2e (responsive variants for uploads): the sibling `.wNNN` files beside an uploaded image (generated at upload time by media.ts) become a srcset.
 const variantCache = new Map<string, string>();
 
 /** Drop the memoized srcset lookup for one uploads URL (after variants land). */
@@ -69,11 +54,16 @@ export function imgVariantAttrs(url: string): string {
       if (widths.length) attrs = ` srcset="${widths.map((x) => `${esc(x.u)} ${x.w}w`).join(", ")}"`;
     }
   } catch {
-    attrs = "";
+    attrs = ""; // unreadable dir: no variants, no attrs
   }
   variantCache.set(url, attrs);
   return attrs;
 }
+
+// All builders here return TRUSTED html strings. Templates render them with
+// the framework primitive `{@html expr}` (rosezm 0.2.4, P1-2 fix).
+
+// --------------------------------------------------------------------- utils
 
 export const esc = (s: unknown): string =>
   String(s ?? "")
@@ -91,6 +81,42 @@ export function fmtDate(v: Date | string | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+// Intl.DateTimeFormat CONSTRUCTION is the expensive half (~70µs each, measured
+// on V8), and formatSiteDate runs once per rendered date: a 12-post list page
+// paid ~0.86ms in constructor churn alone, against ~0.02ms with the formatters
+// built once. They are immutable and keyed by timezone - an admin setting, so
+// one entry in practice. A bad timezone still throws, exactly as it did when
+// the constructor was called inline.
+const dateFmtNumeric = new Map<string, Intl.DateTimeFormat>();
+function numericDateFmt(tz: string): Intl.DateTimeFormat {
+  let f = dateFmtNumeric.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    dateFmtNumeric.set(tz, f);
+  }
+  return f;
+}
+
+const dateFmtShort = new Map<string, Intl.DateTimeFormat>();
+function shortDateFmt(tz: string): Intl.DateTimeFormat {
+  let f = dateFmtShort.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+    dateFmtShort.set(tz, f);
+  }
+  return f;
+}
+
 export function formatSiteDate(
   v: Date | string | null | undefined,
   settings: { dateFormat?: string; timezone?: string; language?: string },
@@ -99,31 +125,21 @@ export function formatSiteDate(
   const d = typeof v === "string" ? new Date(v) : v;
   if (Number.isNaN(d.getTime())) return "";
   const tz = settings.timezone || "Asia/Shanghai";
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  })
-    .format(d)
-    .split("-");
+  const parts = numericDateFmt(tz).format(d).split("-");
   const [y, m, day] = parts;
   switch (settings.dateFormat) {
     case "YYYY年M月D日":
       return `${y}年${Number(m)}月${Number(day)}日`;
     case "MMM D, YYYY":
-      return new Intl.DateTimeFormat("en-US", {
-        timeZone: tz,
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      }).format(d);
+      return shortDateFmt(tz).format(d);
     case "D/M/YYYY":
       return `${Number(day)}/${Number(m)}/${y}`;
     default:
       return `${y}-${m}-${day}`;
   }
 }
+
+// ------------------------------------------------- content pipeline (blocks)
 
 function renderBlock(b: Block): string {
   switch (b.type) {
@@ -160,7 +176,7 @@ function renderBlock(b: Block): string {
     case "divider":
       return "<hr/>";
     case "html":
-      return b.html;
+      return b.html; // trusted author markup, verbatim
     default:
       return "";
   }
@@ -205,6 +221,8 @@ function extractHeadings(html: string): { level: number; text: string }[] {
   while ((m = re.exec(html))) out.push({ level: Number(m[1]), text: m[2].replace(/<[^>]*>/g, "").trim() });
   return out;
 }
+
+// ----------------------------------------------- syntax highlighter (port of)
 
 function decodeEntities(s: string): string {
   return s.replace(/&(lt|gt|quot|#39|amp);/g, (_m, k) =>
@@ -421,6 +439,7 @@ function shortcodeResolvers(): ShortcodeResolvers {
   return {
     media: async (ids) => {
       const rows = await db.select().from(media).where(inArray(media.id, ids));
+      // Preserve the author's declared order.
       const byId = new Map(rows.map((r) => [r.id, r]));
       return ids.map((i) => byId.get(i)).filter(Boolean) as typeof rows;
     },
@@ -441,6 +460,8 @@ function shortcodeResolvers(): ShortcodeResolvers {
     },
   };
 }
+
+// ------------------------------------------------------------- html builders
 
 const CARD_COLS = "post-card-col col-xxs-6 col-xs-6 col-sm-4 col-md-4 col-lg-3 col-xl-3";
 
@@ -514,6 +535,8 @@ export const cardRow = (items: PostView[], awards = false): string =>
     ? '<div class="sk-empty">暂无内容</div>'
     : `<div class="row post-card-row">${items.map((p, i) => postCard(p, awards ? i + 1 : 0)).join("")}</div>`;
 
+// --------------------------------------------------------------- post pages
+
 const ICON_IMAGE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-image"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path></svg>';
 const ICON_WEIBO =
@@ -553,6 +576,8 @@ export function postHead(
   const ogImage = p.featuredImage || logoUrl || "";
   const author = p.author?.name;
   const iso = (v: Date | string | null | undefined) => new Date(v ?? p.publishedAt!).toISOString();
+  // BreadcrumbList: home -> (primary category) -> this post. The first crumb
+  // doubles as the site root entry; a post without categories is Home->Post.
   const crumbs: Array<{ name: string; url: string }> = [
     { name: siteTitle, url: `${origin}/` },
   ];
@@ -601,6 +626,8 @@ export function postHead(
     }),
   ].filter(Boolean).join("");
 }
+
+// --------------------------------------------------------------- comments
 
 export type FlatComment = {
   id: number;
@@ -733,6 +760,16 @@ function builtinCommentsHtml(m: CommentModel): string {
       `<div class="item"><input type="url" class="comment-field" name="authorUrl" autocomplete="url" placeholder="${esc(m.authorUrlLabel)}${m.requireAuthorUrl ? " *" : ""}"><i>${ICON_LINK}</i></div>` +
       "</div>";
 
+  // The toolbar is ONE row: the emoji trigger on the left, the submit on the
+  // right, space between. They used to be two sibling blocks - .funcs holding
+  // the emoji button and .form-actions holding the submit - so the emoji button
+  // sat on a line of its own, full width, with the submit stranded on the line
+  // below. Nothing in the CSS could fix that: two block-level children of the
+  // same parent do not share a line, whatever their display values say.
+  //
+  // The panel span stays INSIDE the left group, because the panel is positioned
+  // against it (positionEmoji measures the host to decide above/below), so the
+  // host must remain the element the button is in.
   const form =
     '<form class="comment-form sf-comment-form my-5" novalidate data-comment-form ' +
     `data-post-id=${m.postId} data-post-type=${esc(m.postType)} data-require=${m.requireNameEmail ? "1" : "0"}` +
@@ -743,6 +780,10 @@ function builtinCommentsHtml(m: CommentModel): string {
     '<div class="input">' +
     `<textarea name="content" placeholder="请输入...">${esc(m.defaultContent || "")}</textarea></div>` +
     '<div class="sf-toolbar">' +
+    // No mx-5 here: the toolbar's own padding already insets the row, so the
+    // margin pushed the emoji trigger 20px further right than the textarea
+    // edge above it - the button did not line up with the field it belongs to.
+    // The panel is positioned against .funcs, so it stays inside this element.
     '<div class="funcs">' +
     `<button type="button" aria-label="表情" title="表情" data-comment-emoji>${ICON_SMILE}</button>` +
     '<span class="emoji-panel-wrap" data-emoji-panel aria-hidden="true"></span>' +
@@ -824,6 +865,9 @@ export function postPage(
   const tags = p.tags.length
     ? '<div class="tags">' + p.tags.map((t) => `<a href="${esc(t.url)}"># ${esc(t.name)}</a>`).join("") + "</div>"
     : "";
+  // Gallery header is a post *format*, not a side effect of having a featured
+  // image: every standard post has one, but only format=gallery gets the
+  // 450px flickering banner (and the article card's negative-margin overlap).
   
   const isGallery = (p as { format?: string }).format === "gallery";
   const galleryImgs = isGallery ? collectGalleryImages(renderedBody, p.featuredImage) : [];
@@ -866,6 +910,8 @@ export function postPage(
     "</div>"
   );
 }
+
+// ---------------------------------------------------------------- page pages
 
 /** Skyscraper PageBySlug uses slash dates in its meta line. */
 function fmtDateSlash(v: Date | string | null | undefined): string {
@@ -973,6 +1019,8 @@ export function pagePage(
   );
 }
 
+// ---------------------------------------------------------------- home page
+
 const POS0 = ["current", "future0", "future1", "future2"];
 function heroPage(p: PostView, pos: number): string {
   const c = p.categories[0] ?? null;
@@ -1030,6 +1078,8 @@ export function homeHtml(parts: {
   random: PostView[];
   cats: TaxRef[];
 }): string {
+  // Trade-off: skyscraper theme-settings showCatsStrip assumed on; read the
+  // themes table if an admin switch appears in B/C phase.
   return (
     '<div class="sk-home">' +
     cardFlip(parts.hero) +
@@ -1042,6 +1092,8 @@ export function homeHtml(parts: {
     "</div>"
   );
 }
+
+// --------------------------------------------------------------- list pages
 
 export function pager(page: number, totalPages: number, hrefFor: (p: number) => string): string {
   if (totalPages <= 1) return "";
@@ -1078,6 +1130,8 @@ export function listPage(parts: {
   );
 }
 
+// ------------------------------------------------------------------- chrome
+
 export function topNav(settings: Record<string, any>): string {
   const title = esc(settings.siteTitle ?? "");
 
@@ -1101,6 +1155,10 @@ export function topNav(settings: Record<string, any>): string {
   );
 }
 
+// Sidebar nav tree, DOM contract ported from themes/skyscraper/SidebarMenu.tsx:
+//   ul#menu-main.menu > li.menu-item(.menu-item-has-children) > a (+ ul.sub-menu)
+// Parent rows are non-navigating toggles; SSR marks `open` when the row or any
+// descendant is active so first paint matches the React useState(active||. )
 export type SkyItem = {
   id: number | string;
   label: string;
@@ -1206,6 +1264,8 @@ export function footerHtml(settings: Record<string, any>, widgetsHtml = ""): str
     : "";
   return `<footer>${widgetsHtml}<div class="pagenav is-empty"></div><div class="copyright">${esc(settings.footerText ?? "")}</div>${icp}</footer>`;
 }
+
+// ----------------------------------------------------------- widget areas
 
 const waLink = "color:var(--text);text-decoration:none;font-size:.9rem;line-height:1.5;";
 const waRow = "display:flex;align-items:baseline;justify-content:space-between;gap:.6rem;padding:.35rem 0;";
@@ -1419,6 +1479,8 @@ function widgetBody(w: import("./widgets.js").ResolvedWidget): string {
     }
 
     case "text":
+      // Admin-authored (settings:manage); HTML is intentional. Shortcodes are
+      // a C-phase dependency — [shortcode] text passes through literally.
       return waShell(
         w,
         `<div class="oboe-widget-text" style="font-size:.9rem;line-height:1.7;color:var(--muted)">${String(cfg.body ?? "")}</div>`,

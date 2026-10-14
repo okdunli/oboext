@@ -1,36 +1,4 @@
-/**
- * Cross-site request forgery protection.
- *
- * The session cookie is `SameSite=Lax`, which already blocks the classic
- * cross-site POST of an HTML form — but Lax only stops the cookie on
- * *cross-site* requests, and it says nothing about a same-site attacker
- * (a compromised or user-controlled subdomain), about a client that treats
- * "the cookie is present" as authorisation for anything the origin offers, or
- * about the day the cookie policy is relaxed for some other reason. A token is
- * the part that does not depend on the browser's cookie policy at all.
- *
- * Two properties make this cheap here:
- *
- *  1. The token is DERIVED from the session token, not stored. There is no
- *     table to consult, no second cookie that can expire on a different
- *     schedule than the session it protects, and no way for the two to drift.
- *     `HMAC(secret, sessionToken)` is deterministic, so the middleware
- *     recomputes the expected value from the cookie it already read.
- *
- *  2. Verification is HMAC-based, not equality-only. Equality alone is the
- *     textbook double-submit cookie, and it fails against cookie INJECTION:
- *     an attacker who can set `cms_csrf` on the victim's browser (through a
- *     sibling subdomain, for instance) sets it to a value they know and then
- *     sends that same value in the header. Recomputing the HMAC from the
- *     session token means an injected cookie cannot produce a value the server
- *     accepts.
- *
- * The token travels in a NON-HttpOnly cookie so scripts can read it, and is
- * echoed in the `X-CSRF-Token` header. That pairing is what makes the attack
- * fail: a cross-origin page can cause the cookie to be SENT, but the same
- * origin policy stops it from READING the cookie, so it cannot echo the value
- * into a header.
- */
+// Cross-site request forgery protection. Recomputing the HMAC from the session token means an injected cookie cannot produce a value the server accepts.
 import crypto from "crypto";
 import {
   getSecret,
@@ -42,35 +10,16 @@ import {
   type SessionUser,
 } from "./auth.js";
 
-/**
- * Cookie holding the token. Deliberately not HttpOnly — the whole point is
- * that same-origin JavaScript can read it and echo it into a header. It is
- * scoped to Path=/ and SameSite=Lax so it is not readable from a page on
- * another origin and is not attached to cross-site requests at all.
- */
+// Cookie holding the token.
 export const CSRF_COOKIE_NAME = "cms_csrf";
 
 /** Header the token is echoed in. */
 export const CSRF_HEADER = "x-csrf-token";
 
-/**
- * Token lifetime in days — the session's, because it shadows that cookie.
- * Imported rather than repeated so the two can never drift; a token that
- * outlives its session is not a security problem (it simply stops matching,
- * since it is derived from the session token) but it is confusing to debug.
- */
+// Token lifetime in days — the session's, because it shadows that cookie.
 const CSRF_DAYS = SESSION_DAYS;
 
-/**
- * The token for a given session token.
- *
- * Derived, not random: an attacker who cannot read the cookie cannot predict
- * it, an attacker who CAN write the cookie still cannot produce a valid one
- * (the HMAC key is the server secret), and the server needs no storage to
- * check it. The `csrf:` domain separator keeps this value from ever being
- * mistaken for — or colliding with — anything derived from the raw session
- * token.
- */
+// The token for a given session token.
 export function csrfTokenFor(sessionToken: string): string {
   return crypto
     .createHmac("sha256", Buffer.from(getSecret()))
@@ -78,21 +27,7 @@ export function csrfTokenFor(sessionToken: string): string {
     .digest("base64url");
 }
 
-/**
- * Every Set-Cookie value a fresh login must send: the session, and the CSRF
- * token derived from that SAME session token.
- *
- * One function so no login path can establish a session without its token.
- * There are seven such paths (password, 2FA, code, registration, first-run
- * setup, OAuth callback, self-service profile update) and the failure mode of
- * a missed one is a locked-out user whose every write returns 400 — which
- * looks like a broken app rather than a missing defence, so it is worth
- * making the pairing impossible to forget.
- *
- * Returns an array because that is what `headers: { "set-cookie": [...] }`
- * expects. A single joined string is the classic mistake here: it produces one
- * malformed cookie, not two cookies, and the second one is silently dropped.
- */
+// Every Set-Cookie value a fresh login must send: the session, and the CSRF token derived from that SAME session token.
 export async function sessionCookiePair(user: SessionUser): Promise<string[]> {
   const token = await signSession(user);
   return [sessionCookieValueFor(token), csrfCookieValue(token)];
@@ -177,6 +112,10 @@ export function checkCsrf(req: Request): { ok: true } | { ok: false; reason: Csr
   const session = readSessionCookie(req);
   if (!session) return { ok: true };
 
+  // Both halves are required and must be EQUAL. The header is what proves the
+  // caller could read the cookie; the cookie is what the HMAC is checked
+  // against. Accepting a header with no cookie read would make the header the
+  // whole defence — and a forged request sets a header freely.
   const cookie = readCsrfCookie(req);
   if (!cookie) return { ok: false, reason: "no-token" };
   const presented = req.headers.get(CSRF_HEADER);
@@ -184,6 +123,8 @@ export function checkCsrf(req: Request): { ok: true } | { ok: false; reason: Csr
   if (presented !== cookie) return { ok: false, reason: "mismatch" };
 
   const expected = csrfTokenFor(session);
+  // timingSafeEqual needs two equal-length buffers or it throws, so the
+  // length check is part of the comparison, not a shortcut around it.
   const a = Buffer.from(presented);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
@@ -196,4 +137,19 @@ export function checkCsrf(req: Request): { ok: true } | { ok: false; reason: Csr
 export function isSafeMethod(method: string): boolean {
   const m = method.toUpperCase();
   return m === "GET" || m === "HEAD" || m === "OPTIONS";
+}
+
+/**
+ * Set-Cookie value re-minting the token for a session that somehow lost its
+ * csrf half (a session established before the token shipped, a cleared cookie
+ * while the session survived). The token is derived from the session the
+ * server itself just validated, so re-minting is exactly as safe as the login
+ * that first paired them. Null when there is nothing to heal: no session, or
+ * the cookie is present and the rejection is a genuine mismatch/invalid.
+ */
+export function selfHealCsrfCookie(req: Request): string | null {
+  const session = readSessionCookie(req);
+  if (!session) return null;
+  if (readCsrfCookie(req)) return null;
+  return csrfCookieValue(session);
 }

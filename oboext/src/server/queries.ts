@@ -1,11 +1,18 @@
-/**
- * Read queries for the public site — ported from lib/services/posts.ts and
- * taxonomies.ts. Every function reads the LIVE database on demand; nothing is
- * baked. Sticky ordering merges plugin ids (posts.pinned hook) with the
- * native posts.pinned flag, exactly as posts.ts does.
- */
+// Read queries for the public site — ported from lib/services/posts.ts and taxonomies.ts.
 import { createHash } from "crypto";
-import { and, asc, desc, eq, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNull,
+  lte,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import { db, isConnectionError } from "./db.js";
 import {
   categories,
@@ -33,17 +40,10 @@ import { HOOKS, applyFilters } from "./hooks.js";
 import { ServiceError } from "./errors.js";
 import { invalidate, memoQuery, memoStrict, SIDEBAR_TTL } from "./cache.js";
 
-/**
- * Scheduled publishing (time gate): a `published` post whose publishedAt is
- * in the future is "scheduled" and hidden from every public read until its
- * time comes — no extra column, no status-flip timer. Accuracy is bounded by
- * the render/data caches (seconds), which is exactly the guarantee a blog
- * needs. NULL publishedAt (legacy rows) stays visible.
- * Every public read path MUST include this: listPostsRaw, slug/id lookups,
- * related posts and the sidebar counts. Admin reads deliberately do not.
- */
+// Scheduled publishing (time gate): a `published` post whose publishedAt is in the future is "scheduled" and hidden from every public read.
 const publishedVisible = or(isNull(posts.publishedAt), lte(posts.publishedAt, sql`now()`));
 
+// Nullable on purpose: a root category has parentId = null. A parentId pointing
 export type TaxRef = { id: number; name: string; slug: string; url: string; icon?: string | null; parentId?: number | null };
 
 export type PostView = Post & {
@@ -51,27 +51,21 @@ export type PostView = Post & {
   author: { id: number; name: string; email: string } | null;
   categories: TaxRef[];
   tags: TaxRef[];
-  /** Custom fields (post_metas); themes consume e.g. bluemix_card_theme. */
+/** Custom fields (post_metas); themes consume e.g. bluemix_card_theme. */
   metas: Record<string, string>;
 };
 
-/**
- * Drop a featured_image whose local file is gone.
- *
- * The column is plain text, so it can outlive the upload: a demo seed naming
- * /uploads/media/demo-01.png, or a media record deleted from the panel while
- * the post kept the path. Handing such a URL to the theme produced a broken
- * <img>, and the share poster - whose palette is sampled from that same image -
- * lost its colors and rendered as a black card. Nulling it lets the theme's own
- * no-image presentation take over. Remote and data URLs are left alone.
- *
- * Applied on every public read path so no theme has to re-check.
- */
+// on every render - a crawler walking the site turned one absent file into a
+const warnedMissingCovers = new Set<string>();
+
 function withUsableCover<T extends { featuredImage?: string | null }>(view: T): T {
   if (view.featuredImage && !uploadExists(view.featuredImage)) {
-    console.warn(
-      `[queries] featured_image ${view.featuredImage} is missing on disk, rendering without a cover`,
-    );
+    if (!warnedMissingCovers.has(view.featuredImage)) {
+      warnedMissingCovers.add(view.featuredImage);
+      console.warn(
+        `[queries] featured_image ${view.featuredImage} is missing on disk, rendering without a cover`,
+      );
+    }
     return { ...view, featuredImage: null };
   }
   return view;
@@ -93,7 +87,11 @@ export type PostQuery = {
   random?: boolean;
   limit?: number;
   offset?: number;
+  /** Ship the full content body (export, GraphQL, RSS). Lists never need it. */
+  full?: boolean;
 };
+
+// ---------------------------------------------------------------- settings
 
 /**
  * Site settings, memoized hard-TTL.
@@ -116,23 +114,29 @@ export function invalidateSettings(): void {
   invalidate("settings");
 }
 
+// ------------------------------------------------------------ taxonomies
+
 export async function attachTaxonomies(ids: number[]) {
   const cats: Record<number, { id: number; name: string; slug: string }[]> = {};
   const tg: Record<number, { id: number; name: string; slug: string }[]> = {};
   if (!ids.length) return { categories: cats, tags: tg };
 
-  const ct = await db
-    .select({ postId: postCategories.postId, id: categories.id, name: categories.name, slug: categories.slug })
-    .from(postCategories)
-    .innerJoin(categories, eq(postCategories.categoryId, categories.id))
-    .where(inArray(postCategories.postId, ids));
+  // Two independent reads - one round trip, not two. Against a remote Neon the
+  // saved leg is ~20-40ms on every list render and every post hydrate.
+  const [ct, tt] = await Promise.all([
+    db
+      .select({ postId: postCategories.postId, id: categories.id, name: categories.name, slug: categories.slug })
+      .from(postCategories)
+      .innerJoin(categories, eq(postCategories.categoryId, categories.id))
+      .where(inArray(postCategories.postId, ids)),
+    db
+      .select({ postId: postTags.postId, id: tags.id, name: tags.name, slug: tags.slug })
+      .from(postTags)
+      .innerJoin(tags, eq(postTags.tagId, tags.id))
+      .where(inArray(postTags.postId, ids)),
+  ]);
 
-  const tt = await db
-    .select({ postId: postTags.postId, id: tags.id, name: tags.name, slug: tags.slug })
-    .from(postTags)
-    .innerJoin(tags, eq(postTags.tagId, tags.id))
-    .where(inArray(postTags.postId, ids));
-
+  // join-table physical order (primary category first) is preserved
   for (const row of ct) (cats[row.postId] ??= []).push(row);
   for (const row of tt) (tg[row.postId] ??= []).push(row);
   return { categories: cats, tags: tg };
@@ -192,14 +196,28 @@ export async function listTags(): Promise<TagWithUrl[]> {
   });
 }
 
+/**
+ * Slug -> row lookups for the catch-all router.
+ *
+ * The router probes one of these on EVERY public render to decide whether a
+ * path is a taxonomy, and the detail loader then asks for the same row again —
+ * two remote round trips per render for a row that changes only on a write.
+ * Memoized under the `tax:` prefix, so they share listCategories/listTags'
+ * invalidation (invalidateContentCaches drops the whole prefix on any category
+ * or tag write) and their TTL: a rename or delete is visible at once.
+ */
 export async function getCategoryBySlug(slug: string) {
-  const rows = await db.select().from(categories).where(eq(categories.slug, slug)).limit(1);
-  return rows[0] ?? null;
+  return memoQuery(`tax:c:${slug}`, SIDEBAR_TTL, async () => {
+    const rows = await db.select().from(categories).where(eq(categories.slug, slug)).limit(1);
+    return rows[0] ?? null;
+  });
 }
 
 export async function getTagBySlug(slug: string) {
-  const rows = await db.select().from(tags).where(eq(tags.slug, slug)).limit(1);
-  return rows[0] ?? null;
+  return memoQuery(`tax:t:${slug}`, SIDEBAR_TTL, async () => {
+    const rows = await db.select().from(tags).where(eq(tags.slug, slug)).limit(1);
+    return rows[0] ?? null;
+  });
 }
 
 /** Public by-id reads for /api/categories/:id and /api/tags/:id (the original
@@ -216,6 +234,48 @@ export async function getTag(id: number): Promise<Tag> {
   return row;
 }
 
+// ------------------------------------------------------------- post lists
+
+/**
+ * Filter signature for the native pinned-id set. The pinned SELECT's WHERE is
+ * built from exactly these fields (the pinned branch below already rejects
+ * random/search/excludeId, so they can never appear here), which makes this
+ * string that query's entire input.
+ */
+function pinSig(opts: PostQuery): string {
+  return [
+    opts.status ?? "",
+    opts.authorId ?? "",
+    opts.categoryId ?? "",
+    opts.tagId ?? "",
+    opts.categorySlug ?? "",
+    opts.tagSlug ?? "",
+    opts.year ?? "",
+    opts.month ?? "",
+  ].join("|");
+}
+
+/**
+ * The native `posts.pinned` id set for one archive filter.
+ *
+ * listPostsRaw asks for this on every call that allows pinning, and one page
+ * runs listPosts several times with the SAME filter but a different limit or
+ * orderBy (home's main list plus its popular/ranking lists; a post page's
+ * sidebar plus its related list). Each of those re-ran this SELECT, and it sits
+ * on the serial path BEFORE the main list query - so it cost a full extra round
+ * trip per list. One entry per filter signature serves every list on the page;
+ * writes drop `pin:` through invalidateContentCaches.
+ */
+function pinnedIdsFor(sig: string, where: any): Promise<number[]> {
+  return memoQuery(`pin:${sig}`, SIDEBAR_TTL, async () => {
+    const rows = await db
+      .select({ id: posts.id })
+      .from(posts)
+      .where(where ? and(where, eq(posts.pinned, true)) : eq(posts.pinned, true));
+    return rows.map((r) => r.id);
+  });
+}
+
 export async function listPostsRaw(
   opts: PostQuery = {},
 ): Promise<{ items: PostView[]; total: number }> {
@@ -224,6 +284,7 @@ export async function listPostsRaw(
   const conditions: any[] = [];
 
   if (opts.status) conditions.push(eq(posts.status, opts.status as any));
+  // scheduled: future-dated published posts stay out of every public listing
   if (opts.status === "published") conditions.push(publishedVisible);
   if (opts.authorId) conditions.push(eq(posts.authorId, opts.authorId));
   if (opts.categoryId)
@@ -252,6 +313,9 @@ export async function listPostsRaw(
 
   const where = conditions.length ? and(...conditions) : undefined;
 
+  // Floating posts: plugin-contributed ordered ids (posts.pinned hook, e.g.
+  // sticky-posts) first, then the native posts.pinned flag. The middleware
+  // ensures plugins are loaded before any public list renders.
   let floatingIds: number[] = [];
   if (
     opts.status === "published" &&
@@ -266,6 +330,7 @@ export async function listPostsRaw(
     });
     const wanted = contributed.ids.filter((n) => Number.isInteger(n) && n > 0);
     if (wanted.length) {
+      // Keep only ids that satisfy this archive's own filters (category/tag/. )
       const valid = await db
         .select({ id: posts.id })
         .from(posts)
@@ -273,12 +338,8 @@ export async function listPostsRaw(
       const validSet = new Set(valid.map((r) => r.id));
       floatingIds = wanted.filter((id) => validSet.has(id));
     }
-    const pinRows = await db
-      .select({ id: posts.id })
-      .from(posts)
-      .where(where ? and(where, eq(posts.pinned, true)) : eq(posts.pinned, true));
-    for (const r of pinRows) {
-      if (!floatingIds.includes(r.id)) floatingIds.push(r.id);
+    for (const id of await pinnedIdsFor(pinSig(opts), where)) {
+      if (!floatingIds.includes(id)) floatingIds.push(id);
     }
   }
   const normalWhere = floatingIds.length
@@ -297,7 +358,15 @@ export async function listPostsRaw(
           ? [desc(posts.commentsCount), desc(posts.publishedAt)]
           : [desc(posts.publishedAt), desc(posts.createdAt)];
 
-  const rowShape = { post: posts, authorName: users.name, authorEmail: users.email, authorId: users.id };
+  // Content bodies are the heavy column (hundreds of KB per post). Lists
+  // render title/excerpt/url only, so the default select ships '' in its place
+  // — on a remote DB this is the difference between a list query carrying
+  // kilobytes and one carrying megabytes. Export, GraphQL and RSS pass
+  // full: true to get the real body back.
+  const postShape: typeof posts = opts.full
+    ? posts
+    : ({ ...getTableColumns(posts), content: sql<string>`''` } as typeof posts);
+  const rowShape = { post: postShape, authorName: users.name, authorEmail: users.email, authorId: users.id };
   type JoinedRow = { post: Post; authorName: string | null; authorEmail: string | null; authorId: number | null };
 
   let pinnedRows: JoinedRow[] = [];
@@ -320,6 +389,10 @@ export async function listPostsRaw(
     normalOffset = Math.max(0, offset - floatingIds.length);
   }
 
+  // The total matching count rides the main query as a window function
+  // (evaluated before LIMIT/OFFSET) — one round trip instead of two. The
+  // separate count query stays for the pinned-paged path and when the page
+  // is empty (a window value needs at least one returned row).
   const withTotal = floatingIds.length === 0 && normalLimit > 0;
   const normalRows: JoinedRow[] =
     normalLimit > 0
@@ -363,22 +436,68 @@ export async function listPostsRaw(
 }
 
 /**
- * Public listPosts with a data-layer TTL cache for static listings (no
- * random/search/excludeId/year/month filters). The floating-pinned resolution
- * and per-request filters still run fresh when the query is not cacheable, and
- * `invalidateContentCaches()` drops every entry on a content write.
+ * Public listPosts with a data-layer TTL cache. Search, year and month filters
+ * are cacheable too (their keys include the term, the LRU bounds key growth,
+ * and every content write drops the whole `lp:` prefix) — only random picks
+ * and excludeId windows stay uncached, because their results must differ on
+ * every call. `invalidateContentCaches()` drops every entry on a content write.
  */
 export async function listPosts(
   opts: PostQuery = {},
 ): Promise<{ items: PostView[]; total: number }> {
-  const cacheable =
-    !opts.random && !opts.search && !opts.excludeId && !opts.year && !opts.month;
+  const cacheable = !opts.random && !opts.excludeId;
   if (!cacheable) return listPostsRaw(opts);
   const key = `lp:${JSON.stringify({ ...opts, limit: opts.limit ?? 20, offset: opts.offset ?? 0 })}`;
   return memoQuery(key, SIDEBAR_TTL, () => listPostsRaw(opts));
 }
 
-async function hydrate(row: { post: Post; authorName: string | null; authorEmail: string | null; authorId: number | null }) {
+/**
+ * The search middleware's single-hit redirect: does the cleaned query match
+ * exactly one published post? One lean select (six columns, limit 2) instead
+ * of the full listPosts() pipeline the old searchRedirect() paid — content
+ * bodies, taxonomies and metas shipped over the wire just to answer a boolean,
+ * then the page loader ran the same pipeline again. Memoized 60s under `sred:`
+ * (dropped by invalidateContentCaches, same contract as `lp:`).
+ */
+export async function searchSingleHit(q: string): Promise<string | null> {
+  const cleaned = q.trim();
+  if (!cleaned) return null;
+  return memoQuery<string | null>(`sred:${cleaned}`, 60_000, async () => {
+    const rows = await db
+      .select({
+        id: posts.id,
+        slug: posts.slug,
+        pinyinSlug: posts.pinyinSlug,
+        initialSlug: posts.initialSlug,
+        publishedAt: posts.publishedAt,
+        createdAt: posts.createdAt,
+      })
+      .from(posts)
+      .where(
+        and(
+          eq(posts.status, "published"),
+          publishedVisible,
+          sql`(${posts.title} ILIKE ${"%" + cleaned + "%"} OR ${posts.excerpt} ILIKE ${"%" + cleaned + "%"})`,
+        ),
+      )
+      .limit(2);
+    if (rows.length !== 1) return null;
+    return postUrlFor(await getPermalinkConfig(), rows[0]);
+  });
+}
+
+/** The raw post+author row a post lookup returns, BEFORE hydration. Carried
+ *  through resolveSitePath so the detail loader can fold the hydration reads
+ *  (taxonomies + metas) into its own concurrency wave instead of paying a
+ *  dedicated round trip per cold view. */
+export type PostRow = {
+  post: Post;
+  authorName: string | null;
+  authorEmail: string | null;
+  authorId: number | null;
+};
+
+export async function hydrate(row: PostRow): Promise<PostView> {
   const [cfg, tax, metas] = await Promise.all([
     getPermalinkConfig(),
     attachTaxonomies([row.post.id]),
@@ -406,49 +525,51 @@ async function hydrate(row: { post: Post; authorName: string | null; authorEmail
  * (the catch-all loader's postDetail) would 404 under postMode pinyin/initial,
  * because the mode's own column no longer matches.
  */
-export async function getPost(tail: string, opts: { preview?: boolean } = {}): Promise<PostView | null> {
+export async function getPostRow(tail: string, opts: { preview?: boolean } = {}): Promise<PostRow | null> {
   const cfg = await getPermalinkConfig();
-  let row: { post: Post; authorName: string | null; authorEmail: string | null; authorId: number | null } | undefined;
 
-  const fetchOne = async (condition: any) => {
-    const rows = await db
-      .select({ post: posts, authorName: users.name, authorEmail: users.email, authorId: users.id })
-      .from(posts)
-      .leftJoin(users, eq(posts.authorId, users.id))
-      .where(and(...(opts.preview ? [] : [eq(posts.status, "published"), publishedVisible]), condition))
-      .limit(1);
-    return rows[0];
-  };
-
-  const isId = /^\d+$/.test(tail);
-  const byText: Array<[string, any]> = [
-    ["slug", eq(posts.slug, tail)],
-    ["pinyin", eq(posts.pinyinSlug, tail)],
-    ["initial", eq(posts.initialSlug, tail)],
-  ];
-  const preferred =
+  // The fallback chain (slug -> pinyin -> initial -> id) used to be up to four
+  // serial full-row fetches; on a miss — every 404 probe through
+  // resolveSitePath — ALL of them ran before the caller could conclude "no
+  // such post". One OR query with a boolean-priority ORDER BY returns exactly
+  // the row the chain would have: an exact match on an earlier preference
+  // column wins, which is the row the old first-success loop stopped on.
+  const cols = { slug: posts.slug, pinyin: posts.pinyinSlug, initial: posts.initialSlug } as const;
+  type Col = keyof typeof cols;
+  const prefOrder: Col[] =
     cfg.postMode === "pinyin"
-      ? "pinyin"
+      ? ["pinyin", "slug", "initial"]
       : cfg.postMode === "initial"
-        ? "initial"
-        : cfg.postMode === "id"
-          ? null
-          : "slug";
+        ? ["initial", "slug", "pinyin"]
+        : ["slug", "pinyin", "initial"];
+  const isId = /^\d+$/.test(tail);
+  // id is tried FIRST only in postMode "id"; other modes keep it last, after
+  // every text column, exactly like the old `if (!row && isId)` tail.
+  if (cfg.postMode === "id" && isId) prefOrder.unshift("id");
+  const conds = prefOrder.map((k) => (k === "id" ? eq(posts.id, Number(tail)) : eq(cols[k], tail)));
+  const priority = prefOrder.map((k) =>
+    k === "id" ? sql`(${posts.id} = ${Number(tail)}) DESC` : sql`(${cols[k]} = ${tail}) DESC`,
+  );
+  if (cfg.postMode !== "id" && isId) {
+    conds.push(eq(posts.id, Number(tail)));
+    priority.push(sql`(${posts.id} = ${Number(tail)}) DESC`);
+  }
 
-  if (cfg.postMode === "id" && isId) {
-    row = await fetchOne(eq(posts.id, Number(tail)));
-  }
-  if (!row) {
-    const ordered = [
-      ...byText.filter(([k]) => k === preferred),
-      ...byText.filter(([k]) => k !== preferred),
-    ];
-    for (const [, cond] of ordered) {
-      row = await fetchOne(cond);
-      if (row) break;
-    }
-  }
-  if (!row && isId) row = await fetchOne(eq(posts.id, Number(tail)));
+  const [row] = await db
+    .select({ post: posts, authorName: users.name, authorEmail: users.email, authorId: users.id })
+    .from(posts)
+    .leftJoin(users, eq(posts.authorId, users.id))
+    .where(and(...(opts.preview ? [] : [eq(posts.status, "published"), publishedVisible]), or(...conds)))
+    .orderBy(...priority)
+    .limit(1);
+  return row ?? null;
+}
+
+/** Published post by any stored tail — slug, pinyin, initials or numeric id —
+ *  fully hydrated (taxonomies + metas + author + url). The detail loader uses
+ *  getPostRow + hydrate directly so the hydration reads ride its wave. */
+export async function getPost(tail: string, opts: { preview?: boolean } = {}): Promise<PostView | null> {
+  const row = await getPostRow(tail, opts);
   return row ? hydrate(row) : null;
 }
 
@@ -466,73 +587,87 @@ export async function getPublishedPostById(id: number): Promise<PostView | null>
   return rows[0] ? hydrate(rows[0]) : null;
 }
 
-export async function relatedPosts(post: PostView, n = 4): Promise<PostView[]> {
-  const { items } = await listPosts({
-    status: "published",
-    pinned: false,
-    excludeId: post.id,
-    orderBy: "date",
-    limit: n,
+export async function relatedPosts(postId: number, n = 4): Promise<PostView[]> {
+  // excludeId makes the underlying list uncacheable by listPosts itself, so
+  // every post view paid the whole pipeline (floating-pin probes, main select,
+  // taxonomies, metas) on a per-cookie render cache miss. The related set
+  // changes only when content does: memoize per (post, n) and let
+  // invalidateContentCaches drop it on writes. Takes the id (not the whole
+  // view) so the caller can issue it from the raw row, inside its wave.
+  return memoQuery(`rel:${postId}:${n}`, SIDEBAR_TTL, async () => {
+    const { items } = await listPosts({
+      status: "published",
+      pinned: false,
+      excludeId: postId,
+      orderBy: "date",
+      limit: n,
+    });
+    return items;
   });
-  return items;
 }
 
 export async function relatedByTaxonomy(postId: number, limit = 4): Promise<PostView[]> {
-  const [catRows, tagRows, cfg] = await Promise.all([
-    db.select({ id: postCategories.categoryId }).from(postCategories).where(eq(postCategories.postId, postId)),
-    db.select({ id: postTags.tagId }).from(postTags).where(eq(postTags.postId, postId)),
+  // Same contract as relatedPosts: per-view reads of a rarely-changing set,
+  // memoized per (post, limit) and dropped by invalidateContentCaches.
+  return memoQuery(`reltax:${postId}:${limit}`, SIDEBAR_TTL, async () => {
+  // One query, not a wave chain: the post's own category/tag ids (the old
+  // first UNION) are a `mine` CTE the membership scan joins against in the
+  // same statement. The old shape ran the scan as a second round trip that
+  // depended on the first - two full Neon RTTs on a cold post view. The
+  // empty-taxonomy case now falls out naturally: `mm` comes back empty and
+  // the listPosts fallback below runs, same as before.
+  // Drizzle expands an interpolated JS array into a parenthesized placeholder
+  // tuple, which `= any(...)` rejects at the driver - but no JS arrays are
+  // bound here; every value is a scalar parameter.
+  const [scoredRows, cfg] = await Promise.all([
+    db.execute(sql`
+      with mine as (
+        select "category_id" as "id", 'c' as "kind" from ${postCategories} where "post_id" = ${postId}
+        union all
+        select "tag_id" as "id", 't' as "kind" from ${postTags} where "post_id" = ${postId}
+      )
+      select p."id", p."title", p."slug", p."published_at", p."featured_image",
+             sum(case mm."kind" when 'c' then 3 else 2 end)::int as "score"
+      from (
+        select mc."post_id", mine."kind" from ${postCategories} mc
+          join mine on mc."category_id" = mine."id" and mine."kind" = 'c'
+        union all
+        select mt."post_id", mine."kind" from ${postTags} mt
+          join mine on mt."tag_id" = mine."id" and mine."kind" = 't'
+      ) mm
+      join ${posts} p on p."id" = mm."post_id"
+      where p."status" = 'published'
+        and (p."published_at" is null or p."published_at" <= now())
+        and p."id" <> ${postId}
+      group by p."id", p."title", p."slug", p."published_at", p."featured_image"
+      order by "score" desc, p."published_at" desc nulls last
+      limit ${limit}`),
     getPermalinkConfig(),
   ]);
-  const catIds = catRows.map((r: { id: number }) => r.id);
-  const tagIds = tagRows.map((r: { id: number }) => r.id);
-  if (!catIds.length && !tagIds.length) {
+  const scored = (Array.isArray(scoredRows) ? scoredRows : (scoredRows as any).rows) as {
+    id: number;
+    title: string;
+    slug: string;
+    published_at: Date | null;
+    featured_image: string | null;
+  }[];
+  if (!scored.length) {
     const { items } = await listPosts({ status: "published", excludeId: postId, orderBy: "date", limit });
     return items;
   }
-  const [byCat, byTag] = await Promise.all([
-    catIds.length
-      ? db.select({ postId: postCategories.postId }).from(postCategories).where(inArray(postCategories.categoryId, catIds))
-      : Promise.resolve([] as { postId: number }[]),
-    tagIds.length
-      ? db.select({ postId: postTags.postId }).from(postTags).where(inArray(postTags.tagId, tagIds))
-      : Promise.resolve([] as { postId: number }[]),
-  ]);
-  const score = new Map<number, number>();
-  for (const r of byCat) {
-    if (r.postId === postId) continue;
-    score.set(r.postId, (score.get(r.postId) ?? 0) + 3);
-  }
-  for (const r of byTag) {
-    if (r.postId === postId) continue;
-    score.set(r.postId, (score.get(r.postId) ?? 0) + 2);
-  }
-  if (!score.size) {
-    const { items } = await listPosts({ status: "published", excludeId: postId, orderBy: "date", limit });
-    return items;
-  }
-  const candidateIds = [...score.keys()];
-  const rows = await db
-    .select({
-      id: posts.id,
-      title: posts.title,
-      slug: posts.slug,
-      publishedAt: posts.publishedAt,
-      featuredImage: posts.featuredImage,
-    })
-    .from(posts)
-    .where(and(eq(posts.status, "published"), publishedVisible, inArray(posts.id, candidateIds)));
-  const byId = new Map(rows.map((r: { id: number }) => [r.id, r]));
-  return candidateIds
-    .map((id: number) => byId.get(id))
-    .filter((r): r is (typeof rows)[number] => Boolean(r))
-    .map((p) => ({ ...p, score: score.get(p.id) ?? 0 }))
-    .sort((a, b) => b.score - a.score || (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0))
-    .slice(0, limit)
+  return scored
     .map((p) => ({
-      ...p,
-      url: postUrlFor(cfg, p),
+      id: Number(p.id),
+      title: p.title,
+      slug: p.slug,
+      publishedAt: p.published_at,
+      featuredImage: p.featured_image,
+      url: postUrlFor(cfg, { id: Number(p.id), slug: p.slug, publishedAt: p.published_at }),
     })) as unknown as PostView[];
+  });
 }
+
+// ---------------------------------------------------------------- comments
 
 /** Published comments for one content item, oldest first (tree order). */
 export async function listPostComments(
@@ -568,6 +703,21 @@ export async function listPostComments(
     .orderBy(asc(comments.id))
     .limit(200);
   return rows;
+}
+
+export async function listPostCommentsCached(
+  postId: number,
+  postType = "post",
+): Promise<Array<{
+  id: number;
+  parentId: number | null;
+  authorName: string;
+  authorEmail: string | null;
+  authorUrl: string | null;
+  content: string;
+  createdAt: Date;
+}>> {
+  return memoQuery(`cmts:${postType}:${postId}`, SIDEBAR_TTL, () => listPostComments(postId, postType));
 }
 
 /** Comment listing for the public API / moderation front (live rows, asc). */
@@ -609,8 +759,12 @@ export async function listComments(opts: {
   return { items: rows, total: Number(totalRows[0]?.n ?? 0) };
 }
 
+// ---------------------------------------------------------------- widgets
+
 export async function counts() {
   return memoQuery("counts", SIDEBAR_TTL, async () => {
+    // One round trip instead of four: every count is a scalar subquery, and
+    // at Neon RTT (~300ms) each extra statement is real first-paint latency.
     const rows = await db.execute(sql`select
       (select count(*) from ${posts} where ${posts.status} = 'published' and (${posts.publishedAt} is null or ${posts.publishedAt} <= now())) as posts,
       (select count(*) from ${comments} where ${comments.status} = 'published') as comments,
@@ -635,8 +789,14 @@ export async function popularPosts(limit = 5): Promise<PostView[]> {
 }
 
 export async function randomPosts(limit = 20): Promise<PostView[]> {
-  const { items } = await listPosts({ status: "published", random: true, pinned: false, limit });
-  return items;
+  // random() is uncacheable inside listPosts by design, so a per-view random
+  // widget paid a full scan + hydrate on every render (the render cache is
+  // per-cookie, so on every visitor). Rotate the pool on the sidebar TTL
+  // instead: still fresh enough to feel random, one query per window.
+  return memoQuery(`rand:${limit}`, SIDEBAR_TTL, async () => {
+    const { items } = await listPosts({ status: "published", random: true, pinned: false, limit });
+    return items;
+  });
 }
 
 /** Published posts grouped by year/month for the archives timeline. */
@@ -669,6 +829,58 @@ export async function archiveGroups(): Promise<
   });
 }
 
+/**
+ * The archives timeline's row set: title, date, format, views and permalink —
+ * exactly the five fields the template prints.
+ *
+ * Deliberately NOT listPosts(): that pays two extra round trips to attach
+ * taxonomies and metas the archive never renders, and its 100-row cap silently
+ * truncated the 1000-row window the caller asked for. One query, one shape.
+ */
+export type ArchiveItem = {
+  id: number;
+  title: string;
+  url: string;
+  publishedAt: Date | null;
+  format: string;
+  views: number;
+};
+
+export async function archiveItems(
+  opts: { year?: number; month?: number; limit?: number } = {},
+): Promise<ArchiveItem[]> {
+  const conditions: any[] = [eq(posts.status, "published"), publishedVisible];
+  if (opts.year) conditions.push(sql`EXTRACT(YEAR FROM ${posts.publishedAt}) = ${opts.year}`);
+  if (opts.month) conditions.push(sql`EXTRACT(MONTH FROM ${posts.publishedAt}) = ${opts.month}`);
+  const rows = await db
+    .select({
+      id: posts.id,
+      title: posts.title,
+      slug: posts.slug,
+      pinyinSlug: posts.pinyinSlug,
+      initialSlug: posts.initialSlug,
+      publishedAt: posts.publishedAt,
+      createdAt: posts.createdAt,
+      format: posts.format,
+      views: posts.views,
+    })
+    .from(posts)
+    .where(and(...conditions))
+    .orderBy(desc(posts.publishedAt), desc(posts.createdAt))
+    .limit(opts.limit ?? 1000);
+  const cfg = await getPermalinkConfig();
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    url: postUrlFor(cfg, r),
+    publishedAt: r.publishedAt,
+    format: r.format,
+    views: r.views,
+  }));
+}
+
+// --------------------------------------------------------------- writes (B phase)
+
 /** PV always +1; UV +1 once per (post, sha256(ip|ua)). Best effort.
  *
  * One round trip: the visitor INSERT rides a CTE and the UPDATE reads whether
@@ -692,6 +904,11 @@ export async function incrementViews(id: number, ip: string, ua: string): Promis
         where id = ${id}`);
       return;
     } catch (e) {
+      // Only a *query* failure means "not a new visitor". A dropped connection
+      // says nothing about the visitor, and treating it as one sends the
+      // else-branch UPDATE down the same dead socket. Rethrow so it is not
+      // silently miscounted; the caller already treats view counting as
+      // best-effort and swallows it.
       if (e instanceof Error && isConnectionError(e)) throw e;
       // Non-connection failure (e.g. a race on the CTE): fall through to the
       // plain PV increment below rather than losing the view entirely.

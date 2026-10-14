@@ -1,11 +1,4 @@
-/**
- * Static pages service — ported from lib/services/pages.ts + metas.ts.
- *
- * Writes require content:update:any (editors/admins only — authors never
- * manage pages, matching the original). Every read hits the live database;
- * the original's publicCached/public-cache layer is intentionally absent
- * (per-request reads are the core invariant of this port).
- */
+// Static pages service — ported from lib/services/pages.ts + metas.ts.
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { pages as pagesTable, type Block, type Page } from "./schema.js";
@@ -14,6 +7,7 @@ import { can, requireCap, requireUser, ServiceError, slugify } from "./admin.js"
 import { blocksToPlainText } from "./admin.js";
 import { getPageMetas, setPageMetas } from "./metas.js";
 import { getPermalinkConfig, pageUrlFor } from "./links.js";
+import { invalidateContentCaches, memoQuery, SIDEBAR_TTL } from "./cache.js";
 
 export type PageView = Page & {
   url: string;
@@ -35,6 +29,11 @@ export type PageInput = {
   publishedAt?: string | null;
   metas?: { key: string; value: string }[];
 };
+
+// --------------------------------------------------------------------- metas
+// Custom fields live in server/metas.ts (shared with posts); see that module.
+
+// ---------------------------------------------------------------- validation
 
 function excerptFrom(text: string, max = 160): string {
   const clean = text.replace(/\s+/g, " ").trim();
@@ -86,6 +85,8 @@ function validate(input: Partial<PageInput>): ValidatedPage {
     if (!Array.isArray(input.content)) throw new ServiceError("正文区块格式不正确", 422);
     out.content = input.content;
   }
+  // Form payloads can carry "" for an untouched enum field; the typed input
+  // says union, runtime says string — normalize both sides.
   if (input.status !== undefined && input.status != null && String(input.status) !== "") {
     if (!STATUSES.includes(input.status as (typeof STATUSES)[number]))
       throw new ServiceError("状态不合法", 422);
@@ -147,18 +148,34 @@ async function takenSlugs(base: string): Promise<Set<string>> {
   return new Set(rows.map((r) => r.slug));
 }
 
-async function hydrate(row: Page): Promise<PageView> {
+export async function hydrate(row: Page): Promise<PageView> {
   const [metas, cfg] = await Promise.all([getPageMetas(row.id), getPermalinkConfig()]);
   return { ...row, url: pageUrlFor(cfg, row), metas };
 }
 
-/** Published page by stored slug (null when missing/unpublished). */
+// ------------------------------------------------------------------- public
+
+/** Published page by stored slug (null when missing/unpublished). Memoized
+ *  (SWR, SIDEBAR_TTL) under `pg:` for the same reason the taxonomy lookups are:
+ *  the catch-all router resolves the slug on every render, so under the 1s
+ *  public render cache an unmemoized read is a remote round trip every second.
+ *  create/update/deletePage drop it, so an edit is visible at once. */
+export async function getPublishedPageRow(slug: string): Promise<Page | null> {
+  return memoQuery<Page | null>(`pg:${slug}`, SIDEBAR_TTL, async () => {
+    const [row] = await db
+      .select()
+      .from(pagesTable)
+      .where(and(eq(pagesTable.slug, slug), eq(pagesTable.status, "published")))
+      .limit(1);
+    return row ?? null;
+  });
+}
+
+/** Published page by stored slug (null when missing/unpublished), fully
+ *  hydrated (metas + url). The detail loader uses getPublishedPageRow +
+ *  hydrate directly so the metas read rides its wave. */
 export async function getPublishedPage(slug: string): Promise<PageView | null> {
-  const [row] = await db
-    .select()
-    .from(pagesTable)
-    .where(and(eq(pagesTable.slug, slug), eq(pagesTable.status, "published")))
-    .limit(1);
+  const row = await getPublishedPageRow(slug);
   return row ? hydrate(row) : null;
 }
 
@@ -197,6 +214,8 @@ export async function getPublishedPageById(id: number): Promise<PageView | null>
   return row ? hydrate(row) : null;
 }
 
+// -------------------------------------------------------------------- admin
+
 /** Admin page list — all statuses, newest-updated first, like the original. */
 export async function adminListPages(
   user: SessionUser | null,
@@ -206,14 +225,16 @@ export async function adminListPages(
   const limit = Math.min(f.limit ?? 50, 100);
   const offset = f.offset ?? 0;
   const where = f.status ? eq(pagesTable.status, f.status as any) : undefined;
-  const rows = await db
-    .select()
-    .from(pagesTable)
-    .where(where)
-    .orderBy(desc(pagesTable.updatedAt))
-    .limit(limit)
-    .offset(offset);
-  const [totalRows, cfg] = await Promise.all([
+  // Rows, total count and permalink config are mutually independent - one
+  // wave instead of rows -> (count + config).
+  const [rows, totalRows, cfg] = await Promise.all([
+    db
+      .select()
+      .from(pagesTable)
+      .where(where)
+      .orderBy(desc(pagesTable.updatedAt))
+      .limit(limit)
+      .offset(offset),
     db.select({ n: sql<number>`count(*)` }).from(pagesTable).where(where),
     getPermalinkConfig(),
   ]);
@@ -236,6 +257,8 @@ export async function adminGetPage(
 }
 
 function requirePageManager(user: SessionUser | null): SessionUser {
+  // The original gates EVERY page write (including create) on update:any —
+  // authors never manage pages, unlike posts. Guests get 401 first.
   const u = requireUser(user);
   if (!can(u.role, "content:update:any"))
     throw new ServiceError("仅编辑/管理员可管理页面", 403);
@@ -275,6 +298,7 @@ export async function createPage(user: SessionUser | null, raw: Partial<PageInpu
     })
     .returning();
   if (input.metas) await setPageMetas(row.id, input.metas);
+  invalidateContentCaches();
   return adminGetPage(user, row.id);
 }
 
@@ -339,6 +363,7 @@ export async function updatePage(user: SessionUser | null, id: number, raw: Part
     .where(eq(pagesTable.id, id));
 
   if (input.metas) await setPageMetas(id, input.metas);
+  invalidateContentCaches();
   return adminGetPage(user, id);
 }
 
@@ -347,5 +372,6 @@ export async function deletePage(user: SessionUser | null, id: number): Promise<
   const [existing] = await db.select({ id: pagesTable.id }).from(pagesTable).where(eq(pagesTable.id, id));
   if (!existing) throw new ServiceError("页面不存在", 404);
   await db.delete(pagesTable).where(eq(pagesTable.id, id));
+  invalidateContentCaches();
   return { id };
 }

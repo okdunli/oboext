@@ -1,16 +1,4 @@
-/**
- * Admin sidebar menu model + per-admin navigation preferences.
- *
- * Port of lib/admin-menu.ts. The sidebar's single data source is
- * buildAdminMenuGroups(): the core groups for screens that exist PLUS the
- * plugin/theme hook entries (admin.menu filter, and an automatic entry for
- * every enabled plugin that registers an admin.panel). Hook leaves can be
- * hidden but never chosen as the home page; sections let a plugin promote
- * its entry to a top-level group.
- *
- * Preferences live in the options KV (adminMenuHidden / adminHomePath) and are
- * read per request - no cross-response cache.
- */
+// Admin sidebar menu model + per-admin navigation preferences.
 import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";
@@ -56,6 +44,8 @@ export const DASHBOARD_LEAF: MenuLeaf = {
   exact: true,
 };
 
+// Keep labels/flags/order in sync with lib/admin-menu.ts; leaves for not-yet-
+// ported screens (icons, themes, permalinks, ...) join when their pages land.
 const CORE_GROUPS: MenuGroup[] = [
   {
     id: "content",
@@ -118,7 +108,8 @@ const CORE_GROUPS: MenuGroup[] = [
       { href: "/admin/security", label: "后台安全", glyph: "shield", superOnly: true },
       { href: "/admin/security-logs", label: "安全日志", glyph: "scroll-text", superOnly: true },
       { href: "/admin/maintenance", label: "维护模式", glyph: "construction", superOnly: true },
-      { href: "/admin/notify", label: "通知设置", glyph: "bell", superOnly: true },
+      { href: "/admin/email", label: "邮件设置", glyph: "mail", superOnly: true },
+      { href: "/admin/sms", label: "短信设置", glyph: "smartphone", superOnly: true },
     ],
   },
   {
@@ -143,9 +134,9 @@ function roleAllows(role: Role, x: { adminOnly?: boolean; superOnly?: boolean })
   return true;
 }
 
-/** Serializable sidebar entry added via the `admin.menu` hook (port of
- *  lib/admin-extensions.ts AdminMenuItem; icons are kebab names rendered as
- *  CSS-mask SVGs, never components). */
+// ------------------------------------------------- plugin / theme hook menu
+
+// Serializable sidebar entry added via the `admin.menu` hook (port of lib/admin-extensions.ts AdminMenuItem; icons are kebab names rendered as CSS-mask).
 export type AdminMenuItem = {
   href: string;
   label: string;
@@ -168,9 +159,7 @@ export type AdminMenuSection = {
 
 export type AdminMenuEntry = AdminMenuItem | AdminMenuSection;
 
-/** Serializable stat card added to the dashboard via the `dashboard.cards`
- *  hook (port of lib/admin-extensions.ts DashboardCardItem). `href` makes the
- *  card a link; `sub` renders as a small badge under the value. */
+// Serializable stat card added to the dashboard via the `dashboard.cards` hook (port of lib/admin-extensions.ts DashboardCardItem).
 export type DashboardCardItem = {
   label: string;
   value: string | number;
@@ -194,12 +183,7 @@ export type AdminMenuExtras = {
   pluginSections: AdminMenuSection[];
 };
 
-/**
- * Collect plugin/theme menu contributions (original parity:
- * collectAdminMenuExtras). Runs after ensurePluginsLoaded, so the enabled
- * set's filters are registered; a plugin "ships a panel" when it registered
- * an admin.panel filter (owner-scoped, so disabling removes it).
- */
+// Collect plugin/theme menu contributions (original parity: collectAdminMenuExtras).
 export async function collectAdminMenuExtras(): Promise<AdminMenuExtras> {
   await ensurePluginsLoaded();
   const [{ items }, pluginList] = await Promise.all([
@@ -237,11 +221,7 @@ const hookLeaf = (item: AdminMenuItem): MenuLeaf => ({
   hook: true,
 });
 
-/**
- * The sidebar's single data source: core groups + plugin panels + hook
- * entries + hook-claimed sections, in display order (original parity:
- * buildAdminMenuGroups).
- */
+// The sidebar's single data source: core groups + plugin panels + hook entries + hook-claimed sections.
 export function buildAdminMenuGroups(extras: AdminMenuExtras = EMPTY_EXTRAS): MenuGroup[] {
   const { pluginNav, pluginPanels, pluginSections } = extras;
   const panelHrefs = new Set(pluginPanels.map((p) => `/admin/plugins/${p.slug}`));
@@ -317,7 +297,7 @@ export async function getAdminMenuPrefs(): Promise<MenuPrefs> {
         .limit(1);
       return rows[0]?.value;
     } catch {
-      return undefined;
+      return undefined; // fresh/empty options table -> defaults
     }
   };
   const [hidden, home] = await Promise.all([
@@ -387,6 +367,8 @@ async function upsertOption(key: string, value: unknown): Promise<void> {
     });
 }
 
+// ----------------------------------------------------------------- sidebar VM
+
 export type NavItem =
   | { kind: "dash"; href: string; label: string; glyph: string; active: boolean }
   | { kind: "gstart"; id: string; label: string; glyph: string; active: boolean }
@@ -411,6 +393,7 @@ export function shellNav(
       ? pathname === l.href
       : pathname === l.href || pathname.startsWith(l.href + "/");
 
+  // Dashboard is a standalone top-level entry (AdminShell.tsx), never a group.
   if (!hidden.has(ADMIN_HOME_DEFAULT)) {
     const href =
       prefs.homePath === ADMIN_HOME_DEFAULT ? ADMIN_HOME_DEFAULT : "/admin/dashboard";
@@ -460,6 +443,8 @@ export function homeRedirectFor(pathname: string, prefs: MenuPrefs): string | nu
   return null;
 }
 
+// ----------------------------------------------------- ready-made nav markup
+
 const escText = (s: string): string =>
   String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const escAttr = (s: string): string => escText(s).replace(/"/g, "&quot;");
@@ -492,6 +477,8 @@ export function shellNavHtml(
         escText(n.label) +
         "</span></a>";
     } else if (n.kind === "gstart") {
+      // Accordion (AdminShell.tsx): the group holding the current route renders
+      // expanded by default; admin.js owns click toggling + pjax persistence.
       html +=
         '<div class="adm-nav-group" data-nav-group="' +
         escAttr(n.id) +

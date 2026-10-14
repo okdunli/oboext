@@ -1,47 +1,10 @@
-/**
- * In-process SWR memo for read queries — the data-layer half of oboext's
- * caching story. The route layer already memoizes rendered HTML (render
- * cache=N); this cache sits one level down and keeps repeated requests (and
- * repeated widget resolutions on the same page) from re-hitting the database
- * for data that changes at most every few seconds.
- *
- * Semantics are stale-while-revalidate, not hard TTL: inside `ttl` the cached
- * value returns as-is; past `ttl` (up to SWR_WINDOW * ttl) the STALE value
- * still returns instantly while one background refresh re-runs the query —
- * so an expiring entry no longer turns into a latency spike for whoever
- * asks next. Past the stale window (or cold) the query is awaited for real.
- * Writes call invalidate* to drop affected entries early; a drop forces the
- * next read to await fresh data (correctness where it matters).
- *
- * The store is per-process (module scope), so every worker gets its own copy;
- * a short TTL (default 30s) bounds staleness without any cross-process
- * coordination. Background refreshes are deduplicated per key via the
- * in-flight promise stored on the entry.
- *
- * COLD misses are deduplicated too, via the separate `inflight` map below.
- * The SWR branch has always deduped its background refresh, but the cold path
- * (`await fn()`) did not: on a cold process every concurrent reader missed
- * simultaneously and issued its own query. Measured on /archives against a
- * remote Neon: `site_settings` was selected 6 times in one render, `themes` 7.
- * The dedup map is what makes "N concurrent readers, one query" true on the
- * first request as well as on refreshes.
- */
+// In-process SWR memo for read queries — the data-layer half of oboext's caching story.
 const store = new Map<
   string,
   { at: number; value: unknown; refreshing?: Promise<unknown> }
 >();
 
-/**
- * In-flight query promises, keyed the same as `store`.
- *
- * Separate from `store` on purpose: an entry here means "a query is running
- * right now", which is a different fact from "a value is cached". Putting the
- * promise in `store` instead would make a concurrent reader see the pending
- * promise as a cached value and hand out a Promise where a T is expected.
- *
- * Entries are removed in a `finally`, so a rejected query does not poison the
- * key — the next reader retries instead of awaiting a dead promise forever.
- */
+// In-flight query promises, keyed the same as `store`.
 const inflight = new Map<string, Promise<unknown>>();
 
 export const SIDEBAR_TTL = 30_000;
@@ -49,49 +12,12 @@ export const SIDEBAR_TTL = 30_000;
 /** How long a stale entry may keep serving while a background refresh runs. */
 const SWR_WINDOW = 5;
 
-/**
- * Hard ceiling on entries, so a key space that includes request input cannot
- * grow the store without bound.
- *
- * Most keys here are a fixed set (`settings`, `tax:*`, `counts`, `lp:*`), but
- * `lp:` is keyed by list parameters — archive month, category, tag, page
- * offset, search term — so a crawler walking permutations, or a client
- * looping over offsets, mints a new entry each time. Nothing ever removed
- * them: `invalidatePrefix` only runs on writes, and an entry nobody reads
- * again is never revisited, so it sat in the Map for the life of the process.
- * On a long-lived Node server that is a slow leak; on Vercel it is bounded by
- * the instance lifetime and therefore invisible, which is exactly why it is
- * easy to ship.
- *
- * The bound is generous on purpose. Eviction is Map insertion order, so the
- * entries that go are the oldest-written — and in this workload the hot keys
- * (`settings`, the active theme) are rewritten on every request, so they are
- * always recent and never evicted. The cold keys that accumulate are the ones
- * no longer being asked for.
- *
- * 512 entries at the default TTL is far more than a live site reaches; a site
- * large enough to approach it is one where re-running a query is cheaper than
- * keeping rows nobody reads.
- */
+// Hard ceiling on entries, so a key space that includes request input cannot grow the store without bound.
 const MAX_ENTRIES = 512;
 
-/**
- * Insert, or refresh an existing entry, then enforce the ceiling.
- *
- * Called on every WRITE and on every cache HIT. The hit case is the load-bearing
- * one: without it the store's insertion order is the order in which each key
- * was last *written*, so a key that is read constantly but written once (a
- * long-TTL entry, or one whose TTL has not expired) never moves and gets
- * evicted as "oldest" while a hundred one-shot keys occupy the store. The
- * tests in tools/cache-evict-check.mts caught exactly that: the flood passed
- * the bound check, and the hot key still went.
- *
- * Map preserves insertion order and delete+set appends, so this is an LRU by
- * recency-of-use with no extra bookkeeping. The cost is one Map delete and one
- * Map set per hit, against a store whose ceiling is 512 and whose entries are
- * objects — cheap next to the database round trip the hit just avoided.
- */
+// Insert, or refresh an existing entry, then enforce the ceiling. Called on every WRITE and on every cache HIT.
 function put(key: string, entry: { at: number; value: unknown }): void {
+  // Carrying the in-flight refresh marker across the rewrite matters: dropping it would let a second background refresh start for a key that already.
   const prev = store.get(key);
   const next = prev && prev.refreshing ? { ...entry, refreshing: prev.refreshing } : entry;
   store.delete(key);
@@ -106,13 +32,7 @@ function put(key: string, entry: { at: number; value: unknown }): void {
   }
 }
 
-/**
- * Move a key to the most-recent position without rewriting its entry.
- *
- * A hit must refresh recency but must NOT reset `at` — that timestamp is the
- * TTL clock, and moving it forward on every read would make an entry immortal
- * under continuous polling and turn the TTL into a no-op.
- */
+// Move a key to the most-recent position without rewriting its entry.
 function touch(key: string): void {
   const hit = store.get(key);
   if (!hit) return;
@@ -129,6 +49,8 @@ async function memo<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<
       return hit.value as T;
     }
     if (now - hit.at < SWR_WINDOW * ttl) {
+      // Serve stale immediately; refresh once in the background. Concurrent
+      // askers share the same in-flight refresh (no thundering herd).
       if (!hit.refreshing) {
         hit.refreshing = fn()
           .then((value) => {
@@ -136,6 +58,7 @@ async function memo<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<
             return value;
           })
           .catch((e) => {
+            // Refresh failed: keep serving the stale value until the next window; drop the in-flight marker so a later read retries.
             console.warn(
               `[cache] background refresh failed for ${key}: ${
                 e instanceof Error ? e.message : String(e)
@@ -207,9 +130,10 @@ export function invalidateAll(): void {
 
 /**
  * Drop every entry a content write can stale: taxonomies, counts, the archive
- * timeline, popular/recent lists, generic post listings and widget data. Called
- * from post/tag/category/comment write paths so the sidebar refreshes
- * immediately instead of waiting out the TTL.
+ * timeline, popular/recent lists, generic post listings, widget data and the
+ * routed slug lookups (public pages, post tails). Called from
+ * post/tag/category/page/comment write paths so the sidebar and routed content
+ * refresh immediately instead of waiting out the TTL.
  */
 export function invalidateContentCaches(): void {
   invalidatePrefix("tax:");
@@ -217,7 +141,16 @@ export function invalidateContentCaches(): void {
   invalidatePrefix("archive");
   invalidatePrefix("popular");
   invalidatePrefix("lp:");
+  invalidatePrefix("pin:");
+  invalidatePrefix("sred:");
+  invalidatePrefix("rel:");
+  invalidatePrefix("reltax:");
+  invalidatePrefix("rand:");
+  invalidatePrefix("cmts:");
   invalidatePrefix("widget:");
+  invalidatePrefix("pathmiss:");
+  invalidatePrefix("pg:");
+  invalidatePrefix("rp:");
 }
 
 /**
@@ -228,6 +161,24 @@ export function invalidateContentCaches(): void {
  */
 export function memoQuery<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<T> {
   return memo(key, ttl, fn);
+}
+
+/**
+ * Read a memoized value without triggering a load. Undefined when absent.
+ * For negative-result caches: the caller stores a flag once a miss is
+ * confirmed, then peeks before doing the work the miss makes pointless.
+ *
+ * Pass `ttl` to also honor an expiry. Without it a peek ignores the entry's
+ * age entirely, so a negative flag written under a 60s TTL stayed "true" for
+ * the life of the process — until an LRU eviction or an explicit invalidate.
+ * That is how one transient resolver failure pinned an otherwise valid URL to
+ * 404 on that instance, which is exactly what the TTL was meant to bound.
+ */
+export function peekMemo<T = unknown>(key: string, ttl?: number): T | undefined {
+  const hit = store.get(key);
+  if (!hit) return undefined;
+  if (ttl !== undefined && Date.now() - hit.at >= ttl) return undefined;
+  return hit.value as T;
 }
 
 /**
@@ -245,9 +196,16 @@ export function memoQuery<T>(key: string, ttl: number, fn: () => Promise<T>): Pr
 export async function memoStrict<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<T> {
   const hit = store.get(key);
   if (hit && Date.now() - hit.at < ttl) {
+    // touch(), not put(): a hit must refresh recency so the key is not the
+    // next one evicted, but it must NOT move `at` forward — that is the TTL
+    // clock, and sliding it on every read would make the TTL a no-op for any
+    // key that is polled.
     touch(key);
     return hit.value as T;
   }
+  // Same cold-miss dedup as memo(): without it every concurrent reader of a
+  // not-yet-cached key issues its own query, which is how one /archives render
+  // selected `site_settings` six times before this existed.
   return runOnce(key, async () => {
     const value = await fn();
     put(key, { at: Date.now(), value });

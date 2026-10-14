@@ -1,14 +1,4 @@
-/**
- * Theme service — port of lib/services/themes.ts + the filesystem half of
- * themes/registry.ts.
- *
- * The original shipped TSX components loaded via require.context; rosezm
- * has no runtime component loading, so a theme here is its on-disk folder:
- * manifest.json (metadata + design tokens + a declarative settings schema +
- * widget areas) plus its static assets. Discovery is a cheap process-memoised
- * fs scan invalidated by admin create/delete; DB reads go through the shared
- * SWR memo (cache.ts) with explicit invalidation on every write below.
- */
+// Theme service — port of lib/services/themes.ts + the filesystem half of themes/registry.ts.
 import { desc, eq, inArray, sql } from "drizzle-orm";
 import fs from "fs";
 import path from "path";
@@ -27,6 +17,8 @@ import {
 import { DEFAULT_THEME_CONFIG, resolveThemeConfig } from "./theme-tokens.js";
 import { getPalettePreset, paletteLayeredConfig, PALETTE_PRESETS } from "./theme-palettes.js";
 import { THEME_CONFIG_KEYS, THEME_CONFIG_SCHEMA } from "./theme-schema.js";
+
+// ------------------------------------------------------------- manifest types
 
 export type ThemeWidgetArea = {
   key: string;
@@ -61,32 +53,23 @@ export type ThemeManifest = {
 
 const THEMES_DIR = path.join(process.cwd(), "themes");
 
-/**
- * Themes whose public chrome is actually ported to rosezm renderers. The
- * other on-disk themes are still editable/manageable but cannot be
- * activated: the server-rendered site only ships these layouts (T20 tracks
- * the remaining ports). The admin list badges them as in-progress.
- */
+// Themes whose public chrome is actually ported to rosezm renderers.
 export const PORTED_PUBLIC_THEMES = new Set(["skyscraper", "default", "pseudolinear", "codeman", "bluemix"]);
 
 export function isPublicThemePorted(slug: string): boolean {
   return PORTED_PUBLIC_THEMES.has(slug);
 }
 
-/**
- * Hard TTL for the active-theme reads. Switching themes is a rare admin write
- * while every public render reads the slug, so this only has to be short
- * enough that a switch feels instant on the OTHER serverless instances (whose
- * caches the invalidation cannot reach) and long enough to collapse the
- * repeated reads within one render into a single query.
- */
-const ACTIVE_THEME_TTL = 2_000;
+// Hard TTL for the active-theme reads.
+const ACTIVE_THEME_TTL = 30_000;
 
 /** Areas every theme gets for free, so widgets work in minimal themes. */
 export const BASE_WIDGET_AREAS: ThemeWidgetArea[] = [
   { key: "sidebar", label: "侧边栏", description: "文章与列表页的侧栏，需在「布局」中开启侧边栏" },
   { key: "footer", label: "页脚", description: "页面底部的多栏区域" },
 ];
+
+// --------------------------------------------------------------- discovery
 
 let discoveryCache: ThemeManifest[] | null = null;
 
@@ -101,6 +84,7 @@ export function discoverThemes(): ThemeManifest[] {
       if (!fs.existsSync(manifestPath)) continue;
       try {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as ThemeManifest;
+        // Trust the folder name over a mistyped slug so routing never breaks.
         manifest.slug = manifest.slug || entry.name;
         if (!manifest.updatedAt) {
           try {
@@ -141,11 +125,7 @@ export function getThemeMeta(slug: string): ThemeMeta | null {
   };
 }
 
-/**
- * A theme's own settings schema. Tolerates both the canonical section array
- * and a `{ sections: [...] }` shape using `title` / missing keys (a common
- * copy-paste from other CMS themes).
- */
+// A theme's own settings schema.
 export function getThemeSettingsSchema(slug: string): SettingsSchema {
   const raw = getThemeManifest(slug)?.settingsSchema;
   if (!raw) return [];
@@ -171,6 +151,8 @@ export function getThemeWidgetAreas(slug: string): ThemeWidgetArea[] {
   return [...declared, ...BASE_WIDGET_AREAS.filter((a) => !keys.has(a.key))];
 }
 
+// ----------------------------------------------------------- DB synchronise
+
 /**
  * Mirror themes/ into the `themes` table. Upserts refresh only name /
  * isDefault (never the user's saved config/settings); rows whose folder is
@@ -179,6 +161,8 @@ export function getThemeWidgetAreas(slug: string): ThemeWidgetArea[] {
 export async function syncThemes(): Promise<void> {
   const manifests = discoverThemes();
   const discovered = new Set(manifests.map((m) => m.slug));
+  // One multi-row upsert and one delete rather than a round trip per folder:
+  // the remote-Postgres round trips, not the rows, are the cost here.
   if (manifests.length > 0) {
     await db
       .insert(themes)
@@ -198,6 +182,9 @@ export async function syncThemes(): Promise<void> {
   const rows = await db.select({ slug: themes.slug }).from(themes);
   const stale = rows.map((r) => r.slug).filter((s) => !discovered.has(s));
   if (stale.length > 0) await db.delete(themes).where(inArray(themes.slug, stale));
+  // Heal an active theme whose public chrome isn't ported yet: keep the
+  // site on the newest ported layout instead of silently rendering the
+  // skyscraper chrome under another theme's token set (T20 ports the rest).
   const [s] = await db
     .select({ activeThemeSlug: siteSettings.activeThemeSlug })
     .from(siteSettings)
@@ -217,6 +204,8 @@ export async function syncThemes(): Promise<void> {
   }
 }
 
+// Process-level memo (mirrors ensureDefaultMenus): the public chrome calls
+// getActiveTheme() on every request, but folder sync is a startup concern.
 let synced = false;
 let syncPromise: Promise<void> | null = null;
 export function ensureThemes(): Promise<void> {
@@ -229,6 +218,14 @@ export function ensureThemes(): Promise<void> {
       })
       .catch((e) => {
         syncPromise = null;
+        // Deliberately swallowed. ensureThemes() sits on the PUBLIC render hot
+        // path (getActiveThemeSlug -> chromeData / post page), and syncThemes()
+        // is a maintenance write (upsert + delete + settings update). Letting
+        // that write's failure propagate turned one dropped connection into a
+        // 500 for every page of the site. The disk scan inside syncThemes()
+        // already ran, so reads keep working off the existing rows; the next
+        // cold start retries the sync. Marking `synced` here would be wrong -
+        // that would skip the write forever - so only the error is dropped.
         console.warn(
           "[themes] folder sync failed; serving reads from the existing rows: " +
             (e instanceof Error ? e.message : String(e)),
@@ -237,6 +234,8 @@ export function ensureThemes(): Promise<void> {
   }
   return syncPromise;
 }
+
+// -------------------------------------------------------------------- reads
 
 function slugifyName(name: string): string {
   return (
@@ -280,6 +279,9 @@ export function invalidateActiveThemeCache(): void {
 /** Current activeThemeSlug from site_settings ("default" when uninitialised). */
 export async function getActiveThemeSlug(): Promise<string> {
   await ensureThemes();
+  // memoStrict, not memoQuery: a stale slug renders the WRONG theme, and this
+  // read gates every chrome decision on the page. The SWR window (5x ttl)
+  // kept a switched theme invisible for up to 150s.
   return memoStrict("theme:active:slug", ACTIVE_THEME_TTL, async () => {
     const [s] = await db
       .select({ activeThemeSlug: siteSettings.activeThemeSlug })
@@ -300,6 +302,8 @@ export async function getActiveThemeSlug(): Promise<string> {
  */
 export async function getActiveTheme(): Promise<Theme> {
   await ensureThemes();
+  // memoStrict for the same reason as getActiveThemeSlug - this row decides
+  // which chrome object renders the page.
   return memoStrict("theme:active:row", ACTIVE_THEME_TTL, async (): Promise<Theme> => {
     const [settings] = await db
       .select()
@@ -326,6 +330,8 @@ export async function getActiveTheme(): Promise<Theme> {
     throw new ServiceError("没有可用主题", 500);
   });
 }
+
+// ------------------------------------------------------------------- writes
 
 export type ThemeInput = {
   name: string;
@@ -456,6 +462,8 @@ export async function updateTheme(id: number, input: Partial<ThemeInput>): Promi
     })
     .where(eq(themes.id, id))
     .returning();
+  // Cheap and unconditional: updateTheme is a rare admin write, and if it
+  // touched the active theme the memoized row (config/settings) must go.
   invalidateActiveThemeCache();
   return row;
 }
@@ -468,6 +476,7 @@ export async function updateTheme(id: number, input: Partial<ThemeInput>): Promi
 export async function deleteTheme(id: number): Promise<{ id: number }> {
   const existing = await getThemeById(id);
 
+  // Never leave the site without an active theme: switch first if active.
   const [settings] = await db
     .select({ activeThemeSlug: siteSettings.activeThemeSlug })
     .from(siteSettings)
@@ -506,6 +515,8 @@ export async function setActiveTheme(id: number): Promise<Theme> {
   invalidateActiveThemeCache();
   return theme;
 }
+
+// ------------------------------------------------------------ settings panel
 
 export type ThemePanel = {
   theme: Theme;
@@ -594,6 +605,8 @@ export async function updateThemePanel(
   const configKeys = new Set(THEME_CONFIG_KEYS);
   const schema = getThemeSettingsSchema(theme.slug);
 
+  // palette is a generic panel key, not declared in per-theme settings
+  // schemas — resolveSettings() would strip it, so read the raw value.
   const previousRaw = (theme.settings as Record<string, unknown> | null)?.palette;
   const previousPalette =
     typeof previousRaw === "string" && previousRaw ? previousRaw : null;
@@ -628,6 +641,8 @@ export async function updateThemePanel(
   }
 
   const settingsPatch = coerceSettings(schema, rest);
+  // Same reason as above: keep a recognised palette across saves even though
+  // no per-theme schema declares it.
   if (nextPalette && getPalettePreset(nextPalette)) settingsPatch.palette = nextPalette;
 
   const [row] = await db
@@ -674,6 +689,7 @@ export async function getThemeSettings(slug: string): Promise<Record<string, unk
 export async function getActiveThemeRenderConfig(): Promise<ThemeConfig> {
   const theme = await getActiveTheme();
   const manifest = getThemeManifest(theme.slug);
+  // Raw read: palette is a generic panel key absent from theme settings schemas.
   const rawPalette = (theme.settings as Record<string, unknown> | null)?.palette;
   return paletteLayeredConfig(
     theme.config,

@@ -1,12 +1,10 @@
-
-
 import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";
 import { setOption } from "./options.js";
-import type { PostView } from "./queries.js";
-import type { PageView } from "./pages.js";
-import type { Category, Tag } from "./schema.js";
+import { memoStrict, memoQuery, invalidate, SIDEBAR_TTL } from "./cache.js";
+import type { PostRow } from "./queries.js";
+import type { Category, Tag, Page } from "./schema.js";
 
 export type PostLinkMode = "slug" | "id" | "pinyin" | "initial" | "custom";
 
@@ -61,34 +59,35 @@ export function normalizePermalinkConfig(input: Partial<PermalinkConfig>): Perma
   return cfg;
 }
 
-let cachedAt = 0;
-let cachedCfg: PermalinkConfig = DEFAULT_PERMALINKS;
-
-/** Read + normalize the permalink config (tiny in-process TTL: config rarely changes). */
+// Read + normalize the permalink config (30s in-process TTL: config rarely changes).
 export async function getPermalinkConfig(): Promise<PermalinkConfig> {
-  const now = Date.now();
-  if (cachedAt && now - cachedAt < 30_000) return cachedCfg;
-  let stored: Partial<PermalinkConfig> = {};
   try {
-    const rows = await db
-      .select({ value: options.value })
-      .from(options)
-      .where(eq(options.key, OPTION_KEY))
-      .limit(1);
-    if (rows[0]?.value && typeof rows[0].value === "object") {
-      stored = rows[0].value as Partial<PermalinkConfig>;
-    }
-  } catch {
-    stored = {};
+    return await memoStrict("permalink", 30_000, async () => {
+      const rows = await db
+        .select({ value: options.value })
+        .from(options)
+        .where(eq(options.key, OPTION_KEY))
+        .limit(1);
+      const stored =
+        rows[0]?.value && typeof rows[0].value === "object"
+          ? (rows[0].value as Partial<PermalinkConfig>)
+          : {};
+      return normalizePermalinkConfig({ ...DEFAULT_PERMALINKS, ...stored });
+    });
+  } catch (e) {
+    // A failed read must NOT be cached.
+    console.warn(
+      `[links] permalink config read failed, using defaults for this request: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+    return normalizePermalinkConfig(DEFAULT_PERMALINKS);
   }
-  cachedCfg = normalizePermalinkConfig({ ...DEFAULT_PERMALINKS, ...stored });
-  cachedAt = now;
-  return cachedCfg;
 }
 
 /** Drop the cached config after an admin save (B phase). */
 export function invalidatePermalinkConfig(): void {
-  cachedAt = 0;
+  invalidate("permalink");
 }
 
 export async function savePermalinkConfig(
@@ -134,6 +133,7 @@ function postTailSegments(cfg: PermalinkConfig, post: PostUrlInput): string[] {
   switch (cfg.postMode) {
     case "id":
       return [String(post.id)];
+    // pinyin/initials resolve through the persisted tails (no pinyin dictionary needed)
     case "pinyin":
       return [post.pinyinSlug || post.slug];
     case "initial":
@@ -190,6 +190,10 @@ export function paginate(path: string, page: number): string {
   return path === "/" ? `/?page=${page}` : `${path}?page=${page}`;
 }
 
+// ---------------------------------------------------------------------------
+// Resolution (routes side) — ported from lib/services/links.ts
+// ---------------------------------------------------------------------------
+
 /** Which persisted column a captured tail segment reverses through. */
 type SlugKind = "slug" | "pinyin" | "initial";
 
@@ -200,8 +204,30 @@ type TailMatcher = {
   segCount: number;
 };
 
+/**
+ * The compiled matcher for one permalink shape. resolveSitePath() builds it on
+ * every catch-all request, and matchPostTail() builds it again for the same
+ * config — so a root-level probe compiled the regex (plus the split/replace
+ * pass over the pattern) twice per request, on the route bots hit hardest.
+ * The matcher is a pure function of postMode + postPattern, so one instance per
+ * shape serves every request; a permalink change yields a new key and can never
+ * be handed a stale matcher. Neither regex carries a /g or /y flag and both are
+ * only read through String.match(), which ignores lastIndex for a non-global
+ * regex — so sharing one instance across concurrent requests is safe.
+ */
+const tailMatchers = new Map<string, TailMatcher>();
+
 /** Compile the active post tail shape (custom pattern → named-group regex). */
 export function buildTailMatcher(cfg: PermalinkConfig): TailMatcher {
+  const key = cfg.postMode + "\u0000" + cfg.postPattern;
+  const hit = tailMatchers.get(key);
+  if (hit) return hit;
+  const built = compileTailMatcher(cfg);
+  tailMatchers.set(key, built);
+  return built;
+}
+
+function compileTailMatcher(cfg: PermalinkConfig): TailMatcher {
   if (cfg.postMode === "custom") {
     const groups = cfg.postPattern.split("/").map((seg) =>
       seg
@@ -214,6 +240,8 @@ export function buildTailMatcher(cfg: PermalinkConfig): TailMatcher {
         .replace(/\{(month|day)\}/g, "(?<$1>\\d{1,2})"),
     );
     const pattern = groups.join("/");
+    // Reverse-lookup preference: id > pinyin > initial > slug (a pattern
+    // containing several text tokens is exotic; this order stays deterministic).
     const slugGroup: SlugKind | null = pattern.includes("(?<pinyin>")
       ? "pinyin"
       : pattern.includes("(?<initial>")
@@ -251,12 +279,18 @@ export function matchPostTail(
   const key = { dateParts: Object.keys(dateParts).length ? dateParts : undefined };
   if (m.hasId && g.id) return { id: Number(g.id), ...key };
   if (m.slugGroup && g[m.slugGroup]) {
-    return { slug: decodeURIComponent(g[m.slugGroup]), slugKind: m.slugGroup, ...key };
+    // No decode here: resolveSitePath already decoded every raw segment once
+    // before probing (its map is the single decode). A second
+    // decodeURIComponent would throw URIError on a literal "%z"/"a%zzb"
+    // segment the caller deliberately kept as-is - the same malformed-escape
+    // probes the decode-or-literal there exists to absorb - and the throw
+    // would escape as an uncached 500 instead of a clean 404.
+    return { slug: g[m.slugGroup], slugKind: m.slugGroup, ...key };
   }
   return null;
 }
 
-function dateTokensMatch(post: PostView, parts: Record<string, string>): boolean {
+function dateTokensMatch(post: { publishedAt?: Date | string | null; createdAt?: Date | string | null }, parts: Record<string, string>): boolean {
   const d = post.publishedAt ? new Date(post.publishedAt)
     : post.createdAt ? new Date(post.createdAt) : new Date();
   const actual: Record<string, string> = {
@@ -267,29 +301,51 @@ function dateTokensMatch(post: PostView, parts: Record<string, string>): boolean
   return Object.entries(parts).every(([k, v]) => v.padStart(2, "0") === actual[k]);
 }
 
-/** Resolve a post tail to a published post (null when nothing matches). */
+/** Resolve a post tail to a published post (null when nothing matches).
+ *  Returns the RAW row, not a hydrated view: the detail loader folds the
+ *  taxonomy/metas reads into its own concurrency wave, so hydrating here
+ *  would be a dedicated round trip per cold view.
+ *
+ *  Memoized (SWR, `rp:`) for the same reason the taxonomy/page slug lookups
+ *  are: the catch-all router probes this on every render — the root-level
+ *  fallback wave always includes it — and the detail loader then reuses the
+ *  row as `preloaded`. Under the 1s public render cache that was a remote
+ *  round trip per second. Post writes drop it via invalidateContentCaches;
+ *  the permalink fingerprint in the key means a mode/pattern change (which
+ *  only invalidates `permalink`) cannot serve a tail resolved under the old
+ *  config. */
 async function fetchPostByTail(
   tail: string[],
   cfg: PermalinkConfig,
-): Promise<PostView | null> {
+): Promise<PostRow | null> {
   const key = matchPostTail(cfg, tail);
   if (!key) return null;
 
-  const { getPost } = await import("./queries.js");
-  try {
-    const post = await getPost(String(key.slug ?? key.id ?? ""));
-    if (post && key.dateParts && !dateTokensMatch(post, key.dateParts)) return null;
-    return post;
-  } catch {
-    return null;
-  }
+  // A DB failure PROPAGATES rather than collapsing to null. `null` here means
+  // "no such post", and the caller (resolveSitePath → the catch-all loader)
+  // memoizes a null as a CONFIRMED 404 in the `pathmiss:` negative cache —
+  // so swallowing a transient query error into null would pin a valid post URL
+  // to 404 for the whole negative-cache TTL. The memo does not cache the
+  // rejection either (runOnce clears its in-flight marker), so the next read
+  // re-runs the query.
+  return memoQuery<PostRow | null>(
+    `rp:${cfg.postMode}|${cfg.postPattern}|${tail.join("/")}`,
+    SIDEBAR_TTL,
+    async () => {
+      const { getPostRow } = await import("./queries.js");
+      const row = await getPostRow(String(key.slug ?? key.id ?? ""));
+      // A date mismatch is a real "no such post" and IS worth caching.
+      if (row && key.dateParts && !dateTokensMatch(row.post, key.dateParts)) return null;
+      return row;
+    },
+  );
 }
 
 export type SitePathResolution =
   | { kind: "home" }
   | { kind: "blogIndex" }
-  | { kind: "post"; post: PostView }
-  | { kind: "page"; page: PageView }
+  | { kind: "post"; post: PostRow }
+  | { kind: "page"; page: Page }
   | { kind: "category"; category: Category }
   | { kind: "tag"; tag: Tag };
 
@@ -307,7 +363,25 @@ export async function resolveSitePath(
   rawSegments: string[],
 ): Promise<SitePathResolution | null> {
   const cfg = await getPermalinkConfig();
-  const segments = rawSegments.map((s) => decodeURIComponent(s)).filter(Boolean);
+  // Decode-or-literal, not a bare decodeURIComponent: the handler receives the
+  // RAW url (prod-server decodes only for its static layer; the edge adapter
+  // never does), so this is the single decode. A malformed escape - "/%z", the
+  // "%00"/"%2e" family scanners send - would throw URIError and turn a probe
+  // into an uncached 500. Treating it as a literal segment resolves to a clean
+  // 404 that the caller's negative cache can then absorb.
+  const decodedSegments = rawSegments.map((s) => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  });
+  // Postgres rejects a NUL byte in a text parameter, so "/%00" (constant
+  // scanner traffic) would burn all four entity probes on doomed queries and
+  // answer 500. A NUL can never name a real entity: the path is unresolvable,
+  // and returning null lets the caller negative-cache a clean 404 instead.
+  if (decodedSegments.some((s) => s.includes("\u0000"))) return null;
+  const segments = decodedSegments.filter(Boolean);
   if (!segments.length) return { kind: "home" };
 
   const pb = baseSegs(cfg.postBase);
@@ -316,22 +390,25 @@ export async function resolveSitePath(
   const tb = baseSegs(cfg.tagBase);
   const tailMatcher = buildTailMatcher(cfg);
 
+  // Post listing index: exact match of a non-empty post base.
   if (pb.length && segments.length === pb.length && startsWith(segments, pb)) {
     return { kind: "blogIndex" };
   }
 
+  // Prefixed entities.
   if (startsWith(segments, pb)) {
     const post = await fetchPostByTail(segments.slice(pb.length), cfg);
     if (post) return { kind: "post", post };
   }
   if (startsWith(segments, pgb) && segments.length === pgb.length + 1) {
-    const { getPublishedPage } = await import("./pages.js");
-    try {
-      const page = await getPublishedPage(segments[pgb.length]);
-      if (page) return { kind: "page", page };
-    } catch {
-      /* fall through */
-    }
+    // Raw row, like the post branch: the detail loader folds the metas
+    // hydration into its own wave. No try/catch: this branch is gated on the
+    // page base, so the category/tag branches below can never match the same
+    // path — swallowing a query error here would only convert it into a null,
+    // which the caller then negative-caches as a confirmed 404.
+    const { getPublishedPageRow } = await import("./pages.js");
+    const page = await getPublishedPageRow(segments[pgb.length]);
+    if (page) return { kind: "page", page };
   }
   if (startsWith(segments, cb) && segments.length === cb.length + 1) {
     const { getCategoryBySlug } = await import("./queries.js");
@@ -344,28 +421,44 @@ export async function resolveSitePath(
     if (tag) return { kind: "tag", tag };
   }
 
+  // Root-level single segment (prefixes deleted): try every entity type.
   if (segments.length === 1) {
 
     if (pb.length === 0 && segments[0] === ROOT_BLOG_INDEX_SEGMENT) {
       return { kind: "blogIndex" };
     }
-    const post = await fetchPostByTail(segments, cfg);
-    if (post) return { kind: "post", post };
-    const { getPublishedPage } = await import("./pages.js");
-    try {
-      const page = await getPublishedPage(segments[0]);
-      if (page) return { kind: "page", page };
-    } catch {
-      /* continue */
-    }
+    // One parallel wave, not four serial probes: the lookups are independent
+    // reads and only the result ORDER encodes the documented priority
+    // (post → page → category → tag). At remote-Postgres RTT the serial
+    // version paid 4 round trips for every unknown path - the whole cost of
+    // a 404 was these probes, and bots probe constantly.
+    //
+    // allSettled, not all: a probe that FAILS must not stop another entity
+    // type from resolving (a transient page-probe error should not 500 a
+    // valid category). But a probe that failed and left NOTHING resolved means
+    // the DB could not answer — rethrow below so the caller answers 500
+    // instead of negative-caching a 404 it never confirmed.
+    const { getPublishedPageRow } = await import("./pages.js");
     const { getCategoryBySlug, getTagBySlug } = await import("./queries.js");
-    const category = await getCategoryBySlug(segments[0]);
+    const [postR, pageR, catR, tagR] = await Promise.allSettled([
+      fetchPostByTail(segments, cfg),
+      getPublishedPageRow(segments[0]),
+      getCategoryBySlug(segments[0]),
+      getTagBySlug(segments[0]),
+    ]);
+    const post = postR.status === "fulfilled" ? postR.value : null;
+    const page = pageR.status === "fulfilled" ? pageR.value : null;
+    const category = catR.status === "fulfilled" ? catR.value : null;
+    const tag = tagR.status === "fulfilled" ? tagR.value : null;
+    if (post) return { kind: "post", post };
+    if (page) return { kind: "page", page };
     if (category) return { kind: "category", category };
-    const tag = await getTagBySlug(segments[0]);
     if (tag) return { kind: "tag", tag };
+    for (const r of [postR, pageR, catR, tagR]) if (r.status === "rejected") throw r.reason;
     return null;
   }
 
+  // Posts at root with multi-segment custom patterns (e.g. {year}/{slug}).
   if (pb.length === 0 && segments.length === tailMatcher.segCount) {
     const post = await fetchPostByTail(segments, cfg);
     if (post) return { kind: "post", post };

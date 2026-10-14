@@ -1,10 +1,4 @@
-/**
- * Isomorphic read loaders for the admin pages. They ride the same /api/data
- * channel as the public loaders (server render calls them directly, the
- * browser GETs /api/data), so every admin screen reads the LIVE database per
- * request. The middleware guarantees ctx.user for /admin pages; each loader
- * still re-checks because /api/data is reachable directly.
- */
+// Isomorphic read loaders for the admin pages.
 import {
   dashboardStats,
   adminListPosts,
@@ -56,6 +50,7 @@ import path from "node:path";
 import { applyAsyncFilters, applyFilters, HOOKS } from "./hooks.js";
 import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
+import { publicAssetHref } from "./theme-chrome.js";
 import { db } from "./db.js";
 import { users } from "./schema.js";
 import { can } from "./admin.js";
@@ -72,9 +67,7 @@ function requireUser(ctx: Ctx): SessionUser {
   return ctx.user;
 }
 
-/** Login/setup pages: who am I, and does first-run setup still apply.
- *  Authed pages additionally receive the preference-driven sidebar nav
- *  (core groups + plugin hook entries + plugin panel links). */
+// Login/setup pages: who am I, and does first-run setup still apply.
 export async function adminSession(_p: unknown, _ctx: Ctx) {
   const user = _ctx.user ?? null;
   const out: {
@@ -82,7 +75,11 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
     needsSetup: boolean;
     homePath?: string;
     navRaw?: string;
+    csrfHref: string;
+    adminHref: string;
   } = { user, needsSetup: !(await hasAnyUser()) };
+  out.csrfHref = publicAssetHref("csrf.js");
+  out.adminHref = publicAssetHref("admin.js");
   if (user) {
     const [prefs, extras] = await Promise.all([
       getAdminMenuPrefs(),
@@ -110,12 +107,13 @@ export async function adminMenuSettings(_p: unknown, ctx: Ctx) {
 
 export async function adminDashboard(_p: unknown, ctx: Ctx) {
   const user = requireUser(ctx);
-  const stats = await dashboardStats(user);
-  const { cards } = await applyAsyncFilters<{ cards: DashboardCardItem[] }>(
-    HOOKS.dashboardCards,
-    { cards: [] },
-  );
-  return { ...stats, cards };
+  // The dashboardCards filter receives a bare { cards: [] } payload - no
+  // dependency on stats - so both reads run in one wave.
+  const [stats, filtered] = await Promise.all([
+    dashboardStats(user),
+    applyAsyncFilters<{ cards: DashboardCardItem[] }>(HOOKS.dashboardCards, { cards: [] }),
+  ]);
+  return { ...stats, cards: filtered.cards };
 }
 
 export async function adminPosts(p: any, ctx: Ctx) {
@@ -134,15 +132,20 @@ export async function adminPosts(p: any, ctx: Ctx) {
 /** Editor data: one post (or null for "new") plus taxonomy option rows. */
 export async function adminPost(p: any, ctx: Ctx) {
   const user = requireUser(ctx);
-  const [categories, tags] = await Promise.all([listCategories(), listTags()]);
-  const authors = can(user.role, "content:update:any")
-    ? await db.select({ id: users.id, name: users.name }).from(users).orderBy(users.name)
-    : [];
-  
-  
-  if (p?.id === "new" || p?.id == null)
+  // Categories, tags, the author list and the post itself are mutually independent - one wave instead of the old three serial awaits (taxonomy pair).
+  const authorsP = can(user.role, "content:update:any")
+    ? db.select({ id: users.id, name: users.name }).from(users).orderBy(users.name)
+    : Promise.resolve([]);
+  if (p?.id === "new" || p?.id == null) {
+    const [categories, tags, authors] = await Promise.all([listCategories(), listTags(), authorsP]);
     return { post: null, categories, tags, authors, formats: POST_FORMATS };
-  const post = await adminGetPost(user, Number(p.id));
+  }
+  const [categories, tags, authors, post] = await Promise.all([
+    listCategories(),
+    listTags(),
+    authorsP,
+    adminGetPost(user, Number(p.id)),
+  ]);
   return { post, categories, tags, authors, formats: POST_FORMATS };
 }
 
@@ -191,14 +194,7 @@ export async function adminPlugin(p: any, ctx: Ctx) {
   return getPlugin(String(p?.slug || ""));
 }
 
-/**
- * Plugin-owned admin panel host (original parity: app/admin/plugins/[slug]).
- * Guards existence + activation (missing/disabled → { plugin: null }, the
- * page answers the segment 404), then lets the enabled plugin fill the
- * panel through the admin.panel filter: server-rendered `html` plus the URL
- * of an external `scriptSrc` (strict admin CSP: 'self' scripts only).
- * Plugins without a panel fall back to the host page's own hint.
- */
+// Plugin-owned admin panel host (original parity: app/admin/plugins/[slug]).
 export async function adminPluginPanel(p: any, ctx: Ctx) {
   const user = requireUser(ctx);
   if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
@@ -319,11 +315,16 @@ export async function adminWidgets(p: any, ctx: Ctx) {
   const user = requireUser(ctx);
   if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
   const q = String(p?.theme || ctx.query?.get("theme") || "").trim();
-  const active = await getActiveThemeSlug();
-  const slug = q || active || THEME_SLUG;
-  const rows = await listThemes();
+  // One wave: listThemes is independent of the active slug, and the widget
+  // instances only need the slug choice - an explicit ?theme= starts the
+  // read immediately, otherwise it chains off the active-slug promise.
+  const activeP = getActiveThemeSlug();
+  const widgetsP = (q ? Promise.resolve(q) : activeP).then((s) =>
+    listWidgets(q || s || THEME_SLUG),
+  );
+  const [active, rows, widgets] = await Promise.all([activeP, listThemes(), widgetsP]);
   return {
-    theme: slug,
+    theme: q || active || THEME_SLUG,
     activeThemeSlug: active,
     themes: rows.map((t) => ({
       slug: t.slug,
@@ -331,7 +332,7 @@ export async function adminWidgets(p: any, ctx: Ctx) {
     })),
     areas: WIDGET_AREAS,
     types: WIDGET_TYPES,
-    widgets: await listWidgets(slug),
+    widgets,
   };
 }
 
@@ -390,6 +391,11 @@ export async function adminSettings(_p: unknown, ctx: Ctx) {
     listThemes(),
     adminListPages(user, { limit: 200 }),
   ]);
+  // Dynamic select options are injected here (installed themes, pages) so the
+  // page itself stays a dumb schema renderer, mirroring the original
+  // app/admin/settings/page.tsx. Both lists stay unfiltered: a stored value
+  // that is missing from the options would silently fall back to the first
+  // entry on save.
   const themeOptions = themeRows.map((t) => ({ value: t.slug, label: t.name }));
   const pageOptions = [
     { value: "", label: "— 未选择 —" },
@@ -405,6 +411,8 @@ export async function adminSettings(_p: unknown, ctx: Ctx) {
           : f,
     ),
   }));
+  // homePageId / postsPageId are integers; select values are strings, so
+  // normalise to string on the way out and back to number on save.
   const stored: Record<string, unknown> = { ...(row as Record<string, unknown>) };
   for (const k of ["homePageId", "postsPageId"]) {
     stored[k] = stored[k] == null ? "" : String(stored[k]);

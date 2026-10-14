@@ -1,5 +1,3 @@
-
-
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
@@ -187,8 +185,12 @@ export async function saveNotifySettings(input: DeepPartial<NotifySettings>): Pr
       from: String(input.smtp?.from ?? cur.smtp.from).trim(),
     },
     email: {
-      enabled: !!input.email?.enabled,
-      via: input.email?.via === "webhook" ? "webhook" : "smtp",
+      enabled:
+        typeof input.email?.enabled === "boolean" ? input.email.enabled : cur.email.enabled,
+      via:
+        input.email?.via === "webhook" || input.email?.via === "smtp"
+          ? input.email.via
+          : cur.email.via,
       webhook: mergeWebhook(cur.email.webhook, input.email?.webhook),
     },
     sms: (() => {
@@ -203,7 +205,7 @@ export async function saveNotifySettings(input: DeepPartial<NotifySettings>): Pr
       const text = (oldVal: string, v: unknown, max = 200) =>
         typeof v === "string" ? v.trim().slice(0, max) : oldVal;
       const nextSms: NotifySettings["sms"] = {
-        enabled: !!raw.enabled,
+        enabled: typeof raw.enabled === "boolean" ? raw.enabled : cur.sms.enabled,
         provider,
         signature: text(cur.sms.signature, raw.signature, 40),
         webhook: mergeWebhook(cur.sms.webhook, raw.webhook),
@@ -256,12 +258,24 @@ export async function saveNotifySettings(input: DeepPartial<NotifySettings>): Pr
       return nextSms;
     })(),
     register: {
-      emailVerify: !!input.register?.emailVerify,
-      phoneVerify: !!input.register?.phoneVerify,
+      emailVerify:
+        typeof input.register?.emailVerify === "boolean"
+          ? input.register.emailVerify
+          : cur.register.emailVerify,
+      phoneVerify:
+        typeof input.register?.phoneVerify === "boolean"
+          ? input.register.phoneVerify
+          : cur.register.phoneVerify,
     },
     login: {
-      emailVerify: !!input.login?.emailVerify,
-      phoneVerify: !!input.login?.phoneVerify,
+      emailVerify:
+        typeof input.login?.emailVerify === "boolean"
+          ? input.login.emailVerify
+          : cur.login.emailVerify,
+      phoneVerify:
+        typeof input.login?.phoneVerify === "boolean"
+          ? input.login.phoneVerify
+          : cur.login.phoneVerify,
     },
   };
   await setOption(OPTION_KEY, next);

@@ -1,5 +1,3 @@
-
-
 import { buildSchema, GraphQLError } from "graphql";
 import { desc, eq, sql } from "drizzle-orm";
 import { db } from "./db.js";
@@ -30,6 +28,8 @@ import {
   updateTag,
 } from "./admin.js";
 import { createPage, deletePage, updatePage } from "./pages.js";
+
+// ---- Type definitions ----
 
 const typeDefs = /* GraphQL */ `
   scalar JSON
@@ -203,6 +203,8 @@ const typeDefs = /* GraphQL */ `
   }
 `;
 
+// ---- Local read helpers (authed-aware, per-request) ----
+
 type Ctx = { user: SessionUser | null };
 
 async function postById(id: number, authed: boolean) {
@@ -315,6 +317,8 @@ async function listPagesPublic(
   return { items: rows, total: Number(c?.n ?? 0) };
 }
 
+// ---- Helpers ----
+
 function requireUser(ctx: Ctx): SessionUser {
   if (!ctx.user) throw new GraphQLError("未认证", { extensions: { code: "UNAUTHENTICATED" } });
   return ctx.user;
@@ -334,6 +338,8 @@ function publicUser(u: Record<string, unknown>) {
   const { passwordHash, ...rest } = u as { passwordHash?: string };
   return rest;
 }
+
+// ---- Resolvers ----
 
 type Resolver = (parent: unknown, args: any, ctx: Ctx) => unknown;
 
@@ -357,6 +363,7 @@ const queryResolvers: Record<string, Resolver> = {
             tagSlug,
             limit: args.limit ?? 20,
             offset: args.offset ?? 0,
+            full: true,
           }),
         );
       },

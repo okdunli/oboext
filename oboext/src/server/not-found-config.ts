@@ -1,12 +1,8 @@
-/**
- * 404 page configuration — ported from oboext lib/services/not-found-config.ts.
- *
- * Config lives in the options KV (key "notFoundSettings"). The 404 page loads
- * these settings to customize title, message, and module visibility.
- */
+// 404 page configuration — ported from oboext lib/services/not-found-config.ts.
 import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";
+import { invalidate, memoStrict } from "./cache.js";
 
 export interface NotFoundSettings {
   title: string;
@@ -25,12 +21,15 @@ export const DEFAULT_NOT_FOUND: NotFoundSettings = {
 };
 
 export async function getNotFoundSettings(): Promise<NotFoundSettings> {
-  const [row] = await db
-    .select({ value: options.value })
-    .from(options)
-    .where(eq(options.key, OPTION_KEY));
-  const stored = (row?.value as Partial<NotFoundSettings>) ?? {};
-  return { ...DEFAULT_NOT_FOUND, ...stored };
+  // Hard-TTL memo: the 404 page renders on every unknown path, and bots probe constantly — an uncached options read here cost one round trip per miss.
+  return memoStrict("nf:settings", 30_000, async () => {
+    const [row] = await db
+      .select({ value: options.value })
+      .from(options)
+      .where(eq(options.key, OPTION_KEY));
+    const stored = (row?.value as Partial<NotFoundSettings>) ?? {};
+    return { ...DEFAULT_NOT_FOUND, ...stored };
+  });
 }
 
 export async function saveNotFoundSettings(
@@ -55,5 +54,11 @@ export async function saveNotFoundSettings(
     .insert(options)
     .values({ key: OPTION_KEY, value: next })
     .onConflictDoUpdate({ target: options.key, set: { value: next } });
+  invalidateNotFoundSettings();
   return next;
+}
+
+/** Drop the cached settings after an admin save. */
+export function invalidateNotFoundSettings(): void {
+  invalidate("nf:settings");
 }

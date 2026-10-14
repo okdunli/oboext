@@ -417,6 +417,50 @@
     pjaxGo(location.pathname + location.search, false);
   });
 
+  function setupLightbox() {
+    const lightbox = document.createElement("div");
+    lightbox.className = "sk-lightbox";
+    lightbox.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .25s ease;cursor:pointer;";
+    lightbox.innerHTML = '<button class="sk-lightbox-close" style="position:absolute;top:16px;right:16px;width:40px;height:40px;border:none;background:rgba(255,255,255,.15);border-radius:50%;color:#fff;font-size:24px;cursor:pointer;">×</button><img class="sk-lightbox-img" style="max-width:90vw;max-height:90vh;object-fit:contain;transform:scale(.9);opacity:0;transition:transform .3s ease, opacity .3s ease;" alt="">';
+    document.body.appendChild(lightbox);
+    const img = lightbox.querySelector(".sk-lightbox-img");
+    const closeBtn = lightbox.querySelector(".sk-lightbox-close");
+    function closeLightbox() {
+      lightbox.style.opacity = "0";
+      img.style.transform = "scale(.9)";
+      img.style.opacity = "0";
+      setTimeout(() => { lightbox.style.display = "none"; }, 300);
+      document.removeEventListener("keydown", onKey);
+    }
+    function openLightbox(src) {
+      img.src = src;
+      lightbox.style.display = "flex";
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          lightbox.style.opacity = "1";
+          img.style.transform = "scale(1)";
+          img.style.opacity = "1";
+        });
+      });
+      document.addEventListener("keydown", onKey);
+    }
+    function onKey(e) { if (e.key === "Escape") closeLightbox(); }
+    lightbox.addEventListener("click", (e) => {
+      if (e.target === lightbox || e.target === closeBtn) closeLightbox();
+    });
+    closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closeLightbox(); });
+    document.addEventListener("click", (e) => {
+      const target = e.target;
+      const isThumbnail = target.closest(".post-thumbnail-wrapper");
+      const isContentImg = target.closest(".post-content") && target.tagName === "IMG";
+      if (!isThumbnail && !isContentImg) return;
+      e.preventDefault();
+      const src = isThumbnail ? target.querySelector("img")?.src : target.src;
+      if (src) openLightbox(src);
+    });
+  }
+  setupLightbox();
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
   } else {

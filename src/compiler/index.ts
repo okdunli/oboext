@@ -1269,7 +1269,9 @@ if (!__had_${d.name}) set${capitalize(d.name)}(await $data(${fn}));`;
   );
   const classExpanded = expandClassDirectives(useExpanded, filePath);
   const styleExpanded = expandStyleDirectives(classExpanded, filePath);
-  const keyExpanded = expandKeyBlocks(styleExpanded, filePath);
+  const transExpanded = expandTransitionDirectives(styleExpanded, filePath);
+  const animExpanded = expandAnimateDirectives(transExpanded, filePath);
+  const keyExpanded = expandKeyBlocks(animExpanded, filePath);
   const elseExpanded = expandIfElse(keyExpanded);
   const deferExpanded = expandDeferBlocks(elseExpanded);
   const awaitExpanded = expandAwaitBlocks(deferExpanded.template, filePath);
@@ -1929,6 +1931,151 @@ function expandClassDirectives(template: string, filePath: string): string {
  * the expected precedence. Same quote-aware tag scanner and same
  * reactive-class={...} conflict rule as expandClassDirectives.
  */
+
+/**
+ * F20: `transition:fn` - enter/leave transitions.
+ *
+ * A `transition:fn` directive on an element tells the runtime to animate it
+ * in (on mount) and out (on unmount). The directive is parsed here at build
+ * time and emitted as a `data-transition` attribute the runtime reads to
+ * pick the transition effect. Built-in transitions (fade, slide, fly) are
+ * registered in the runtime and applied through the `transition()` helper.
+ *
+ * Syntax: `transition:fn` or `transition:fn={params}`.
+ *
+ * Example: `<div transition:fade>` or `<div transition:fade={duration: 300}>`.
+ */
+function expandTransitionDirectives(template: string, filePath: string): string {
+  if (!template.includes('transition:')) return template;
+  const TAG_RE = /<([a-zA-Z][^\s>/]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
+  let out = '';
+  let pos = 0;
+  let m: RegExpExecArray | null;
+  TAG_RE.lastIndex = 0;
+  while ((m = TAG_RE.exec(template))) {
+    const [whole, tag, attrs, selfClose] = m;
+    if (!attrs.includes('transition:')) continue;
+    const pairs: Array<{ name: string; params: string; start: number; end: number }> = [];
+    const NAME_RE = /\stransition:([\w-]+)(?:\s*=\s*\{)?/g;
+    let nm: RegExpExecArray | null;
+    while ((nm = NAME_RE.exec(attrs))) {
+      let start = nm.index;
+      let end = nm.index + nm[0].length;
+      let params = '';
+      if (nm[0].endsWith('{')) {
+        let depth = 1;
+        let i = end;
+        while (i < attrs.length && depth > 0) {
+          const ch = attrs[i];
+          if (ch === '"' || ch === "'") { i = skipQuoted(attrs, i); continue; }
+          if (ch === '{') depth++;
+          else if (ch === '}') depth--;
+          i++;
+        }
+        if (depth !== 0) {
+          throw new RoseError('E-TEMPLATE', `${filePath}: transition:${nm[1]}={...} is missing its closing brace`, { file: filePath, hint: 'the transition params expression needs a matching } before the tag ends' });
+        }
+        params = attrs.slice(end, i - 1);
+        end = i;
+      }
+      pairs.push({ name: nm[1], params, start, end });
+    }
+    let transitionValue = '';
+    for (const p of pairs) {
+      if (transitionValue) transitionValue += '|';
+      transitionValue += p.name + (p.params ? ':' + p.params : '');
+    }
+    let newAttrs = attrs;
+    for (let k = pairs.length - 1; k >= 0; k--) {
+      newAttrs = newAttrs.slice(0, pairs[k].start) + newAttrs.slice(pairs[k].end);
+    }
+    const transRe = /\sdata-transition\s*=\s*("([^"]*)"|'([^']*)'|\{[^}]*\})/;
+    const tm = transRe.exec(newAttrs);
+    if (tm) {
+      const existing = tm[2] ?? tm[3] ?? '';
+      newAttrs = newAttrs.replace(transRe, ` data-transition="${existing}${transitionValue ? (existing ? '|' : '') + transitionValue : ""}"`);
+    } else {
+      newAttrs = ` data-transition="${transitionValue}"` + newAttrs;
+    }
+    out += template.slice(pos, m.index) + `<${tag}${newAttrs}${selfClose}>`;
+    pos = m.index + whole.length;
+  }
+  out += template.slice(pos);
+  return out;
+}
+
+/**
+ * F21: `animate:fn` - FLIP (First/Last/Invert/Play) animations.
+ *
+ * A `animate:fn` directive on an element tells the runtime to animate it
+ * when its position changes (e.g., list reordering). The directive is parsed
+ * here at build time and emitted as a `data-animate` attribute the runtime
+ * reads to pick the animation effect. Built-in animations (flip) are
+ * registered in the runtime and applied through the `animate()` helper.
+ *
+ * Syntax: `animate:fn` or `animate:fn={params}`.
+ *
+ * Example: `<div animate:flip>` or `<div animate:flip={duration: 300}>`.
+ */
+function expandAnimateDirectives(template: string, filePath: string): string {
+  if (!template.includes('animate:')) return template;
+  const TAG_RE = /<([a-zA-Z][^\s>/]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
+  let out = '';
+  let pos = 0;
+  let m: RegExpExecArray | null;
+  TAG_RE.lastIndex = 0;
+  while ((m = TAG_RE.exec(template))) {
+    const [whole, tag, attrs, selfClose] = m;
+    if (!attrs.includes('animate:')) continue;
+    const pairs: Array<{ name: string; params: string; start: number; end: number }> = [];
+    const NAME_RE = /\sanimate:([\w-]+)(?:\s*=\s*\{)?/g;
+    let nm: RegExpExecArray | null;
+    while ((nm = NAME_RE.exec(attrs))) {
+      let start = nm.index;
+      let end = nm.index + nm[0].length;
+      let params = '';
+      if (nm[0].endsWith('{')) {
+        let depth = 1;
+        let i = end;
+        while (i < attrs.length && depth > 0) {
+          const ch = attrs[i];
+          if (ch === '"' || ch === "'") { i = skipQuoted(attrs, i); continue; }
+          if (ch === '{') depth++;
+          else if (ch === '}') depth--;
+          i++;
+        }
+        if (depth !== 0) {
+          throw new RoseError('E-TEMPLATE', `${filePath}: animate:${nm[1]}={...} is missing its closing brace`, { file: filePath, hint: 'the animate params expression needs a matching } before the tag ends' });
+        }
+        params = attrs.slice(end, i - 1);
+        end = i;
+      }
+      pairs.push({ name: nm[1], params, start, end });
+    }
+    let animateValue = '';
+    for (const p of pairs) {
+      if (animateValue) animateValue += '|';
+      animateValue += p.name + (p.params ? ':' + p.params : '');
+    }
+    let newAttrs = attrs;
+    for (let k = pairs.length - 1; k >= 0; k--) {
+      newAttrs = newAttrs.slice(0, pairs[k].start) + newAttrs.slice(pairs[k].end);
+    }
+    const animRe = /\sdata-animate\s*=\s*("([^"]*)"|'([^']*)'|\{[^}]*\})/;
+    const am = animRe.exec(newAttrs);
+    if (am) {
+      const existing = am[2] ?? am[3] ?? '';
+      newAttrs = newAttrs.replace(animRe, ` data-animate="${existing}${animateValue ? (existing ? '|' : '') + animateValue : ""}"`);
+    } else {
+      newAttrs = ` data-animate="${animateValue}"` + newAttrs;
+    }
+    out += template.slice(pos, m.index) + `<${tag}${newAttrs}${selfClose}>`;
+    pos = m.index + whole.length;
+  }
+  out += template.slice(pos);
+  return out;
+}
+
 function expandStyleDirectives(template: string, filePath: string): string {
   if (!template.includes('style:')) return template;
   const TAG_RE = /<([a-zA-Z][^\s>/]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
@@ -2065,6 +2212,7 @@ function expandIfElse(template: string): string {  for (let pass = 0; pass < 10;
 }
 
 function expandDeferBlocks(template: string): { template: string; count: number; holds: number[] } {
+
   if (!DEFER_ENABLED) {
     const openRe = /\{#defer(?:\s+hold=\\d+)?\}/g;
     let out = '';
@@ -2236,14 +2384,16 @@ function awaitBootCode(blocks: AwaitBlock[]): string {
   return code;
 }
 
-function findBlock(src: string, kind: 'if' | 'each' | 'boundary' | 'island'): RegExpExecArray | null {
+function findBlock(src: string, kind: 'if' | 'each' | 'boundary' | 'island' | 'snippet'): RegExpExecArray | null {
   const head = kind === 'boundary'
     ? /\{#boundary(?:\s+([^}]*))?\}/g
     : kind === 'if'
       ? /\{#if\s+([^}]+)\}/g
       : kind === 'island'
         ? /\{#island(?:\s+name="([^"]*)")?(?:\s+hydrate="([^"]*)")?\s*\}/g
-        : /\{#each\s+([^}]+?)\s+as\s+(\{[^{}]*\}|\[[^[\]]*\]|\w+)(?:\s*,\s*(\w+))?\}/g;
+        : kind === 'snippet'
+          ? /\{#snippet\s+(\w+)(?:\s*\(([^)]+)\))?\s*\}/g
+          : /\{#each\s+([^}]+?)\s+as\s+(\{[^{}]*\}|\[[^[\]]*\]|\w+)(?:\s*,\s*(\w+))?\}/g;
   const closeRe = new RegExp(`\\{/${kind}\\}`, 'g');
   let open: RegExpExecArray | null;
   while ((open = head.exec(src))) {
@@ -2508,6 +2658,7 @@ function compileTemplate(
       : null;
     const compTag = comps.size > 0 ? findCompTag(remaining, comps) : null;
     const islandMatch = findBlock(remaining, 'island');
+    const snippetMatch = findBlock(remaining, 'snippet');
 
     const candidates: Array<{ type: string; match: RegExpExecArray; index: number; tag?: CompTag }> = [];
     if (ifMatch?.index !== undefined) candidates.push({ type: 'if', match: ifMatch, index: ifMatch.index });
@@ -2516,6 +2667,7 @@ function compileTemplate(
     if (islandMatch?.index !== undefined) candidates.push({ type: 'island', match: islandMatch, index: islandMatch.index });
     if (exprMatch?.index !== undefined) candidates.push({ type: 'expr', match: exprMatch, index: exprMatch.index });
     if (compTag) candidates.push({ type: 'comp', match: exprMatch!, index: compTag.start, tag: compTag });
+    if (snippetMatch?.index !== undefined) candidates.push({ type: 'snippet', match: snippetMatch, index: snippetMatch.index });
     const earliest = candidates.length > 0
       ? candidates.reduce((a, b) => (a.index <= b.index ? a : b))
       : null;
@@ -2614,6 +2766,15 @@ function compileTemplate(
         ? `try { $actionErrorOrThrow(); __bd${id} = __b${id}(${closes}); } catch (e) { $setBoundaryError(e); __bd${id} = ${fbBlock ? `__bf${id}(${closes})` : '$boundaryFallback(e)'}; }\n`
         : `try { __bd${id} = __b${id}(${closes}); } catch (e) { $setBoundaryError(e); __bd${id} = ${fbBlock ? `__bf${id}(${closes})` : JSON.stringify(BOUNDARY_FALLBACK)}; }\n`;
       result += `${acc} += __bd${id};\n`;
+      remaining = remaining.substring(earliest.index + earliest.match[0].length);
+    } else if (earliest.type === 'snippet') {
+      const [, name, params, content] = earliest.match;
+      const before = remaining.substring(0, earliest.index);
+      if (before) result += emitChunk(before, acc, closes, scope);
+      const id = nextId();
+      const paramList = params ? params.split(',').map(p => p.trim()).filter(Boolean).join(',') : '';
+      const inner = compileTemplate(content.trim(), 'h', '__c', '__s', depth + 1, effMarkers, comps, islandDepth);
+      result += `(__snip || (__snip = {})).${name} = (__s, __c${paramList ? ',' + paramList : ''}) => { let h = ''; ${inner} return h; };\n`;
       remaining = remaining.substring(earliest.index + earliest.match[0].length);
     } else if (earliest.type === 'comp') {
       const tag = earliest.tag!;

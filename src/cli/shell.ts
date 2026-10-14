@@ -186,6 +186,14 @@ function bootstrap(): string {
 }
 
 const CSP_TAIL = `style-src 'unsafe-inline'; img-src 'self' data: https://fastly.picsum.photos; font-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'`;
+
+// The non-CSP half of the document's security headers.
+const BASELINE_SECURITY_HEADERS: Record<string, string> = {
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'permissions-policy': 'accelerometer=(), ambient-light-sensor=(), autoplay=(), battery=(), camera=(), display-capture=(), document-domain=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), xr-spatial-tracking=()',
+};
 let cspCache: { for: string | null; value: string } | null = null;
 let EXTERNAL_BOOTSTRAP_CACHE: string | null = null;
 function externalBootstrap(): string {
@@ -242,7 +250,11 @@ export function mintNonce(): string {
  *   the route opts into, per route, not a framework default.
  */
 export function securityHeaders(client: string | null, nonce = ''): Record<string, string> {
-  if (nonce) return { 'Content-Security-Policy': `script-src 'nonce-${nonce}' 'strict-dynamic'; ${CSP_TAIL}` };
+  const headers: Record<string, string> = { ...BASELINE_SECURITY_HEADERS };
+  if (nonce) {
+    headers['Content-Security-Policy'] = `script-src 'nonce-${nonce}' 'strict-dynamic'; ${CSP_TAIL}`;
+    return headers;
+  }
   if (!cspCache || cspCache.for !== client) {
     const scriptSrc = client
       ? `'sha256-${createHash('sha256').update(inlineScript(client), 'utf-8').digest('base64')}'`
@@ -252,7 +264,8 @@ export function securityHeaders(client: string | null, nonce = ''): Record<strin
       value: `script-src ${scriptSrc}; ${CSP_TAIL}`,
     };
   }
-  return { 'Content-Security-Policy': cspCache.value };
+  headers['Content-Security-Policy'] = cspCache.value;
+  return headers;
 }
 
 const FAVICON = '<link rel="icon" href="data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'><text y=\'.9em\' font-size=\'90\'>🌹</text></svg>">';

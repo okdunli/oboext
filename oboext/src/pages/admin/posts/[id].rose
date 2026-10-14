@@ -64,6 +64,15 @@
     const m = d().post ? d().post.formatMeta : null;
     return m && m[key] != null ? m[key] : "";
   }
+  function cardThemeVal() {
+    return fmVal("bluemix_card_theme");
+  }
+  function swatches() {
+    return [
+      "#3b6ea5", "#5f7ad1", "#e0853b", "#7a5fa8", "#3aa37f",
+      "#b5548f", "#c75f5f", "#58595b", "#2d8f9e", "#6f8f3a",
+    ];
+  }
   function deleteUrl() {
     const x = d().post;
     return x ? "/api/posts/" + x.id : "";
@@ -208,6 +217,25 @@
               {/if}
             </div>
             {/each}
+          </div>
+          <div class="adm-field" style="margin-top:12px" data-cardtheme>
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">卡片主色</span>
+            <div style="display:flex;flex-wrap:wrap;gap:6px" data-ctheme-dots>
+              {#each swatches() as c}
+              <button type="button" class="adm-ctheme-dot" style={"background:" + c} data-ctheme-dot={c} title={c} aria-label={"选择 " + c}></button>
+              {/each}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+              <span class="adm-ctheme-chip" data-ctheme-chip></span>
+              <input class="adm-input" data-ctheme-input placeholder="#rrggbb" style="max-width:120px" value={cardThemeVal()}>
+              <button type="button" class="adm-btn adm-btn-sm" data-ctheme-apply>应用</button>
+              <button type="button" class="adm-btn adm-btn-sm" data-ctheme-detect>从特色图识别</button>
+              <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-ctheme-clear hidden>清除</button>
+            </div>
+            <div class="adm-hint" style="margin-top:4px">
+              <span data-ctheme-msg></span>
+              <span data-ctheme-note>留空则按 slug 自动生成；仅 bluemix 主题的卡片消费该颜色。</span>
+            </div>
           </div>
           <div class="adm-switch" style="margin-top:10px">
             <div>

@@ -1,7 +1,8 @@
 <script>
 
   import { jsonFail, readBody, apiGate } from "@server/admin";
-  import { sessionCookieValue, hasAnyUser } from "@server/auth";
+  import { hasAnyUser } from "@server/auth";
+  import { sessionCookiePair } from "@server/csrf";
   import { getMemberSettings, registerMember } from "@server/members";
   import { getAdminSecurity } from "@server/security";
   import { verifyCaptchaFor, readCaptchaCookie } from "@server/captcha";
@@ -36,7 +37,7 @@
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "set-cookie": await sessionCookieValue(user),
+          "set-cookie": await sessionCookiePair(user),
         },
       });
     });

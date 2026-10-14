@@ -1,9 +1,12 @@
 <script>
   export const bundle = 'split';
   // TTFB: the whole public content surface (home + posts + pages) memoizes
-  // for 15s per cookie principal. Server actions (comment/member/admin
+  // for 1s per cookie principal. Server actions (comment/member/admin
   // POSTs) invalidate the memo on write, so edits surface immediately.
-  export const cache = 15;
+  // 1s (not 0) keeps a tiny burst cache for TTFB while letting the read
+  // counter increment on (almost) every distinct visitor — cache=15 was
+  // under-counting everyone who arrived inside the same 15s window.
+  export const cache = 1;
   // The single public content entry point (original parity:
   // app/(site)/[[...slug]]/page.tsx). `slug` arrives as the segment ARRAY;
   // the "resolve" loader maps it through the permalink gateway to the
@@ -35,6 +38,4 @@
 </head>
 {/if}
 
-{@html view().bodyOpen ?? ""}
 {@html view().main}
-{@html view().bodyClose ?? ""}

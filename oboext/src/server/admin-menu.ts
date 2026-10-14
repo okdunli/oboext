@@ -90,25 +90,49 @@ const CORE_GROUPS: MenuGroup[] = [
     ],
   },
   {
+    id: "personal",
+    label: "个人中心",
+    glyph: "user-round",
+    children: [
+      { href: "/admin/account", label: "我的账号", glyph: "user-round" },
+    ],
+  },
+  {
+    id: "users",
+    label: "用户与权限",
+    glyph: "users",
+    superOnly: true,
+    children: [
+      { href: "/admin/users", label: "用户", glyph: "users" },
+      { href: "/admin/members", label: "会员注册", glyph: "user-plus", superOnly: true },
+      { href: "/admin/oauth", label: "第三方登录", glyph: "share-2", superOnly: true },
+    ],
+  },
+  {
     id: "system",
     label: "系统设置",
     glyph: "settings",
     superOnly: true,
     children: [
       { href: "/admin/settings", label: "站点设置", glyph: "settings" },
-      { href: "/admin/permalinks", label: "固定链接", glyph: "link-2", superOnly: true },
       { href: "/admin/security", label: "后台安全", glyph: "shield", superOnly: true },
       { href: "/admin/security-logs", label: "安全日志", glyph: "scroll-text", superOnly: true },
       { href: "/admin/maintenance", label: "维护模式", glyph: "construction", superOnly: true },
       { href: "/admin/notify", label: "通知设置", glyph: "bell", superOnly: true },
-      { href: "/admin/members", label: "会员注册", glyph: "user-plus", superOnly: true },
-      { href: "/admin/oauth", label: "第三方登录", glyph: "share-2", superOnly: true },
+    ],
+  },
+  {
+    id: "tools",
+    label: "站点工具",
+    glyph: "wrench",
+    superOnly: true,
+    children: [
+      { href: "/admin/permalinks", label: "固定链接", glyph: "link-2", superOnly: true },
       { href: "/admin/notfound", label: "404 页面", glyph: "file-question" },
       { href: "/admin/backup", label: "备份恢复", glyph: "database-backup", superOnly: true },
       { href: "/admin/export", label: "内容导出", glyph: "file-text", superOnly: true },
       { href: "/admin/icons", label: "图标库", glyph: "shapes", superOnly: true },
       { href: "/admin/menu-settings", label: "菜单与首页", glyph: "panel-left", locked: true },
-      { href: "/admin/users", label: "用户", glyph: "users" },
     ],
   },
 ];

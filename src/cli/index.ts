@@ -3,11 +3,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as zlib from 'zlib';
+import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import { pathToFileURL, fileURLToPath } from 'url';
 import { buildProject, scanRoseFiles, scanComponentFiles, scriptOf, extractExports, loadPlugins, RoseError, errorInfo, type RouteInfo } from '../compiler/index.js';
 import { getHtmlShell, getClientSource, getStyles, shellOpen, clientScriptTag, securityHeaders, mintNonce, setBundleMode } from './shell.js';
 import { AI_PROMPT } from './prompt.js';
+import { Readable } from 'stream';
+import { createEdgeHandler } from './edge.js';
 import type * as ts from 'typescript';
 
 type Encoding = 'br' | 'gzip' | 'deflate';
@@ -129,6 +132,23 @@ const PORT = Number(process.env.PORT) || 3000;
 let serverModule: any = null;
 let serverMtime = -1;
 let serverVersion = 0;
+
+function loadDotEnv(dir: string): void {
+  try {
+    const raw = fs.readFileSync(path.join(dir, '.env'), 'utf-8');
+    for (const line of raw.split(/\r?\n/)) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      const eq = t.indexOf('=');
+      if (eq <= 0) continue;
+      const k = t.slice(0, eq).trim();
+      let v = t.slice(eq + 1).trim();
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+      if (!(k in process.env)) process.env[k] = v;
+    }
+  } catch { /* no .env: fine */ }
+}
+loadDotEnv(process.cwd());
 
 async function loadServer(): Promise<any> {
   const file = path.join(OUT_DIR, 'server.js');
@@ -612,6 +632,8 @@ function settleDevBuild(): Promise<void> | null {
 }
 
 // Wrap a dev response so every HTML document carries the bridge (and the resumed state, once).
+let invalidateHook: (() => void) | null = null;
+
 function devWrap(inner: (req: any, res: any) => void): (req: any, res: any) => void {
   devMode = true;
   return (req, res) => {
@@ -650,6 +672,27 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
       res.statusCode = blocked.status;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end(blocked.body);
+      return;
+    }
+    if (req.method === 'POST' && (req.url || '').startsWith('/__rosefd/revalidate')) {
+      const token = process.env.ROSEFD_REVALIDATE_TOKEN || '';
+      if (!token) { res.statusCode = 404; res.end(); return; }
+      if (req.headers['x-rosefd-token'] !== token) {
+        res.statusCode = 403; res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ error: 'invalid token' })); return;
+      }
+      let body = '';
+      req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(body || '{}');
+          if (invalidateHook) invalidateHook();
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({ revalidated: true, scope: payload.all ? 'all' : 'paths' }));
+        } catch (e: any) {
+          res.statusCode = 400; res.end(JSON.stringify({ error: String(e).slice(0, 120) }));
+        }
+      });
       return;
     }
     const want = pathnameOf(req.url || '/');
@@ -700,6 +743,7 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
               body: body.length > 0 ? body : undefined,
             });
             ssrModule.setQuery?.(queryOf(req.url));
+            if ((req.method || 'GET') !== 'GET') ssrModule.invalidateRenderCache?.();
             let apiRes = await ssrModule.handleApi(req.method || 'GET', apiPath, request);
             if (hookCtx) apiRes = await ssrModule.runResponseHooks(hookCtx, apiRes);
             writeWebHeaders(apiRes, res);
@@ -729,6 +773,7 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
               }
             }
             ssrModule.setQuery?.(queryOf(req.url));
+            ssrModule.invalidateRenderCache?.();
             const page = await ssrModule.renderPage(pathnameOf(req.url || '/'), form);
             await sendPage(req, res, ssrModule, hookCtx, page, pathnameOf(req.url || '/'));
           } catch (err) {
@@ -787,7 +832,7 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
         };
         const fileHeaders: Record<string, string> = {
           'Content-Type': types[ext] || 'application/octet-stream',
-          'Cache-Control': rev ? `public, max-age=0, stale-while-revalidate=${rev.seconds}` : 'public, max-age=3600',
+          'Cache-Control': devMode ? 'no-cache' : rev ? `public, max-age=0, stale-while-revalidate=${rev.seconds}` : 'public, max-age=3600',
           'ETag': entry.etag,
           'Vary': 'Accept-Encoding',
         };
@@ -861,7 +906,10 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
         done();
         return;
       }
-      const page = await ssrModule.renderPage(safe2);
+      const hasQuery = (req.url || '').includes('?');
+      const page = req.method === 'GET' && !hasQuery && ssrModule.renderPageCached
+        ? await ssrModule.renderPageCached(safe2, String(req.headers.cookie || ''))
+        : await ssrModule.renderPage(safe2);
       await sendPage(req, res, ssrModule, hookCtx, page, safe2);
     }).catch((err: unknown) => {
       console.error(`Rose Frame Driver: ${req.method} ${req.url} failed:`, err instanceof Error ? err.stack ?? err.message : err);
@@ -871,14 +919,31 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
       }
       res.statusCode = 500;
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.end('<h1>500</h1><p>Something went wrong rendering this page.</p>');
+      const devErr = err as { file?: string; line?: number | string; hint?: string };
+      let devDetail = '';
+      if (process.env.ROSEFD_DEV === '1' && err) {
+        const stack = err instanceof Error ? (err.stack || '').split('\n').slice(1, 7).join('\n') : '';
+        devDetail =
+          '<div style="margin:24px auto;max-width:860px;font:13px/1.6 ui-monospace,monospace;background:#1b1b1f;color:#e6e6ea;border:1px solid #3a3a42;border-radius:10px;padding:20px 24px;text-align:left;white-space:pre-wrap;word-break:break-word">' +
+          '<div style="font:600 15px/1.4 system-ui,sans-serif;color:#ff8b8b">Render failed: ' + escapeHtml(req.url || '') + '</div>' +
+          '<div style="margin:10px 0 0;color:#ffd479">' + escapeHtml(err instanceof Error ? err.message : err) + '</div>' +
+          (devErr.file ? '<div style="margin:6px 0 0;color:#9ad1ff">' + escapeHtml(devErr.file) + (devErr.line != null ? ':' + devErr.line : '') + '</div>' : '') +
+          (devErr.hint ? '<div style="margin:10px 0 0;color:#9fe8b0">Fix: ' + escapeHtml(devErr.hint) + '</div>' : '') +
+          (stack ? '<pre style="margin:12px 0 0;color:#8f8f9a">' + escapeHtml(stack) + '</pre>' : '') +
+          '</div>';
+      }
+      res.end('<h1>500</h1><p>Something went wrong rendering this page.</p>' + devDetail);
     });
   };
 }
 
+/** HTML-escape for the dev error overlay (F10). */
+function escapeHtml(v: unknown): string {
+  return String(v ?? '').replace(/[<>&"]/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[ch] as string));
+}
+
 /** Strip the query string: routing matches the pathname, handlers read the full URL. */
-function pathnameOf(url: string | undefined): string {
-  try {
+function pathnameOf(url: string | undefined): string {  try {
     return new URL(url || '/', 'http://localhost').pathname;
   } catch {
     return (url || '/').split('?')[0];
@@ -995,6 +1060,8 @@ function projectTag(): string {
 }
 
 async function dev(): Promise<void> {
+  devMode = true;
+  process.env.ROSEFD_DEV = '1';
   console.log(`🌹 Rose Frame Driver v${version()}${projectTag()} dev server starting...`);
   try {
     await build();
@@ -1073,12 +1140,87 @@ async function serve(): Promise<void> {
     },
   };
   try {
-    await loadServer();
+    const hooksMod = await loadServer();
+    invalidateHook = () => { try { hooksMod.invalidateRenderCache(); } catch { /* worker without a memo */ } };
   } catch (err) {
     console.error('Rose Frame Driver: dist/server.js failed to load for the serve hooks:', err instanceof Error ? err.message : String(err));
   }
   const http = await import('node:http');
-  const server = http.createServer(withAccessLog(serveStatic(OUT_DIR, true), `w${process.pid}`));
+  const edgeReady = createEdgeHandler(OUT_DIR);
+  edgeReady.then(async (handle) => {
+    await ready;
+    for (const r of (serverModule?.dynamicRoutes as string[] | undefined) || []) {
+      if (r.includes(':')) continue;
+      try {
+        const res = await handle(new Request('http://localhost' + r));
+        await res.arrayBuffer();
+      } catch { /* a warm-up failure just means that route renders cold */ }
+    }
+  }).catch(() => {});
+  const baseHandler = withAccessLog(serveStatic(OUT_DIR, true), `w${process.pid}`);
+  const earlyHintLinks: string[] = (() => {
+    try {
+      const html = fs.readFileSync(path.join(OUT_DIR, 'index.html'), 'utf8');
+      const links: string[] = [];
+      for (const m of html.matchAll(/<script[^>]+src="([^"]+)"/g)) {
+        const v = `<${m[1]}>; rel=preload; as=script`;
+        if (!links.includes(v)) links.push(v);
+      }
+      for (const m of html.matchAll(/<link[^>]+rel="stylesheet"[^>]*>/g)) {
+        const href = /href="([^"]+)"/.exec(m[0])?.[1];
+        if (href) { const v = `<${href}>; rel=preload; as=style`; if (!links.includes(v)) links.push(v); }
+      }
+      for (const m of html.matchAll(/<link[^>]+href="([^"]+)"[^>]+rel="stylesheet"[^>]*>/g)) {
+        const v = `<${m[1]}>; rel=preload; as=style`;
+        if (!links.includes(v)) links.push(v);
+      }
+      return links;
+    } catch { return []; }
+  })();
+  let dynRouteSet: Set<string> | null = null;
+  const dynRoutesOf = (): Set<string> => {
+    const list = (serverModule?.dynamicRoutes as string[] | undefined) || [];
+    if (!dynRouteSet || dynRouteSet.size !== list.length) dynRouteSet = new Set(list);
+    return dynRouteSet;
+  };
+  const server = http.createServer(async (req: any, res: any) => {
+    try {
+      if ((req.method === 'GET' || req.method === 'HEAD') && dynRoutesOf().has(pathnameOf(req.url || '/'))) {
+        const handle = await edgeReady;
+        if (earlyHintLinks.length && req.method === 'GET' && String(req.headers.accept ?? '').includes('text/html')) {
+          try { res.writeEarlyHints({ link: earlyHintLinks }); } catch { /* client gone: the render still finishes */ }
+        }
+        const url = 'http://' + (req.headers.host || `localhost:${PORT}`) + (req.url || '/');
+        const response = await handle(new Request(url, { method: req.method, headers: req.headers }));
+        res.statusCode = response.status;
+        response.headers.forEach((v: string, k: string) => res.setHeader(k, v));
+        const htmlDoc = (response.headers.get('content-type') ?? '').startsWith('text/html');
+        const enc = htmlDoc && req.method === 'GET' ? pickEncoding(req) : null;
+        if (response.body && enc) {
+          const raw = Buffer.from(await response.arrayBuffer());
+          const etag = 'W/"' + createHash('sha1').update(raw).digest('base64url').slice(0, 24) + '"';
+          if (req.headers['if-none-match'] === etag) {
+            res.statusCode = 304;
+            res.end();
+            return;
+          }
+          const body = compress(enc, raw);
+          res.setHeader('ETag', etag);
+          res.setHeader('Content-Encoding', enc);
+          res.setHeader('Content-Length', String(body.length));
+          res.end(body);
+          return;
+        }
+        if (response.body) {
+          Readable.fromWeb(response.body as any).pipe(res);
+        } else {
+          res.end();
+        }
+        return;
+      }
+    } catch { /* any edge hiccup falls through to the proven pipeline */ }
+    baseHandler(req, res);
+  });
   server.requestTimeout = 30_000;
   server.headersTimeout = 65_000;
   server.keepAliveTimeout = 5_000;

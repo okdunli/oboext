@@ -28,6 +28,7 @@ export function state<T>(key: string, initial: T): [() => T, (v: T) => void] {
   const setter = (v: T) => {
     e.value = v;
     e.subs.forEach((fn: Subscriber) => fn());
+    if (persistedKeys.has(key)) writeStorage(key, v);
   };
 
   return [getter, setter];
@@ -41,6 +42,42 @@ export function setState<T>(key: string, value: T): void {
   const e = entry(key, value);
   e.value = value;
   e.subs.forEach((fn: Subscriber) => fn());
+  if (persistedKeys.has(key)) writeStorage(key, value);
+}
+
+const persistedKeys = new Set<string>();
+
+function writeStorage(key: string, v: unknown): void {
+  try {
+    (globalThis as { localStorage?: Storage }).localStorage?.setItem('rosefd:' + key, JSON.stringify(v));
+  } catch { /* no storage / private mode / quota: persistence is best-effort */ }
+}
+
+// F9 ($persist): `let theme = $persist('dark')` — like $state, but the value survives reloads.
+export function persistState<T>(key: string, initial: T): [() => T, (v: T) => void] {
+  persistedKeys.add(key);
+  let seeded = initial;
+  let hasStored = false;
+  try {
+    const raw = (globalThis as { localStorage?: Storage }).localStorage?.getItem('rosefd:' + key);
+    if (raw != null) {
+      seeded = JSON.parse(raw) as T;
+      hasStored = true;
+    }
+  } catch { /* unreadable storage: keep the initial */ }
+  const [get, set] = state(key, seeded);
+  if (hasStored) set(seeded);
+  return [get, set];
+}
+
+let lastBoundaryError: Error | null = null;
+
+export function $setBoundaryError(e: unknown): void {
+  lastBoundaryError = e instanceof Error ? e : new Error(String(e));
+}
+
+export function $boundaryError(): Error | null {
+  return lastBoundaryError;
 }
 
 const cleanups = new Set<Cleanup>();
@@ -123,7 +160,20 @@ export function textMark(closes: Close[], fn: Close, pair?: boolean, arg?: unkno
 
 export function attrMark(closes: Close[], fn: Close, name: string, arg?: unknown): string {
   const i = closes.push(fn) - 1;
-  return `${name}="${esc(fn(arg))}" data-b="${i}:${name}"`;
+  return `${name}="${esc(fn(arg))}" data-b${i}="${name}"`;
+}
+
+/**
+ * Boolean attributes (F1): presence IS the value - `checked="false"` still
+ * checks the box, so a reactive boolean attr can never ride attrMark. The
+ * SSR side emits the bare attribute only when truthy, plus an index-suffixed
+ * marker either way; wire()'s boolean branch flips the PROPERTY (the one
+ * thing a live DOM obeys after user interaction) and mirrors the attribute
+ * for no-JS parity.
+ */
+export function boolAttrMark(closes: Close[], fn: Close, name: string, arg?: unknown): string {
+  const i = closes.push(fn) - 1;
+  return (fn(arg) ? ` ${name}=""` : '') + ` data-b${i}="!${name}"`;
 }
 
 export function ifMark(
@@ -148,8 +198,8 @@ export function ifMark(
 }
 
 export function eachMark(closes: Close[], items: Close, fn: (s: unknown, c: Close[]) => unknown): string {
-  const i = closes.push(() => (items() as unknown[]).map((v) => {
-    return { html: String(fn(v, closes)), closes, scope: v };
+  const i = closes.push(() => (items() as unknown[]).map((v, vi) => {
+    return { html: String(fn(v, closes, vi)), closes, scope: v };
   })) - 1;
   let h = `<!--\u27e6l:${i}\u27e7-->`;
   for (const r of closes[i]() as Array<{ html: string }>) h += r.html;
@@ -211,6 +261,8 @@ const END_RE = /^\u27e6\/([milh]):(\d+)\u27e7$/;
 
 const wired = new WeakSet<Node>();
 
+const pendingIslandObservers = new Set<IntersectionObserver>();
+
 /** Parse an html string into a DocumentFragment. */
 export function tpl(html: string): DocumentFragment {
   const t = document.createElement('template');
@@ -222,6 +274,28 @@ const HEAD_ATTR = 'data-rosefd-head';
 
 export const handlers: Record<string, (e: Event) => void> =
   (globalThis as { __rosefd_handlers?: Record<string, (e: Event) => void> }).__rosefd_handlers ??= {};
+
+let actionDispatch: ((name: string, e: Event) => void) | null = null;
+export function setActionDispatcher(fn: (name: string, e: Event) => void): void {
+  actionDispatch = fn;
+}
+
+const directBound = new WeakMap<Element, Set<string>>();
+
+/**
+ * F5: `use:NAME` element actions - the plugin point for DOM behaviors
+ * (tooltips, dropdowns, canvas glue) that themes and plugins register once
+ * per module: directives.tooltip = (el) => { ...; return cleanup? }. wire()
+ * invokes each action for its element when the route adopts; the returned
+ * cleanup (if any) rides the same disposal set as every other effect.
+ * Parameters travel as data-* attributes the action reads - keeping them out
+ * of the reactive graph keeps the action contract one argument.
+ */
+export const directives: Record<string, (el: Element, param?: unknown) => void | (() => void) | { update?: (p: unknown) => void; destroy?: () => void }> =
+  (globalThis as { __rosefd_directives?: Record<string, (el: Element, param?: unknown) => void | (() => void) | { update?: (p: unknown) => void; destroy?: () => void }> })
+    .__rosefd_directives ??= {};
+
+const actionRecords = new WeakMap<Element, { update?: (p: unknown) => void; destroy?: () => void }>();
 
 /**
  * Apply one route's whole <head> (every block of its chain, page first) to the
@@ -335,12 +409,41 @@ export function wire(root: Node, closes: Array<unknown>, scope?: unknown): Clean
 
   const ownsHead = root === document.getElementById('app');
 
+  let islandSkip = false;
+  if (ownsHead) {
+    const islandEls = Array.from(
+      (holder as Element).querySelectorAll('[data-rv-island]')
+    ).filter((el) => !(el.parentElement && el.parentElement.closest('[data-rv-island]')));
+    islandSkip = islandEls.length > 0;
+    for (const isl of islandEls) {
+      const fire = () => wire(isl, closes, scope);
+      const mode = isl.getAttribute('data-rv-island-hydrate');
+      if (mode === 'visible' && typeof IntersectionObserver !== 'undefined') {
+        const io = new IntersectionObserver((entries) => {
+          if (entries.some((en) => en.isIntersecting)) {
+            io.disconnect();
+            pendingIslandObservers.delete(io);
+            fire();
+          }
+        });
+        io.observe(isl);
+        pendingIslandObservers.add(io);
+      } else if (mode === 'idle' && typeof (globalThis as { requestIdleCallback?: unknown }).requestIdleCallback === 'function') {
+        (globalThis as { requestIdleCallback: (cb: () => void) => void }).requestIdleCallback(() => fire());
+      } else {
+        fire();
+      }
+    }
+  }
+
   for (const c of comments) {
     if (nested.has(c) || wired.has(c) || !c.parentNode) continue;
     const m = (c.nodeValue ?? '').match(MARK_RE);
     if (!m) continue;
     const kind = m[1];
     const idx = +m[2];
+
+    if (islandSkip && kind !== 'h' && (c.parentNode as Element).closest?.('[data-rv-island]')) continue;
 
     if (kind === 'h' && !ownsHead) continue;
     wired.add(c);
@@ -455,17 +558,114 @@ export function wire(root: Node, closes: Array<unknown>, scope?: unknown): Clean
     } else if (root.nodeType !== 11) clearHead();
   }
 
-  const els = (holder as Element).querySelectorAll('[data-b]');
-  els.forEach((el) => {
-    const spec = el.getAttribute('data-b')!;
-    const sep = spec.indexOf(':');
-    const idx = +spec.slice(0, sep);
-    const attr = spec.slice(sep + 1);
-    el.removeAttribute('data-b');
-    weff(() => {
-      el.setAttribute(attr, String((closes[idx] as (s?: unknown) => unknown)(scope)));
-    });
+  const all = (holder as Element).querySelectorAll('*');
+  all.forEach((el) => {
+    if (islandSkip && el.closest('[data-rv-island]')) return;
+    for (const an of el.getAttributeNames()) {
+      if (!an.startsWith('data-b')) continue;
+      const idx = Number(an.slice(6));
+      if (!Number.isFinite(idx)) continue;
+      const attr = el.getAttribute(an)!;
+      el.removeAttribute(an);
+      const effect = () => String((closes[idx] as (s?: unknown) => unknown)(scope));
+      if (attr === 'data-use-param') {
+        weff(() => {
+          const raw = effect();
+          let p: unknown = raw;
+          try { p = JSON.parse(raw); } catch { /* string param */ }
+          actionRecords.get(el)?.update?.(p);
+        });
+        continue;
+      }
+      if (attr === 'value') {
+        weff(() => {
+          const v = effect();
+          const inp = el as unknown as HTMLInputElement;
+          if (inp.value !== v) inp.value = v;
+        });
+      } else if (attr.startsWith('!')) {
+        const name = attr.slice(1);
+        weff(() => {
+          const v = (closes[idx] as (s?: unknown) => unknown)(scope);
+          const live = !(v === false || v == null || v === '' || v === 'false' || v === 0);
+          const target = el as unknown as Record<string, unknown>;
+          if (target[name] !== live) target[name] = live;
+          if (live) el.setAttribute(name, '');
+          else el.removeAttribute(name);
+        });
+      } else {
+        weff(() => { el.setAttribute(attr, effect()); });
+      }
+    }
   });
+
+  const uses = (holder as Element).querySelectorAll('[data-use]');
+  uses.forEach((el) => {
+    if (islandSkip && el.closest('[data-rv-island]')) return;
+    const name = el.getAttribute('data-use')!;
+    const fn = directives[name];
+    if (!fn) {
+      console.warn(`Rose Frame Driver: use:${name} has no registered action (directives.${name}?)`);
+      return;
+    }
+    const rawParam = el.getAttribute('data-use-param');
+    let initial: unknown = rawParam ?? undefined;
+    if (typeof initial === 'string') {
+      try { initial = JSON.parse(initial); } catch { /* plain string param */ }
+    }
+    const ret = fn(el, initial);
+    if (typeof ret === 'function') created.push(ret);
+    else if (ret && typeof ret === 'object') {
+      actionRecords.set(el, { update: ret.update, destroy: ret.destroy });
+      if (ret.destroy) created.push(ret.destroy);
+    }
+  });
+
+  const refs = (holder as Element).querySelectorAll('[data-bind-this]');
+  refs.forEach((el) => {
+    if (islandSkip && el.closest('[data-rv-island]')) return;
+    const key = el.getAttribute('data-bind-this')!;
+    setState(key, el);
+    created.push(() => setState(key, null));
+  });
+
+  const DELEGATED_SET = new Set(['click', 'input', 'change', 'submit']);
+  const evRoot = holder as Element;
+  const evTargets = [evRoot, ...Array.from(evRoot.querySelectorAll('*'))];
+  for (const el of evTargets) {
+    if (!el.getAttributeNames) continue;
+    if (islandSkip && el.closest && el.closest('[data-rv-island]')) continue;
+    for (const an of el.getAttributeNames()) {
+      const mm = /^data-on(w|d)?-(.+)$/.exec(an);
+      if (!mm) continue;
+      const ev = mm[2];
+      if (!mm[1] && DELEGATED_SET.has(ev)) continue;
+      const g = globalThis as { window?: EventTarget; document?: { defaultView?: EventTarget } & EventTarget };
+      const win = g.window ?? g.document?.defaultView;
+      const target: EventTarget | undefined = mm[1] === 'w' ? win : mm[1] === 'd' ? (g.document as EventTarget) : el;
+      if (!target) continue;
+      let seen = directBound.get(el);
+      if (!seen) directBound.set(el, (seen = new Set()));
+      if (seen.has(ev)) continue;
+      seen.add(ev);
+      const spec = el.getAttribute(an)!;
+      const listener = (e: Event) => {
+        if (!el.hasAttribute(an)) return;
+        if (spec.startsWith('$action:')) {
+          if (actionDispatch) actionDispatch(spec.slice('$action:'.length), e);
+          return;
+        }
+        const h = handlers[spec];
+        if (h) h(e);
+      };
+      target.addEventListener(ev, listener);
+      created.push(() => {
+        target.removeEventListener(ev, listener);
+        const s = directBound.get(el);
+        if (s) s.delete(ev);
+      });
+    }
+  }
 
   if (holder !== root) {
     while (holder.firstChild) root.appendChild(holder.firstChild);
@@ -477,6 +677,8 @@ export function wire(root: Node, closes: Array<unknown>, scope?: unknown): Clean
 export function resetEffects(): void {
   cleanups.forEach((fn) => fn());
   cleanups.clear();
+  pendingIslandObservers.forEach((io) => io.disconnect());
+  pendingIslandObservers.clear();
 }
 
 let dataCache = new Map<string, Promise<unknown>>();

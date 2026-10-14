@@ -1,0 +1,18 @@
+<script>
+  // /api/media/replace
+  //   POST ?id=N  multipart {file} - swap the bytes, keep the URL.
+  // A literal route, so it wins over [id].rose for this path.
+  import { apiGate, jsonFail } from "@server/admin";
+  import { replaceMediaFile } from "@server/media";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const n = Number(new URL(request.url).searchParams.get("id"));
+      if (!Number.isInteger(n) || n <= 0) return jsonFail("无效 id", 400);
+      const form = await request.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) return jsonFail("缺少文件", 400);
+      return replaceMediaFile(getContext().user, n, file);
+    });
+  }
+</script>

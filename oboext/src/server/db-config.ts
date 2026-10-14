@@ -69,7 +69,11 @@ export async function applyDbConfig(input: {
     DATABASE_URL: driver === "postgres" ? url : "./.data/pglite_live",
     BLOB_READ_WRITE_TOKEN: storage === "vercel-blob" ? blobToken : "",
   };
-  writeEnvLocal(entries);
+  const alreadyProvided =
+    process.env.DB_DRIVER === driver &&
+    (driver !== "postgres" || process.env.DATABASE_URL === url) &&
+    (storage !== "vercel-blob" || process.env.BLOB_READ_WRITE_TOKEN === blobToken);
+  if (!alreadyProvided) writeEnvLocal(entries);
 
   const current = (process.env.DB_DRIVER || "pglite") as "pglite" | "postgres";
   if (driver !== current) {

@@ -1,6 +1,20 @@
 # build output
 dist/
 
+# Vercel zero-config hardcodes its static glob to `public/**/*` at the deploy
+# root; tools/build.mjs mirrors oboext/public here so that directory exists.
+# Generated - the source of truth is oboext/public.
+/public/
+
+# Vercel CLI state: .env.production.local holds the DATABASE_URL with the Neon
+# password, project.json pins the project id. Local only - none of it belongs in
+# the repo, and Vercel regenerates all of it on every build.
+.vercel/
+
+# local verification scratch: a throwaway `npm install vercel --ignore-scripts`
+# used to run `vercel build` locally. Not part of the app.
+.vercel-tools/
+
 # go single-binary server artifacts
 oboext-server
 oboext-server.exe

@@ -11,6 +11,6 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["oboext/**/*"],
+  "include": ["oboext/**/*", "tools/**/*"],
   "exclude": ["node_modules", "dist"]
 }

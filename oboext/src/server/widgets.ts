@@ -14,7 +14,7 @@
  */
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "./db.js";
-import { memoQuery, SIDEBAR_TTL } from "./cache.js";
+import { memoQuery, invalidatePrefix, SIDEBAR_TTL } from "./cache.js";
 import {
   categories,
   comments,
@@ -227,7 +227,7 @@ export const WIDGET_TYPES: WidgetTypeDef[] = [
     type: "links",
     label: "友情链接",
     description: "自定义链接列表",
-    icon: "Link2",
+    icon: "link-2",
     settings: [
       {
         key: "main",
@@ -332,6 +332,7 @@ export async function createWidget(user: SessionUser | null, input: WidgetInput)
       themeSlug,
     })
     .returning();
+  invalidatePrefix("widget:");
   return row;
 }
 
@@ -354,6 +355,7 @@ export async function updateWidget(
     })
     .where(eq(widgets.id, id))
     .returning();
+  invalidatePrefix("widget:");
   return row;
 }
 
@@ -362,6 +364,7 @@ export async function deleteWidget(user: SessionUser | null, id: number): Promis
   const [existing] = await db.select({ id: widgets.id }).from(widgets).where(eq(widgets.id, id));
   if (!existing) throw new ServiceError("小工具不存在", 404);
   await db.delete(widgets).where(eq(widgets.id, id));
+  invalidatePrefix("widget:");
   return { id };
 }
 
@@ -371,6 +374,7 @@ export async function reorderWidgets(user: SessionUser | null, ids: number[]): P
   for (let i = 0; i < ids.length; i++) {
     await db.update(widgets).set({ order: i + 1 }).where(eq(widgets.id, ids[i]));
   }
+  invalidatePrefix("widget:");
 }
 
 export type ResolvedWidget = {
@@ -381,37 +385,45 @@ export type ResolvedWidget = {
   data: unknown;
 };
 
-/** Load every enabled widget in an area with its data already fetched. */
+/** Load every enabled widget in an area with its data already fetched.
+ *
+ * Memoized per (theme, area) — the chrome render path asks for sidebar +
+ * footer on every public request, and each miss costs an area SELECT plus a
+ * serial resolveWidgetData per widget. Dropped by the write functions below
+ * via the shared `widget:` prefix. */
 export async function getAreaWidgets(
   themeSlug: string,
   area: string,
 ): Promise<ResolvedWidget[]> {
-  const rows = await db
-    .select()
-    .from(widgets)
-    .where(
-      and(
-        eq(widgets.area, area),
-        eq(widgets.enabled, true),
-        eq(widgets.themeSlug, themeSlug),
-      ),
-    )
-    .orderBy(asc(widgets.order));
+  return memoQuery(`widget:area:${themeSlug}:${area}`, SIDEBAR_TTL, async () => {
+    const rows = await db
+      .select()
+      .from(widgets)
+      .where(
+        and(
+          eq(widgets.area, area),
+          eq(widgets.enabled, true),
+          eq(widgets.themeSlug, themeSlug),
+        ),
+      )
+      .orderBy(asc(widgets.order));
 
-  const cfg = await getPermalinkConfig();
-  const out: ResolvedWidget[] = [];
-  for (const w of rows) {
-    const def = getWidgetType(w.type);
-    const config = resolveSettings(def, w.config);
-    out.push({
-      id: w.id,
-      type: w.type,
-      title: w.title,
-      config,
-      data: withWidgetUrls(w.type, await resolveWidgetData(w.type, config), cfg),
-    });
-  }
-  return out;
+    const cfg = await getPermalinkConfig();
+    const out: ResolvedWidget[] = await Promise.all(
+      rows.map(async (w) => {
+        const def = getWidgetType(w.type);
+        const config = resolveSettings(def, w.config);
+        return {
+          id: w.id,
+          type: w.type,
+          title: w.title,
+          config,
+          data: withWidgetUrls(w.type, await resolveWidgetData(w.type, config), cfg),
+        };
+      }),
+    );
+    return out;
+  });
 }
 
 /** Attach public URLs to entity rows carried by link-producing widgets. */

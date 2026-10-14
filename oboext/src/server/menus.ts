@@ -21,6 +21,7 @@ import {
   type MenuItem,
 } from "./schema.js";
 import type { SessionUser } from "./auth.js";
+import { invalidatePrefix, memoQuery, SIDEBAR_TTL } from "./cache.js";
 import { requireUser, requireCap, ServiceError } from "./admin.js";
 import {
   getPermalinkConfig,
@@ -215,31 +216,37 @@ async function flatItems(menuId: number): Promise<MenuItem[]> {
     .orderBy(asc(menuItems.order), asc(menuItems.id));
 }
 
-/** Public menu by theme location — only published references resolve. */
+/** Public menu by theme location — only published references resolve.
+ *
+ * Memoized per location (SWR, 30s): the chrome render path reads all three
+ * locations on every public request; each miss is a menus SELECT plus a
+ * menu_items SELECT. The write functions below drop the `menu:` prefix. */
 export async function getMenuByLocation(location: string): Promise<MenuWithItems | null> {
   await ensureDefaultMenus();
-  const [menu] = await db.select().from(menus).where(eq(menus.location, location));
-  if (!menu) return null;
-  const flat = await flatItems(menu.id);
-  return {
-    id: menu.id,
-    location: menu.location,
-    name: menu.name,
-    items: buildTree(await resolveMenuUrls(flat, false)),
-  };
+  return memoQuery(`menu:loc:${location}`, SIDEBAR_TTL, async () => {
+    const [menu] = await db.select().from(menus).where(eq(menus.location, location));
+    if (!menu) return null;
+    const flat = await flatItems(menu.id);
+    return {
+      id: menu.id,
+      location: menu.location,
+      name: menu.name,
+      items: buildTree(await resolveMenuUrls(flat, false)),
+    };
+  });
 }
 
 export async function listMenus(): Promise<MenuWithItems[]> {
   await ensureDefaultMenus();
   const all = await db.select().from(menus).orderBy(asc(menus.id));
+  const flats = await Promise.all(all.map((menu) => flatItems(menu.id)));
   const result: MenuWithItems[] = [];
-  for (const menu of all) {
-    const flat = await flatItems(menu.id);
+  for (let i = 0; i < all.length; i++) {
     result.push({
-      id: menu.id,
-      location: menu.location,
-      name: menu.name,
-      items: buildTree(await resolveMenuUrls(flat, true)),
+      id: all[i].id,
+      location: all[i].location,
+      name: all[i].name,
+      items: buildTree(await resolveMenuUrls(flats[i], true)),
     });
   }
   return result;
@@ -273,6 +280,7 @@ export async function createMenu(
   const [existing] = await db.select({ id: menus.id }).from(menus).where(eq(menus.location, loc));
   if (existing) throw new ServiceError("该菜单位置已存在", 422);
   const [row] = await db.insert(menus).values({ location: loc, name: nm }).returning();
+  invalidatePrefix("menu:");
   return { id: row.id, location: row.location, name: row.name, items: [] };
 }
 
@@ -358,6 +366,7 @@ export async function updateMenu(
     });
     await db.update(menus).set({ updatedAt: new Date() }).where(eq(menus.id, id));
   }
+  invalidatePrefix("menu:");
 
   return getMenu(id);
 }
@@ -371,6 +380,7 @@ export async function deleteMenu(
   const [existing] = await db.select({ id: menus.id }).from(menus).where(eq(menus.id, id));
   if (!existing) throw new ServiceError("菜单不存在", 404);
   await db.delete(menus).where(eq(menus.id, id));
+  invalidatePrefix("menu:");
   return { id };
 }
 

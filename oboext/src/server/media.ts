@@ -10,7 +10,7 @@ import { db } from "./db.js";
 import { media as mediaTable, posts, pages, type Media } from "./schema.js";
 import type { SessionUser } from "./auth.js";
 import { can, requireUser, ServiceError } from "./admin.js";
-import { uploadFile, deleteFile, uploadsAbsPath } from "./storage.js";
+import { uploadFile, deleteFile, uploadsAbsPath, sniffMime, mimeFor } from "./storage.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs";
@@ -19,8 +19,30 @@ import { invalidateVariantCache } from "./render.js";
 
 const execFileP = promisify(execFile);
 
+/**
+ * Image variants are produced through PowerShell's System.Drawing (GDI+).
+ * That was chosen because every Windows box has it and it needs no npm
+ * dependency - but it is a WINDOWS-ONLY TOOL. Production runs on Linux
+ * (Vercel lambdas), where `powershell.exe` does not exist, so the call threw
+ * ENOENT on every upload. Because the caller is fire-and-forget and its
+ * rejection handler only invalidated the render cache, the failure was silent:
+ * the upload returned 200, and `srcset` simply never appeared.
+ *
+ * So the capability is now declared rather than assumed. `variantsSupported`
+ * is what the UI reads to decide whether to offer the feature at all, and the
+ * generator returns a result instead of throwing so a caller can log the real
+ * reason. On a platform without GDI+ the original image still serves - only
+ * the derived widths are missing.
+ */
+const variantsSupported = process.platform === "win32";
+
 /** Widths generated for every image upload (F2e responsive variants). */
 export const VARIANT_WIDTHS = [400, 800, 1600];
+
+/** Whether this host can derive image variants at all. */
+export function canGenerateVariants(): boolean {
+  return variantsSupported;
+}
 
 /** /uploads/media/foo.jpg -> /uploads/media/foo.w400.jpg */
 function variantUrl(url: string, w: number): string {
@@ -62,7 +84,7 @@ export async function getMediaVariants(
     isImage: true,
     variants,
     missing: variants.filter((v) => !v.exists).map((v) => v.width),
-    available: true,
+    available: variantsSupported,
   };
 }
 
@@ -71,11 +93,66 @@ export async function getMediaVariants(
  * widths already on disk, so this is idempotent: it only does the work that
  * is actually outstanding, then drops the render cache so the srcset appears.
  */
+/**
+ * Kick off variant generation without making the caller wait, and make sure a
+ * failure is never silent.
+ *
+ * Both call sites (upload, replace) used `.then(invalidate).catch(invalidate)` -
+ * identical handlers, so the cache was dropped either way and a total failure
+ * (no GDI+ on this host, a locked file, an out-of-memory resize) left exactly
+ * the same trace as success. It is also why the platform bug survived: the
+ * upload returned 200 and the only symptom was a srcset that never appeared.
+ *
+ * The cache is invalidated on BOTH paths deliberately - if a stale srcset is
+ * cached, dropping it is the safe move regardless of what happened.
+ */
+function scheduleVariantGeneration(abs: string, url: string): void {
+  void generateImageVariants(abs)
+    .then((ok) => {
+      if (!ok) console.warn(`[media] variants unavailable for ${url} on this host; serving the original only`);
+      invalidateVariantCache(url);
+    })
+    .catch((e) => {
+      console.error(`[media] variant generation failed for ${url}: ${e instanceof Error ? e.message : String(e)}`);
+      invalidateVariantCache(url);
+    });
+}
+
+/**
+ * Drop every derived width for an image. Used twice - on upload of a new file
+ * and on replace - and the two copies had drifted into identical one-liners
+ * whose `catch(() => {})` threw away the only signal that a variant survived
+ * on disk. A stale `.wNNN` is worse than none: the reader gets a thumbnail of
+ * the PREVIOUS picture at the same URL.
+ *
+ * Reports what it could not remove so the caller can surface it instead of
+ * pretending the library is clean.
+ */
+async function removeVariants(abs: string): Promise<string[]> {
+  const ext = path.extname(abs);
+  const base = abs.slice(0, -ext.length);
+  const failed: string[] = [];
+  await Promise.all(
+    VARIANT_WIDTHS.map(async (w) => {
+      const p = base + `.w${w}` + ext;
+      try {
+        await fs.promises.unlink(p);
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") failed.push(p);
+      }
+    }),
+  );
+  if (failed.length) console.error(`[media] could not remove stale variants: ${failed.join(", ")}`);
+  return failed;
+}
+
 export async function regenerateMediaVariants(userIn: SessionUser | null, id: number) {
   const user = requireUser(userIn);
   const existing = await getMedia(id);
   canManage(user, existing);
   if (!/\.(jpe?g|png)$/i.test(existing.url)) throw new ServiceError("仅图片支持变体", 400);
+  if (!variantsSupported) throw new ServiceError("当前部署环境不支持生成图片变体（需要 Windows/GDI+）", 501);
   const abs = uploadsAbsPath(existing.url);
   if (!abs) throw new ServiceError("无法定位文件", 400);
   await generateImageVariants(abs);
@@ -90,14 +167,23 @@ export async function regenerateMediaVariants(userIn: SessionUser | null, id: nu
  * at quality 82, PNG stays PNG. Fire-and-forget by design: the upload
  * responds immediately and the variants land a second later, after which the
  * render cache for the URL is invalidated so the srcset appears.
+ *
+ * Returns `false` when the host cannot do the work at all. Callers must NOT
+ * treat that as success-with-nothing-to-do: on Linux this used to throw ENOENT
+ * inside a fire-and-forget chain whose only rejection handler dropped a cache,
+ * so the loss was invisible. Return a value, and let the caller decide.
  */
-async function generateImageVariants(abs: string): Promise<void> {
-  if (!/\.(jpe?g|png)$/i.test(abs)) return;
+async function generateImageVariants(abs: string): Promise<boolean> {
+  if (!/\.(jpe?g|png)$/i.test(abs)) return true;
+  if (!variantsSupported) {
+    console.warn(`[media] variant generation skipped (no GDI+ on ${process.platform}): ${abs}`);
+    return false;
+  }
   const ext = path.extname(abs);
   const jpeg = /\.jpe?g$/i.test(abs);
   const jobs = VARIANT_WIDTHS.filter((w) => !fs.existsSync(abs.slice(0, -ext.length) + `.w${w}` + ext))
     .map((w) => ({ s: abs, d: abs.slice(0, -ext.length) + `.w${w}` + ext, w, jpeg }));
-  if (!jobs.length) return;
+  if (!jobs.length) return true;
   const ps = `
 $jobs = ${JSON.stringify(JSON.stringify(jobs))} | ConvertFrom-Json
 Add-Type -AssemblyName System.Drawing
@@ -125,6 +211,7 @@ foreach ($j in $jobs) {
   } finally { $src.Dispose() }
 }`;
   await execFileP("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], { timeout: 120_000 });
+  return true;
 }
 
 /**
@@ -183,11 +270,7 @@ export async function createMediaFromFile(
   if (!can(user.role, "media:upload")) throw new ServiceError("无权上传媒体", 403);
   const result = await uploadFile(file, "media");
   const abs = uploadsAbsPath(result.url);
-  if (abs) {
-    void generateImageVariants(abs)
-      .then(() => invalidateVariantCache(result.url))
-      .catch(() => invalidateVariantCache(result.url));
-  }
+  if (abs) scheduleVariantGeneration(abs, result.url);
   const storedName = result.url.split("?")[0].split("/").pop() || file.name;
   const note = alt.trim() || file.name;
   const [row] = await db
@@ -217,9 +300,7 @@ export async function deleteMedia(userIn: SessionUser | null, id: number): Promi
   await deleteFile(existing.url).catch(() => {});
   const abs = uploadsAbsPath(existing.url);
   if (abs && /\.(jpe?g|png)$/i.test(abs)) {
-    const ext = path.extname(abs);
-    const base = abs.slice(0, -ext.length);
-    for (const w of VARIANT_WIDTHS) void fs.promises.unlink(base + `.w${w}` + ext).catch(() => {});
+    await removeVariants(abs);
   }
   await db.delete(mediaTable).where(eq(mediaTable.id, id));
   return { id };
@@ -245,13 +326,6 @@ export async function updateMedia(
   return row;
 }
 
-/**
- * Tags are stored comma-separated in one text column — a taxonomy for a few
- * dozen library labels would be machinery without a user. Splitting accepts
- * ASCII/Chinese commas and spaces, so "旅行, 摄影" and "旅行 摄影" land the
- * same. Case is preserved (tags may be meaningful filenames), dedupe is
- * exact-match after trim.
- */
 export function normalizeTags(input: string): string {
   return Array.from(
     new Set(
@@ -411,19 +485,13 @@ export async function replaceMediaFile(
   if (!abs) throw new ServiceError("无法定位原文件", 400);
   const buffer = Buffer.from(await file.arrayBuffer());
   await fs.promises.writeFile(abs, buffer);
-  const ext = path.extname(abs);
-  const base = abs.slice(0, -ext.length);
-  for (const w of VARIANT_WIDTHS) void fs.promises.unlink(base + `.w${w}` + ext).catch(() => {});
+  await removeVariants(abs);
   invalidateVariantCache(existing.url);
-  if (/\.(jpe?g|png)$/i.test(abs)) {
-    void generateImageVariants(abs)
-      .then(() => invalidateVariantCache(existing.url))
-      .catch(() => invalidateVariantCache(existing.url));
-  }
+  if (/\.(jpe?g|png)$/i.test(abs)) scheduleVariantGeneration(abs, existing.url);
   const [row] = await db
     .update(mediaTable)
     .set({
-      mimeType: file.type || existing.mimeType,
+      mimeType: sniffMime(buffer) || mimeFor(existing.url) || existing.mimeType,
       size: buffer.length,
     })
     .where(eq(mediaTable.id, id))

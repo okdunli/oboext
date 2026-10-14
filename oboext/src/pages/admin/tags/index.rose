@@ -33,10 +33,15 @@
   <button class="adm-btn" type="submit">{@html ic("plus")} 添加</button>
 </form>
 
+<div class="adm-toolbar" style="gap:8px;">
+  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-op="delete" data-url="/api/tags" data-confirm="确认删除选中的标签？文章上的该标签会自动移除。">批量删除</button>
+</div>
+
 <div class="adm-card adm-table-wrap adm-tax-table">
   <table class="adm-table">
     <thead>
       <tr>
+        <th style="width:34px"><input type="checkbox" data-adm-act="check-all" title="全选"></th>
         <th>名称</th>
         <th style="width:34%">别名</th>
         <th style="width:200px;text-align:right">操作</th>
@@ -45,6 +50,7 @@
     <tbody>
       {#each tags() as t}
       <tr>
+        <td><input type="checkbox" class="adm-check" value={t.id}></td>
         <td>
           <span class="adm-tax-name">{@html ic("tags")}<span class="title">{t.name}</span></span>
         </td>

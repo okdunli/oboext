@@ -1,0 +1,16 @@
+# Vercel deploy exclusion.
+#
+# dist/server.js is the rosezm *application* module (render/db/schema, 39 named
+# exports, no default export). It exists for the edge adapter
+# (src/cli/edge.ts createEdgeHandler -> import(outDir + '/server.js')), NOT for
+# the Vercel lambda: the lambda entrypoint (index.js) loads dist/prod.mjs, which
+# is self-contained and imports only node builtins plus ./client.js.
+#
+# It MUST stay out of the lambda bundle. The bundle keys files by basename and
+# names the entry handler server.js, so shipping dist/server.js makes it collide
+# with - and win over - the real entry: /var/task/server.js then resolved to the
+# 39-named-export module and every request failed at cold start with
+#   Invalid export found in module "/var/task/server.js".
+#   The default export must be a function or server.
+dist/server.js
+dist/server.js.br

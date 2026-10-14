@@ -39,6 +39,8 @@ import { tmpdir } from 'os';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const STAGE = join(tmpdir(), 'oboext-stage');
 
+rmSync(join(ROOT, 'server.js'), { force: true });
+
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 function retry(label, fn, tries = 20) {
@@ -107,5 +109,11 @@ retry('entries mirror', () =>
 retry('public mirror', () =>
   cpSync(join(STAGE, 'oboext', 'public'), join(ROOT, 'oboext', 'public'), { recursive: true }),
 );
+
+rmSync(join(ROOT, 'server.js'), { force: true });
+if (existsSync(join(ROOT, 'server.js'))) {
+  console.error('[build] FATAL: root server.js survived the build at', join(ROOT, 'server.js'));
+  process.exit(1);
+}
 
 console.log('[build] done');

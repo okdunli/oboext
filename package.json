@@ -1,6 +1,6 @@
 {
   "name": "oboext",
-  "version": "0.2.2",
+  "version": "0.2.3",
 
   "license": "MIT",
   "description": "oboext rebuilt on rosefd: dynamic full-stack blog, per-request DB rendering, Node runtime",

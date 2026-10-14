@@ -2221,6 +2221,288 @@ select option {
 }
 
 /* ===========================================================================
+   Icons
+   lucideSvg() receives its class as a runtime string, so Tailwind's scanner
+   never emits the utility - every icon class here is a real rule instead.
+   The inline style lucideSvg sets (inline-block, flex-shrink:0) covers the
+   box; these rules cover colour and the search glyph's centring.
+   =========================================================================== */
+.df-ic {
+  color: var(--muted);
+}
+.df-ic-accent {
+  color: var(--accent);
+}
+.df-hero-ic {
+  display: block;
+  margin: 0 auto 1rem;
+  color: var(--accent);
+}
+/* The search glyph sits inside a rounded input: absolute centring keeps it
+   aligned at any input height, and pointer-events:none lets clicks reach the
+   field underneath. */
+.df-search-ic {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--muted);
+}
+
+/* Category pill on cards and article headers. bg-[var(--accent)]/15 cannot be
+   used here - the alpha modifier form is a runtime string to Tailwind's
+   scanner too - so the tint is spelled out. */
+.df-cat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 9999px;
+  background: rgba(127, 127, 127, .18);
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--accent);
+}
+a.df-cat-pill {
+  transition: background-color .15s;
+}
+a.df-cat-pill:hover {
+  background: rgba(127, 127, 127, .3);
+}
+.df-cat-pill-ic {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+/* Share row under the article body. */
+.df-share {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+.df-share-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+  font-size: 0.875rem;
+  color: #a1a1aa;
+}
+.df-share-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  color: #d4d4d8;
+  transition: border-color .15s, color .15s;
+}
+.df-share-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Inline icon + text rows: the author/date/views/comment meta line, the
+   breadcrumb trail and the pager arrows all share this shape. `gap` is what
+   keeps the glyph off the text - without it the date read as a broken icon. */
+.df-meta-item,
+.df-crumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.df-page-edge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  color: #d4d4d8;
+  transition: border-color .15s, color .15s;
+}
+.df-page-edge:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.df-backlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.875rem;
+  color: var(--muted);
+  transition: color .15s;
+}
+.df-backlink:hover {
+  color: var(--accent);
+}
+.df-featured-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+/* Front-end nav links. The icon is optional (menu items may have none), so
+   the label keeps its own span and the row stays aligned either way. */
+.df-menu-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  color: #d4d4d8;
+  transition: background-color .15s, color .15s;
+}
+.df-menu-ic {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent);
+}
+/* Desktop submenu drops below the parent on hover; inside the mobile panel
+   the same markup is already in the stacking context, so there it stays
+   static (see .dfm-list ul). */
+.df-menu-sub {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  z-index: 20;
+  display: none;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 18px 40px -12px rgb(0 0 0 / .45);
+}
+.group:hover > .df-menu-sub,
+.group:focus-within > .df-menu-sub {
+  display: block;
+}
+.dfm-list .df-menu-sub {
+  position: static;
+  box-shadow: none;
+  border: 0;
+  background: none;
+  padding: 2px 0 2px 14px;
+}
+
+/* ===========================================================================
+   Mobile navigation
+   The desktop nav is display:none below md, so narrow viewports need their own
+   disclosure. <details> keeps it script-free (this theme ships no nav JS).
+   =========================================================================== */
+.dfm-menu {
+  position: relative;
+  margin-left: auto;
+}
+.dfm-burger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+  transition: border-color .15s, color .15s;
+}
+.dfm-burger::-webkit-details-marker {
+  display: none;
+}
+.dfm-burger:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* The open state swaps the glyph for a close mark, matching the desktop
+   nav's own hover affordance. */
+.dfm-menu[open] .dfm-burger {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.dfm-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 40;
+  min-width: 200px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 18px 40px -12px rgb(0 0 0 / .45);
+}
+.dfm-list {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.dfm-list > li {
+  width: 100%;
+}
+/* Only the box, not `display` - the link is display:flex so the icon sits
+   beside the label; overriding it here would stack them. */
+.dfm-list > li > a {
+  width: 100%;
+  border-radius: 8px;
+}
+/* Nested items indent instead of overlaying: the panel is already the
+   stacking context, so an absolutely-positioned submenu would be clipped.
+   (The rule itself lives with the .df-menu-sub block above, which targets the
+   class the chrome actually emits.) */
+
+/* ===========================================================================
+   Sidebar category list
+   Icons and post counts were both missing, which left the list reading as
+   plain text; the count is right-aligned so the rows scan as a table.
+   =========================================================================== */
+.df-cat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  transition: background-color .15s;
+}
+.df-cat:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.df-cat-ic {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent);
+}
+.df-cat-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.df-cat-n {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+/* ===========================================================================
    Rendered block content (public site + preview)
    =========================================================================== */
 .prose-cms {
@@ -2818,3 +3100,147 @@ html:not(.is-mac) *::-webkit-scrollbar-thumb{ background-color:#828c9666; }
 }
 
 
+
+/* ===========================================================================
+   Default theme — runtime-composed classes
+   ---------------------------------------------------------------------------
+   themes/default/default.css is a PREBUILT stylesheet: its header shows it was
+   compiled by Next's postcss from an app/globals.css that no longer exists in
+   this repo, so there is no Tailwind pipeline left to re-run. Structural
+   utilities (flex / rounded-2xl / grid …) survived because they also existed
+   in that original source, but every arbitrary-value utility that only ever
+   appeared in theme-chrome.ts's server-composed HTML was never emitted:
+
+       text-[var(--text)]  bg-[var(--surface)]  border-[var(--border)] …
+
+   All 12 are MISSING (grep count 0), which is why cards had no fill, rows had
+   no border/hover, and text fell back to inherited colour. The classes ARE in
+   the markup, so they are declared here verbatim instead. Tailwind escapes
+   `[ ] ( ) :` with a backslash — hence \.text-\[var\(--text\)\].
+
+   Verified with:  grep -c 'text-\\\[var(--text)\\\]' themes/default/default.css
+   =========================================================================== */
+.text-\[var\(--text\)\]   { color: var(--text); }
+.text-\[var\(--muted\)\]  { color: var(--muted); }
+.text-\[var\(--accent\)\] { color: var(--accent); }
+.bg-\[var\(--bg\)\]       { background-color: var(--bg); }
+.bg-\[var\(--surface\)\]  { background-color: var(--surface); }
+.bg-\[var\(--footer-bg\)\]{ background-color: var(--footer-bg); }
+.border-\[var\(--border\)\]{ border-color: var(--border); }
+
+/* Only the colon that opens the PSEUDO-CLASS stays unescaped. Tailwind emits
+   `.hover\:text-\[...\]:hover` — escaping it as `\:hover` yields a selector
+   that matches nothing, which is how a rule can sit in the stylesheet and
+   still never apply. */
+.hover\:text-\[var\(--accent\)\]:hover        { color: var(--accent); }
+.hover\:border-\[var\(--accent\)\]:hover     { border-color: var(--accent); }
+.focus\:border-\[var\(--accent\)\]:focus     { border-color: var(--accent); }
+.group:hover .group-hover\:text-\[var\(--accent\)\] { color: var(--accent); }
+
+/* Gradient stops for the home hero (bg-gradient-to-br is present, but the
+   from/to colour stops it reads are not, so the hero rendered flat). */
+.from-\[var\(--surface\)\] {
+  --tw-gradient-from: var(--surface) var(--tw-gradient-from-position);
+  --tw-gradient-to: transparent var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+.to-\[var\(--bg\)\] {
+  --tw-gradient-to: var(--bg) var(--tw-gradient-to-position);
+}
+
+/* ===========================================================================
+   Search field
+   The glyph is a flex item in a bordered pill. It used to be an absolutely
+   positioned overlay inside `div.relative` with the input padded by pl-9; the
+   icon escaped the field whenever that containing block wasn't established.
+   =========================================================================== */
+.df-search-form { margin-left: auto; }
+/* Scoped to the header form on purpose. The sidebar form carries the SAME
+   class plus .df-search-form-block, so an unscoped display:none here took the
+   sidebar field with it on narrow screens - leaving a phone-width page with no
+   search box at all, since the header one is the thing being hidden. */
+@media (max-width: 639px) { .df-search-form:not(.df-search-form-block) { display: none; } }
+.df-search-form-block { display: block; margin-left: 0; }
+
+.df-search-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  transition: border-color .15s;
+}
+.df-search-box:focus-within { border-color: var(--accent); }
+.df-search-box-block { display: flex; width: 100%; }
+
+.df-search-box .df-search-ic {
+  position: static;
+  transform: none;
+  flex: none;
+  color: var(--muted);
+  pointer-events: none;
+}
+.df-search-input {
+  width: 11rem;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: .875rem;
+  padding: 0;
+}
+.df-search-box-block .df-search-input { width: 100%; }
+.df-search-input::placeholder { color: var(--muted); }
+
+/* ===========================================================================
+   Nav list — header links were `flex flex-wrap items-center` with no gap, so
+   the items touched each other and the row read as one blob.
+   =========================================================================== */
+.df-menu-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.df-menu-list-foot { font-size: .875rem; }
+.df-menu-list-foot .df-menu-link { color: #a1a1aa; }
+.df-menu-list-foot .df-menu-link:hover { color: #e4e4e7; }
+
+/* ===========================================================================
+   Category rows — read as selectable options. The row was a bare flex line
+   (transparent background, no border, tint only on hover), so a list of them
+   read as flat text rather than as a set of choices. It now carries a resting
+   hairline, a full-row hover tint and a left accent rail that grows from zero
+   to full width, so the selected/hovered state is unmistakable. Position:
+   relative is required for the rail.
+   =========================================================================== */
+.df-cat {
+  position: relative;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: background-color .15s, border-color .15s;
+}
+.df-cat::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 50%;
+  width: 2px;
+  height: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: translateY(-50%);
+  transition: height .15s ease;
+}
+.df-cat:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.df-cat:hover::before { height: calc(100% - 8px); }
+/* The glyph is already accent at rest, so tinting it on hover would be a
+   no-op. Scale it instead - that reads as feedback at every colour scheme. */
+.df-cat-ic { transition: transform .15s ease; }
+.df-cat:hover .df-cat-ic { transform: scale(1.12); }

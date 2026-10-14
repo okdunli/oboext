@@ -23,6 +23,17 @@ import fsMod from "node:fs";
 import pathMod from "node:path";
 
 /**
+ * Subtitle extraction: titles like "测试文章 085 · 前端实践笔记 · 副标题演示"
+ * yield "前端实践笔记 · 副标题演示". The separator is "·" (U+00B7) and the
+ * prefix is any text followed by a number (the article ID).
+ */
+export function extractSubtitle(title: string): string {
+  const match = title.match(/^(.+?)\s+\d+\s*·\s*(.+)$/);
+  if (!match) return "";
+  return match[2].trim();
+}
+
+/**
  * F2e (responsive variants for uploads): the sibling `.wNNN` files beside an
  * uploaded image (generated at upload time by media.ts) become a srcset on
  * the featured-image <img>. The lookup is memoized for the process lifetime:
@@ -466,10 +477,11 @@ export function postCard(p: PostView, award = 0): string {
   const img = p.featuredImage
     ? `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"><img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)} crossorigin="anonymous"></a>`
     : `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"></a>`;
+  const subtitle = extractSubtitle(p.title);
   return (
     `<div class="${CARD_COLS}"><div class="post-card">` +
     (award ? awardBadge(award) : "") +
-    `<div class="title"><span>${esc(p.title)}</span></div>` +
+    `<div class="title"><span>${esc(p.title)}</span>${subtitle ? `<span class="subtitle">${esc(subtitle)}</span>` : ""}</div>` +
     img +
     `<div class="metas"><time class="time">${fmtDate(p.publishedAt)}</time>` +
     `<div class="info">` +
@@ -484,9 +496,10 @@ export function nestedCard(p: PostView): string {
   const img = p.featuredImage
     ? `<img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)} crossorigin="anonymous">`
     : "";
+  const subtitle = extractSubtitle(p.title);
   return (
     `<div class="post-card-nested-col"><div class="post-card is-nested">` +
-    `<div class="title"><span>${esc(p.title)}</span></div>` +
+    `<div class="title"><span>${esc(p.title)}</span>${subtitle ? `<span class="subtitle">${esc(subtitle)}</span>` : ""}</div>` +
     `<a class="post-thumbnail-wrapper" href="${esc(p.url)}">${img}</a>` +
     `<div class="metas"><time class="time">${fmtDate(p.publishedAt)}</time>` +
     `<div class="info">` +

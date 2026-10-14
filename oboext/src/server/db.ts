@@ -257,6 +257,42 @@ export async function ping(): Promise<void> {
   await db.execute(sql`select 1`);
 }
 
+/**
+ * Advance every public sequence that lags behind its table's max(id).
+ *
+ * Seed/reseed paths insert explicit ids, which does NOT advance the owning
+ * sequence, so `nextval()` later hands back an id that already exists and
+ * every insert fails with `duplicate key value violates unique constraint
+ * "<table>_pkey"`. That surfaces as a 500 on "new post" / "new page" in the
+ * admin, which reads as "the app is broken" while the data is fine.
+ *
+ * Only ever moves a sequence FORWARD: a sequence already past max(id) (rows
+ * were deleted) is left alone, so ids are never reused. Tables are derived by
+ * stripping the `_id_seq` suffix; anything that does not resolve is skipped,
+ * keeping this best-effort and safe on partial schemas.
+ */
+async function resyncSequences(): Promise<void> {
+  const seqs = await rawQuery<{ sequencename: string }>(
+    `select sequencename from pg_sequences where schemaname = 'public'`,
+  );
+  for (const { sequencename } of seqs) {
+    const table = sequencename.replace(/_id_seq$/, "");
+    try {
+        // one round trip per sequence: the read of max(id) + last_value and the
+        // conditional setval run as a single statement, so cold-boot sequence
+        // traffic drops from 2 queries/sequence to 1. A missing "<table>" still
+        // throws and is swallowed here exactly as before.
+        await rawQuery(
+          `select case when (select coalesce(max(id), 0) + 1 from "${table}") > (select last_value from "${sequencename}")
+                        then setval($1::text::regclass, (select coalesce(max(id), 0) + 1 from "${table}"), false) end`,
+          [sequencename],
+        );
+        } catch {
+      // no matching "<table>" (or no id column) — not a serial we manage
+    }
+  }
+}
+
 /** Apply SQL migrations once per process; safe to await every request. */
 export function ensureMigrations(): Promise<void> {
   if (!globalForDb.__oboeMigrated) {
@@ -274,6 +310,7 @@ export function ensureMigrations(): Promise<void> {
         const { migrate } = await import(drvPkg + "/migrator");
         await migrate(globalForDb.__oboeDb, { migrationsFolder: folder });
       }
+      await resyncSequences();
     })().catch((err) => {
       globalForDb.__oboeMigrated = undefined;
       throw err;

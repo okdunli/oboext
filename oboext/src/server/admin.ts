@@ -268,13 +268,18 @@ export async function adminListPosts(user: SessionUser, f: PostListFilter = {}) 
 
   const ids = rows.map((r) => r.post.id);
   const tax = await attachTaxonomyIds(ids);
-  const [catRows, tagRows] = await Promise.all([allCategories(), allTags()]);
+  const [catRows, tagRows, cfg] = await Promise.all([
+    allCategories(),
+    allTags(),
+    getPermalinkConfig(),
+  ]);
   const catName = new Map(catRows.map((c) => [c.id, c]));
   const tagName = new Map(tagRows.map((t) => [t.id, t]));
 
   const items = rows.map((r) => ({
     ...r.post,
     authorName: r.authorName,
+    url: postUrlFor(cfg, r.post),
     categories: (tax.cats[r.post.id] ?? []).map((id) => catName.get(id)).filter(Boolean),
     tags: (tax.tags[r.post.id] ?? []).map((id) => tagName.get(id)).filter(Boolean),
   }));
@@ -937,6 +942,8 @@ const SETTINGS_FIELDS = {
     "activeThemeSlug",
   ],
   num: ["avatarSize", "postsPerPage", "feedItems", "excerptLength"],
+  /** Nullable integer columns: empty/absent → null, otherwise coerced. */
+  numNullable: ["homePageId", "postsPageId"],
   bool: ["commentsEnabled", "requireNameEmail", "commentModeration", "giscusReactions"],
   json: ["socialLinks", "footerLinks", "verifications"],
 } as const;
@@ -956,6 +963,11 @@ export async function updateSettings(user: SessionUser, input: Record<string, un
   for (const k of SETTINGS_FIELDS.str) if (k in input && typeof input[k] === "string") set[k] = input[k];
   for (const k of SETTINGS_FIELDS.num)
     if (k in input && Number.isFinite(Number(input[k]))) set[k] = Number(input[k]);
+  for (const k of SETTINGS_FIELDS.numNullable) {
+    if (!(k in input)) continue;
+    const raw = input[k];
+    set[k] = raw === "" || raw == null ? null : Number(raw);
+  }
   for (const k of SETTINGS_FIELDS.bool) if (k in input) set[k] = Boolean(input[k]);
   for (const k of SETTINGS_FIELDS.json)
     if (k in input && (typeof input[k] === "object" || Array.isArray(input[k]))) set[k] = input[k];

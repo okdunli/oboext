@@ -13,6 +13,7 @@
         getContext().user,
         q.get("limit") ? Number(q.get("limit")) : 50,
         q.get("offset") ? Number(q.get("offset")) : 0,
+        { q: q.get("q") || "", type: q.get("type") || "", tag: q.get("tag") || "" },
       );
     });
   }

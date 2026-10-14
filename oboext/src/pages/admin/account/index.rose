@@ -6,68 +6,7 @@
     return x == null ? "" : x;
   }
 
-  const SECTIONS = [
-    { key: "profile", label: "个人信息" },
-    { key: "password", label: "登录密码" },
-    { key: "oauth", label: "第三方账号" },
-  ];
-
-  function initAccountNav() {
-    const root = document.querySelector("[data-acc-panel]");
-    if (!root) return;
-    const list = root.querySelector("[data-acc-nav]");
-    const body = root.querySelector("[data-acc-body]");
-    if (!list || !body) return;
-
-    function mark(key) {
-      list.querySelectorAll("[data-sec]").forEach(function (b) {
-        b.classList.toggle("is-active", b.getAttribute("data-sec") === key);
-      });
-    }
-
-    list.innerHTML = SECTIONS.map(function (s) {
-      return '<button type="button" class="adm-thp-navbtn" data-sec="' +
-        s.key + '">' + s.label + "</button>";
-    }).join("");
-
-    list.addEventListener("click", function (e) {
-      const btn = e.target.closest("[data-sec]");
-      if (!btn) return;
-      const sec = body.querySelector('[data-acc-sec="' + btn.getAttribute("data-sec") + '"]');
-      if (!sec) return;
-      mark(btn.getAttribute("data-sec"));
-      sec.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-
-    // Default to the first section: on a short page the last card never
-    // reaches the top of the viewport, leaving the rail fully inactive.
-    let ticking = false;
-    function sync() {
-      ticking = false;
-      let current = SECTIONS[0].key;
-      for (const s of SECTIONS) {
-        const el = body.querySelector('[data-acc-sec="' + s.key + '"]');
-        if (el && el.getBoundingClientRect().top <= 90) current = s.key;
-      }
-      mark(current);
-    }
-    function onScroll() {
-      if (ticking) return;
-      ticking = true;
-      requestAnimationFrame(sync);
-    }
-    window.addEventListener("scroll", onScroll, { passive: true });
-    sync();
-  }
-
-  // The script block also runs during SSR, where there is no document.
-  if (typeof window !== "undefined") {
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", initAccountNav);
-    } else {
-      initAccountNav();
-    }
-  }
+  // The section rail's click/scroll-spy lives in public/admin.js, not here.
 </script>
 
 <head>
@@ -86,7 +25,11 @@
     <nav class="adm-thp-nav">
       <div class="adm-thp-navgroup">
         <div class="adm-thp-navtitle">账号设置</div>
-        <div class="adm-thp-navlist" data-acc-nav></div>
+        <div class="adm-thp-navlist" data-acc-nav>
+          <button type="button" class="adm-thp-navbtn is-active" data-sec="profile">个人信息</button>
+          <button type="button" class="adm-thp-navbtn" data-sec="password">登录密码</button>
+          <button type="button" class="adm-thp-navbtn" data-sec="oauth">第三方账号</button>
+        </div>
       </div>
     </nav>
 

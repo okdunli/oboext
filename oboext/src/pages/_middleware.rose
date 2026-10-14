@@ -1,33 +1,6 @@
 <script>
-  // oboext request interceptor (runs once per request on the Node server).
-  //
-  // Responsibilities:
-  //   1. serve sitemap.xml / feed.xml / robots.txt straight from the loaders;
-  //   2. 302 the unique-hit search to its post (original SearchPage parity).
-  //
-  // Missing entities (a post slug that resolves to nothing) are answered by
-  // the root [[...slug]] resolver page itself: it throws notFound(), which
-  // the framework turns into the app's own 404 route with a real 404 status
-  // - no hard-coded prefix list here, so renaming a permalink prefix in the
-  // admin rewires the whole site without touching this file.
-  //
-  // rosefd 0.2.4 routes by pathname (P0-1): query strings reach the render
-  // via $query()/getContext().query, so the old loopback re-entry is gone.
-  //
-  // The loader registry (dispatch/documents/ready/exists) is
-  // installed on globalThis by pages/api/data.rose at module-eval time (a
-  // static import in the server bundle), so this file needs no import of the
-  // registry itself. CSRF is the exception: it is a real module and is
-  // imported normally, exactly as pages/api/*.rose do.
-  //
-  // CSRF is enforced HERE rather than in each of the 77 write routes on
-  // purpose. The check is "does this request carry a session cookie, and does
-  // it prove same-origin" - a property of the request alone, decided before
-  // any route, loader or resolver runs. Putting it in the routes would mean
-  // 77 chances to forget one, and the forgotten route is silently
-  // unprotected. It also means the guest surface needs no exemption list:
-  // without a session cookie there is nothing to forge.
-  import { checkCsrf, needsCsrf, isSafeMethod } from "@server/csrf";
+  // Oboext request interceptor (runs once per request on the Node server).
+  import { checkCsrf, needsCsrf, isSafeMethod, selfHealCsrfCookie } from "@server/csrf";
 
   export async function handle(request) {
     const reg = globalThis.__oboeLoaders;
@@ -43,9 +16,7 @@
       if (u) getContext().user = u;
     }
 
-    // Enabled plugins must be registered before any hook fires (chrome
-    // footer/head, comments, pinned posts, sitemap/robots). Warm after the
-    // first request this costs one DB read + the enabled set's setup().
+    // Enabled plugins must be registered before any hook fires (chrome footer/head, comments, pinned posts, sitemap/robots).
     if (reg && reg.plugins) {
       await reg.plugins.ensureLoaded();
     }
@@ -53,31 +24,20 @@
     const u = new URL(request.url);
     const p = u.pathname;
 
-    // ------------------------------------------------- CSRF (single choke point)
-    // Runs before every branch below, so no route, plugin gateway or static
-    // handler can be reached by a forged state-changing request. checkCsrf
-    // itself returns "no-session" for a request with no session cookie, and
-    // that case is ALLOWED: there are no credentials to abuse, so the entire
-    // guest surface (comments, likes, login, registration, captcha) needs no
-    // exemption list. Only cookie-authenticated writes are gated.
-    //
-    // The response is a bare 400 with no detail. Naming the failure mode
-    // ("no-token" vs "mismatch" vs "invalid") would tell an attacker which
-    // half of the defence he still has to solve.
+    // ------------------------------------------------- CSRF (single choke point) Runs before every branch below, so no route.
     if (!isSafeMethod(request.method) && needsCsrf(request)) {
-      // Two steps, not one: needsCsrf() scopes the check to requests that
-      // actually carry a session cookie, and checkCsrf() then judges it.
-      // Folding them into a single `if (!checkCsrf(req).ok)` reads fine and is
-      // wrong — an earlier version did that and rejected every guest write on
-      // the site, because "no session cookie, nothing to forge" is a PASS and
-      // not a failure. Asking the scoping question separately makes that
-      // mistake impossible to write.
+      // Two steps, not one: needsCsrf() scopes the check to requests that actually carry a session cookie, and checkCsrf() then judges it.
       const verdict = checkCsrf(request);
       if (!verdict.ok) {
         console.warn(`[csrf] rejected ${request.method} ${p} (${verdict.reason})`);
+        const heal = selfHealCsrfCookie(request);
+        const headers: Record<string, string> = {
+          "content-type": "application/json; charset=utf-8",
+        };
+        if (heal) headers["set-cookie"] = heal;
         return new Response(JSON.stringify({ error: "请求校验失败，请刷新页面后重试" }), {
           status: 400,
-          headers: { "content-type": "application/json; charset=utf-8" },
+          headers,
         });
       }
     }
@@ -320,8 +280,14 @@
       });
     }
     if (rp === "/robots.txt") {
+      // Same 5-minute window as sitemap/feed: crawlers re-fetch robots.txt
+      // aggressively, and the body is rebuilt from DB-backed settings on
+      // every miss. Changes surface within that window, same as the others.
       return new Response(await reg.documents.robots(ctx), {
-        headers: { "content-type": "text/plain; charset=utf-8" },
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "public, max-age=300",
+        },
       });
     }
     

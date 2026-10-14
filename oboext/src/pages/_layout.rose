@@ -1,13 +1,5 @@
 <script>
-  // Theme-aware chrome shell. The active theme's nav/body/aside/footer HTML
-  // comes from the "chrome" loader (per request, live DB). Skyscraper's
-  // drawer/dark-mode/scroll-reveal interactions live in /public/theme.js;
-  // other themes ship zero framework JS on purpose (csr=false).
-  // Key the chrome loader by admin/public so the startup warm-up of /admin/*
-  // routes (which returns the minimal admin stub, deliberately without cssHref)
-  // cannot poison the cached public chrome and strip the stylesheet link from
-  // every front-end page. rosefd memoizes $data by loader key + payload, so a
-  // path-distinct payload keeps the two results in separate cache slots.
+  // Theme-aware chrome shell. rosefd memoizes $data by loader key + payload, so a path-distinct payload keeps the two results in separate cache slots.
   let chrome = $data(() => __rvLoad("chrome", { admin: adminPath() }));
 
   function adminPath() {
@@ -29,21 +21,13 @@
   function isNotSkyscraper() {
     return chrome().themeSlug !== "skyscraper";
   }
-  // Safety net: guarantees links never render as default-underlined even if a
-  // theme's own stylesheet fails to load or a class mismatch leaves an <a>
-  // unstyled. Themes still set their own link colour via their stylesheet.
-  // Injected as raw HTML (not a template literal) because the CSS braces would
-  // otherwise be parsed as a template expression.
+  // Safety net: guarantees links never render as default-underlined even if a theme's own stylesheet fails to load or a class mismatch leaves an <a>.
   function linkResetHtml() {
     return isNotSkyscraper()
       ? '<style id="rv-link-reset">a{text-decoration:none}</style>'
       : '';
   }
-  // The theme stylesheet, inlined to keep it off the critical path. Same
-  // pattern as linkResetHtml above, and for the same reason: a literal
-  // <style> element in a .rose source is the component's scoped stylesheet and
-  // is removed from the template by the compiler. Empty string when the theme
-  // does not inline, and the caller falls back to the <link>.
+  // The theme stylesheet, inlined to keep it off the critical path.
   function cssInlineHtml() {
     var css = chrome().cssInline;
     if (!css) return "";
@@ -85,10 +69,6 @@
   <link rel="stylesheet" href={chrome().cssHref}>
   {/if}
   {/if}
-  <!-- Wraps window.fetch so same-origin writes carry the CSRF header. A guest
-       has no token and the request goes out unchanged, which is correct: the
-       server only requires the header when a session cookie rides along. -->
-  <script src="/public/csrf.js"></script>
   {@html linkResetHtml()}
   {@html chrome().themeHead}
   {@html chrome().themeScripts}

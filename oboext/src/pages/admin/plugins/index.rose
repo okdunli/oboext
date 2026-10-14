@@ -3,11 +3,7 @@
   function list() { return data().plugins || []; }
   function iconUrl(p) {
     var name = (p.manifest && p.manifest.icon) || "plug";
-    // Icon files are stored kebab-case (calendar-check.svg), but manifests may
-    // spell the name in camelCase/PascalCase ("calendarCheck") or with
-    // underscores. Normalise to kebab-case, otherwise the URL 404s — and a
-    // missing /public asset falls through to the catch-all route, which then
-    // boots the DB and can 500 the whole page.
+    // Icon files are stored kebab-case (calendar-check.svg), but manifests may spell the name in camelCase/PascalCase ("calendarCheck") or with //.
     var kebab = String(name)
       .replace(/([a-z0-9])([A-Z0-9])/g, "$1-$2")
       .replace(/[_\s]+/g, "-")
@@ -21,13 +17,10 @@
   }
   function statusText(p) { return p.enabled ? "已启用" : "已禁用"; }
   function toggleIcon(p) {
-    return p.enabled ? "/public/icons/circle-check.svg" : "/public/icons/circle-x.svg";
+    return p.enabled ? "/public/icons/circle-x.svg" : "/public/icons/circle-check.svg";
   }
   function toggleText(p) { return p.enabled ? "禁用" : "启用"; }
-  // The toggle button used to be a plain adm-iconbtn, so an enabled plugin's
-  // green "已启用" badge sat next to a colourless "禁用" button and the row
-  // read as mismatched. The state class tints the button border/text to match
-  // the badge (red = destructive action on a live plugin, grey = inert).
+  // The toggle button used to be a plain adm-iconbtn, so an enabled plugin's green "已启用" badge sat next to a colourless "禁用" button and the row //.
   function toggleClass(p) { return p.enabled ? "plg-toggle is-on" : "plg-toggle is-off"; }
   function iconBg(p) { return p.enabled ? "rgba(79,70,229,.15)" : "var(--adm-panel-2)"; }
   function iconColor(p) { return p.enabled ? "#22c55e" : "#ef4444"; }

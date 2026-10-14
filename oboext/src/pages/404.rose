@@ -84,11 +84,11 @@
   .nf-wrap {
     display: flex;
     justify-content: center;
-    padding: 4rem 1rem;
   }
   .nf-box {
     width: 100%;
     max-width: 36rem;
+    margin: 4rem auto;
     text-align: center;
   }
   .nf-icon {

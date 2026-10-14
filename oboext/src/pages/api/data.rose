@@ -1,16 +1,6 @@
 <script>
   // Isomorphic data endpoint.
-  //
-  // Server-only module (the compiler excludes pages/api/* from the client
-  // bundle), so it is safe to import the live-DB loader layer here. Its
-  // module side effect installs the registry the middleware and the pages'
-  // server-side __rvLoad shim both use:
-  //
-  //   globalThis.__oboeLoaders.dispatch(key, payload, ctx)
-  //
-  // Browser-side __rvLoad() GETs this very endpoint; server-side it calls
-  // dispatch() directly. One loader map, per-request database reads.
-  import { dispatch, documents, searchRedirect } from "@server/loaders";
+  import { dispatch, documents, searchRedirect, warmEntityUrls } from "@server/loaders";
   import { buildSitemapDocument } from "@server/sitemap";
   import { themeCssContent, serveThemeAsset } from "@server/theme-chrome";
   import { servePluginAsset } from "@server/plugin-assets";
@@ -22,15 +12,9 @@
   import { syncPlugins, ensurePluginsLoaded } from "@server/plugins";
   import { dispatchPluginApi } from "@server/plugin-gateway";
 
-  // Lazy: the framework's build imports dist/server.js for route analysis;
-  // touching the DB at module top level would make builds require a DB.
-  // The middleware awaits ready() before the first render. One pass also
-  // syncs plugins/ on disk into the plugins table (new plugins disabled)
-  // and loads the enabled set.
+  // Lazy: the framework's build imports dist/server.js for route analysis; touching the DB at module top level would make builds require a DB.
   let readyPromise;
-  // withDbRetry, not a bare call: a serverless Postgres drops the connection
-  // of a suspended compute during the TLS handshake, and every route then
-  // fails identically. The retry rebuilds the client after a short wait.
+  // WithDbRetry, not a bare call: a serverless Postgres drops the connection of a suspended compute during the TLS handshake.
   const ready = () => (readyPromise = readyPromise || withDbRetry(async () => {
     await ensureMigrations();
     await syncPlugins();
@@ -53,19 +37,11 @@
     uploads: {
       serve: (pathname, method) => serveUpload(pathname, method),
     },
-    // Safety net for the app's own compiled assets, linked as /public/**
-    // (admin.css, admin.js, comments.js, icons/**, theme-*.js, vendor/**).
-    // The Vercel static layer normally answers these first; this handler only
-    // matters when that layer is missing/stale, where the request would
-    // otherwise fall into page routing and 302 to /admin/login (breaking every
-    // stylesheet/script under the admin's CSP). Mirrors uploads.serve.
+    // Safety net for the app's own compiled assets, linked as /public/** (admin.css, admin.js, comments.js, icons/**, theme-*.js, vendor/**).
     publicStatic: {
       serve: (pathname, method) => servePublic(pathname, method),
     },
-    // Hook-based sitemap: buildSitemapDocument runs sitemap.urls +
-    // sitemap.document filters (sitemap-plus and friends extend it), and
-    // answers null for an unclaimed query (?part= / ?kind=) -> the
-    // middleware returns a real 404.
+    // Hook-based sitemap: buildSitemapDocument runs sitemap.urls + sitemap.document filters (sitemap-plus and friends extend it)
     sitemap: {
       document: (request) => buildSitemapDocument(request),
     },
@@ -84,6 +60,8 @@
       await ready();
       return searchRedirect(q);
     },
+    // Boot warmup's dynamic URLs (latest post, a category, a tag page): the prod server's warm loop renders these through the normal handler.
+    warmUrls: () => warmEntityUrls(),
     // /admin <-> /admin/dashboard swap driven by the adminHomePath preference
     adminHome: {
       redirect: async (pathname) => {
@@ -111,10 +89,7 @@
       payload = JSON.parse(u.searchParams.get("d") || "{}");
     } catch (e) {}
     const ctx = getContext();
-    // The registry mixes public loaders (home, resolve, …) with admin
-    // screens. Admin loaders themselves throw without a session, but that
-    // surfaced as an opaque 500; answer a plain 401 before dispatching so
-    // anonymous probing gets nothing but the status code.
+    // The registry mixes public loaders (home, resolve, . ) with admin screens.
     if (key.indexOf("admin.") === 0 && !(ctx as Record<string, unknown>).user) {
       return new Response(JSON.stringify({ error: "unauthorized" }), {
         status: 401,

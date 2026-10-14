@@ -41,6 +41,8 @@
     if (!content) return notice(form, "请填写评论内容！");
     if (hasGuest && requireFields && !name) return notice(form, "昵称必填！");
     if (hasGuest && requireFields && !email) return notice(form, "邮箱必填！");
+    if (hasGuest && form.getAttribute("data-require-url") === "1" && !url)
+      return notice(form, "链接必填！");
     if (hasGuest && email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       return notice(form, "请输入正确的邮箱格式！");
 
@@ -122,7 +124,7 @@
       groups
         .map(function (g, i) {
           return (
-            '<button type="button" title="' + g.name + '" data-emoji-tab="' + i + '">' +
+            '<button type="button" class="emoji-tab' + (i === 0 ? " active" : "") + '" title="' + g.name + '" data-emoji-tab="' + i + '">' +
             g.items[0] +
             "</button>"
           );
@@ -133,26 +135,63 @@
     return wrap;
   }
 
+  function positionEmoji(host) {
+    if (!host) return;
+    var panel = host.querySelector(".emoji-panel");
+    if (!panel) return;
+    var rect = host.getBoundingClientRect();
+    var ph = panel.offsetHeight || 320;
+    var spaceAbove = rect.top;
+    var spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceAbove < ph + 12 && spaceBelow > ph + 12) host.classList.add("is-below");
+    else host.classList.remove("is-below");
+  }
+
+  function markActiveTab(host, idx) {
+    host.querySelectorAll("[data-emoji-tab]").forEach(function (b, i) {
+      b.classList.toggle("active", i === idx);
+    });
+  }
+  function syncActiveTab(host, panel) {
+    var secs = host.querySelectorAll("[data-emoji-group]");
+    var top = panel.scrollTop + 10;
+    var idx = 0;
+    secs.forEach(function (sec, i) { if (sec.offsetTop <= top) idx = i; });
+    markActiveTab(host, idx);
+  }
+
   async function toggleEmoji(form) {
     var host = form.querySelector("[data-emoji-panel]");
     if (!host) return;
-    var open = host.classList.toggle("is-in");
-    host.setAttribute("aria-hidden", open ? "false" : "true");
-    
-    
+    var wasOpen = host.classList.contains("is-in");
     var btn = form.querySelector("[data-comment-emoji]");
-    if (btn) btn.classList.toggle("is-active", open);
-    if (open && !host.querySelector(".emoji-panel")) {
+    var panel = host.querySelector(".panel");
+
+    if (wasOpen) {
+      host.classList.remove("is-in");
+      host.setAttribute("aria-hidden", "true");
+      if (btn) btn.classList.remove("is-active");
+      return;
+    }
+
+    if (!panel) {
       var data = await loadEmoji();
-      if (!data) { host.classList.remove("is-in"); return; }
+      if (!data || !host.isConnected) return;
       host.appendChild(buildPanel(data));
+      panel = host.querySelector(".panel");
       host.querySelectorAll("[data-emoji-tab]").forEach(function (b) {
         b.addEventListener("click", function () {
           var sec = host.querySelector('[data-emoji-group="' + b.getAttribute("data-emoji-tab") + '"]');
-          if (sec) host.querySelector(".panel").scrollTop = sec.offsetTop;
+          if (sec && panel) { panel.scrollTop = sec.offsetTop; markActiveTab(host, Number(b.getAttribute("data-emoji-tab"))); }
         });
       });
+      if (panel) panel.addEventListener("scroll", function () { syncActiveTab(host, panel); });
     }
+
+    host.classList.add("is-in");
+    host.setAttribute("aria-hidden", "false");
+    if (btn) btn.classList.add("is-active");
+    requestAnimationFrame(function () { requestAnimationFrame(function () { positionEmoji(host); }); });
   }
 
   function insertEmoji(form, emoji) {
@@ -311,12 +350,14 @@
   }
 
   function onFocus(e) {
-    var form = e.target.closest && e.target.closest("form[data-comment-form]");
+    if (!e.target || e.target.tagName !== "TEXTAREA") return;
+    var form = e.target.closest("form[data-comment-form]");
     var box = form && form.querySelector(".input");
     if (box) box.classList.add("is_focused");
   }
   function onBlur(e) {
-    var form = e.target.closest && e.target.closest("form[data-comment-form]");
+    if (!e.target || e.target.tagName !== "TEXTAREA") return;
+    var form = e.target.closest("form[data-comment-form]");
     var box = form && form.querySelector(".input");
     if (box) box.classList.remove("is_focused");
   }
@@ -336,6 +377,12 @@
   }
 
   function init() {
+    window.addEventListener("oboext-emoji-updated", function () {
+      document.querySelectorAll("[data-emoji-panel].is-in").forEach(positionEmoji);
+    });
+    window.addEventListener("resize", function () {
+      document.querySelectorAll("[data-emoji-panel].is-in").forEach(positionEmoji);
+    });
     document.addEventListener("click", onClick);
     document.addEventListener("submit", onSubmit);
     document.addEventListener("focusin", onFocus);

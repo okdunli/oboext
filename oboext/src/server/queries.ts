@@ -5,7 +5,7 @@
  * native posts.pinned flag, exactly as posts.ts does.
  */
 import { createHash } from "crypto";
-import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import {
   categories,
@@ -30,6 +30,18 @@ import {
 import { attachPostMetas, getPostMetas } from "./metas.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ServiceError } from "./errors.js";
+import { memoQuery, SIDEBAR_TTL } from "./cache.js";
+
+/**
+ * Scheduled publishing (time gate): a `published` post whose publishedAt is
+ * in the future is "scheduled" and hidden from every public read until its
+ * time comes — no extra column, no status-flip timer. Accuracy is bounded by
+ * the render/data caches (seconds), which is exactly the guarantee a blog
+ * needs. NULL publishedAt (legacy rows) stays visible.
+ * Every public read path MUST include this: listPostsRaw, slug/id lookups,
+ * related posts and the sidebar counts. Admin reads deliberately do not.
+ */
+const publishedVisible = or(isNull(posts.publishedAt), lte(posts.publishedAt, sql`now()`));
 
 export type TaxRef = { id: number; name: string; slug: string; url: string; icon?: string | null };
 
@@ -104,26 +116,30 @@ export type CategoryWithUrl = Category & { url: string };
 export type TagWithUrl = Tag & { url: string };
 
 export async function listCategories(): Promise<CategoryWithUrl[]> {
-  const [rows, cfg] = await Promise.all([
-    db.select().from(categories),
-    getPermalinkConfig(),
-  ]);
-  return rows
-    .map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }))
-    .sort(
-      (a, b) =>
-        (a.order ?? 0) - (b.order ?? 0) ||
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
-        a.id - b.id,
-    );
+  return memoQuery("tax:categories", SIDEBAR_TTL, async () => {
+    const [rows, cfg] = await Promise.all([
+      db.select().from(categories),
+      getPermalinkConfig(),
+    ]);
+    return rows
+      .map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }))
+      .sort(
+        (a, b) =>
+          (a.order ?? 0) - (b.order ?? 0) ||
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
+          a.id - b.id,
+      );
+  });
 }
 
 export async function listTags(): Promise<TagWithUrl[]> {
-  const [rows, cfg] = await Promise.all([
-    db.select().from(tags).orderBy(desc(tags.id)),
-    getPermalinkConfig(),
-  ]);
-  return rows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
+  return memoQuery("tax:tags", SIDEBAR_TTL, async () => {
+    const [rows, cfg] = await Promise.all([
+      db.select().from(tags).orderBy(desc(tags.id)),
+      getPermalinkConfig(),
+    ]);
+    return rows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
+  });
 }
 
 export async function getCategoryBySlug(slug: string) {
@@ -150,7 +166,7 @@ export async function getTag(id: number): Promise<Tag> {
   return row;
 }
 
-export async function listPosts(
+export async function listPostsRaw(
   opts: PostQuery = {},
 ): Promise<{ items: PostView[]; total: number }> {
   const limit = Math.min(opts.limit ?? 20, 100);
@@ -158,6 +174,7 @@ export async function listPosts(
   const conditions: any[] = [];
 
   if (opts.status) conditions.push(eq(posts.status, opts.status as any));
+  if (opts.status === "published") conditions.push(publishedVisible);
   if (opts.authorId) conditions.push(eq(posts.authorId, opts.authorId));
   if (opts.categoryId)
     conditions.push(
@@ -289,6 +306,22 @@ export async function listPosts(
   return { items, total };
 }
 
+/**
+ * Public listPosts with a data-layer TTL cache for static listings (no
+ * random/search/excludeId/year/month filters). The floating-pinned resolution
+ * and per-request filters still run fresh when the query is not cacheable, and
+ * `invalidateContentCaches()` drops every entry on a content write.
+ */
+export async function listPosts(
+  opts: PostQuery = {},
+): Promise<{ items: PostView[]; total: number }> {
+  const cacheable =
+    !opts.random && !opts.search && !opts.excludeId && !opts.year && !opts.month;
+  if (!cacheable) return listPostsRaw(opts);
+  const key = `lp:${JSON.stringify({ ...opts, limit: opts.limit ?? 20, offset: opts.offset ?? 0 })}`;
+  return memoQuery(key, SIDEBAR_TTL, () => listPostsRaw(opts));
+}
+
 async function hydrate(row: { post: Post; authorName: string | null; authorEmail: string | null; authorId: number | null }) {
   const [cfg, tax, metas] = await Promise.all([
     getPermalinkConfig(),
@@ -317,7 +350,7 @@ async function hydrate(row: { post: Post; authorName: string | null; authorEmail
  * (the catch-all loader's postDetail) would 404 under postMode pinyin/initial,
  * because the mode's own column no longer matches.
  */
-export async function getPost(tail: string): Promise<PostView | null> {
+export async function getPost(tail: string, opts: { preview?: boolean } = {}): Promise<PostView | null> {
   const cfg = await getPermalinkConfig();
   let row: { post: Post; authorName: string | null; authorEmail: string | null; authorId: number | null } | undefined;
 
@@ -326,7 +359,7 @@ export async function getPost(tail: string): Promise<PostView | null> {
       .select({ post: posts, authorName: users.name, authorEmail: users.email, authorId: users.id })
       .from(posts)
       .leftJoin(users, eq(posts.authorId, users.id))
-      .where(and(eq(posts.status, "published"), condition))
+      .where(and(...(opts.preview ? [] : [eq(posts.status, "published"), publishedVisible]), condition))
       .limit(1);
     return rows[0];
   };
@@ -372,7 +405,7 @@ export async function getPublishedPostById(id: number): Promise<PostView | null>
     .select({ post: posts, authorName: users.name, authorEmail: users.email, authorId: users.id })
     .from(posts)
     .leftJoin(users, eq(posts.authorId, users.id))
-    .where(and(eq(posts.status, "published"), eq(posts.id, id)))
+    .where(and(eq(posts.status, "published"), publishedVisible, eq(posts.id, id)))
     .limit(1);
   return rows[0] ? hydrate(rows[0]) : null;
 }
@@ -431,7 +464,7 @@ export async function relatedByTaxonomy(postId: number, limit = 4): Promise<Post
       featuredImage: posts.featuredImage,
     })
     .from(posts)
-    .where(and(eq(posts.status, "published"), inArray(posts.id, candidateIds)));
+    .where(and(eq(posts.status, "published"), publishedVisible, inArray(posts.id, candidateIds)));
   const byId = new Map(rows.map((r: { id: number }) => [r.id, r]));
   return candidateIds
     .map((id: number) => byId.get(id))
@@ -521,24 +554,28 @@ export async function listComments(opts: {
 }
 
 export async function counts() {
-  const [pc, cc, tc, cc2] = await Promise.all([
-    db.select({ n: sql<number>`count(*)` }).from(posts).where(eq(posts.status, "published")),
-    db.select({ n: sql<number>`count(*)` }).from(comments).where(eq(comments.status, "published")),
-    db.select({ n: sql<number>`count(*)` }).from(tags),
-    db.select({ n: sql<number>`count(*)` }).from(categories),
-  ]);
-  return {
-    posts: Number(pc[0]?.n ?? 0),
-    comments: Number(cc[0]?.n ?? 0),
-    tags: Number(tc[0]?.n ?? 0),
-    categories: Number(cc2[0]?.n ?? 0),
-  };
+  return memoQuery("counts", SIDEBAR_TTL, async () => {
+    const [pc, cc, tc, cc2] = await Promise.all([
+      db.select({ n: sql<number>`count(*)` }).from(posts).where(and(eq(posts.status, "published"), publishedVisible)),
+      db.select({ n: sql<number>`count(*)` }).from(comments).where(eq(comments.status, "published")),
+      db.select({ n: sql<number>`count(*)` }).from(tags),
+      db.select({ n: sql<number>`count(*)` }).from(categories),
+    ]);
+    return {
+      posts: Number(pc[0]?.n ?? 0),
+      comments: Number(cc[0]?.n ?? 0),
+      tags: Number(tc[0]?.n ?? 0),
+      categories: Number(cc2[0]?.n ?? 0),
+    };
+  });
 }
 
 /** Sidebar "most popular": the floating pinned set, in float order (matches the baked widget). */
 export async function popularPosts(limit = 5): Promise<PostView[]> {
-  const { items } = await listPosts({ status: "published", orderBy: "views", limit });
-  return items;
+  return memoQuery(`popular:${limit}`, SIDEBAR_TTL, async () => {
+    const { items } = await listPosts({ status: "published", orderBy: "views", limit });
+    return items;
+  });
 }
 
 export async function randomPosts(limit = 20): Promise<PostView[]> {
@@ -550,28 +587,30 @@ export async function randomPosts(limit = 20): Promise<PostView[]> {
 export async function archiveGroups(): Promise<
   { year: number; months: { month: number; count: number }[]; total: number }[]
 > {
-  const rows = await db.execute(
-    sql`SELECT EXTRACT(YEAR FROM ${posts.publishedAt})::int AS y,
+  return memoQuery("archive", SIDEBAR_TTL, async () => {
+    const rows = await db.execute(
+      sql`SELECT EXTRACT(YEAR FROM ${posts.publishedAt})::int AS y,
                EXTRACT(MONTH FROM ${posts.publishedAt})::int AS m,
                count(*)::int AS n
         FROM ${posts}
         WHERE ${posts.status} = 'published' AND ${posts.publishedAt} IS NOT NULL
         GROUP BY y, m
         ORDER BY y DESC, m DESC`,
-  );
-  const list = (Array.isArray(rows) ? rows : (rows as any).rows) as {
-    y: number;
-    m: number;
-    n: number;
-  }[];
-  const byYear = new Map<number, { year: number; months: any[]; total: number }>();
-  for (const r of list) {
-    const g = byYear.get(r.y) ?? { year: r.y, months: [], total: 0 };
-    g.months.push({ month: r.m, count: r.n });
-    g.total += r.n;
-    byYear.set(r.y, g);
-  }
-  return [...byYear.values()];
+    );
+    const list = (Array.isArray(rows) ? rows : (rows as any).rows) as {
+      y: number;
+      m: number;
+      n: number;
+    }[];
+    const byYear = new Map<number, { year: number; months: any[]; total: number }>();
+    for (const r of list) {
+      const g = byYear.get(r.y) ?? { year: r.y, months: [], total: 0 };
+      g.months.push({ month: r.m, count: r.n });
+      g.total += r.n;
+      byYear.set(r.y, g);
+    }
+    return [...byYear.values()];
+  });
 }
 
 /** PV always +1; UV +1 once per (post, sha256(ip|ua)). Best effort. */

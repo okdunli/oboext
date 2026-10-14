@@ -1126,6 +1126,114 @@
     });
     return out;
   };
+  BlockEditor.CARD_THEME_META_KEY = "bluemix_card_theme";
+  BlockEditor.prototype.normalizeHex = function (v) {
+    var h = String(v == null ? "" : v).replace(/\s+/g, "");
+    if (!h) return null;
+    if (h.charAt(0) !== "#") h = "#" + h;
+    if (/^#[0-9a-fA-F]{3}$/.test(h)) {
+      h = "#" + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2) + h.charAt(3) + h.charAt(3);
+    }
+    if (!/^#[0-9a-fA-F]{6}$/.test(h)) return null;
+    return h.toLowerCase();
+  };
+  BlockEditor.prototype.setCardTheme = function (hex, msg, isErr) {
+    var root = this.root;
+    var input = root.querySelector("[data-ctheme-input]");
+    if (hex === undefined) hex = input ? input.value : null;
+    var chip = root.querySelector("[data-ctheme-chip]");
+    var clearBtn = root.querySelector("[data-ctheme-clear]");
+    var msgEl = root.querySelector("[data-ctheme-msg]");
+    var invalid = hex != null && hex !== "" && !this.normalizeHex(hex);
+    if (input) input.value = hex == null ? "" : hex;
+    if (chip) {
+      chip.style.background = this.normalizeHex(hex) || "linear-gradient(135deg,#999,#ccc)";
+    }
+    root.querySelectorAll("[data-ctheme-dot]").forEach(function (dot) {
+      var active = hex != null && dot.getAttribute("data-ctheme-dot") === hex;
+      dot.classList.toggle("is-active", active);
+    });
+    if (clearBtn) clearBtn.hidden = !this.normalizeHex(hex);
+    if (msgEl) {
+      msgEl.textContent = msg || "";
+      msgEl.style.color = isErr ? "var(--adm-red)" : "";
+    }
+    if (input) input.style.borderColor = invalid ? "var(--adm-red)" : "";
+  };
+  BlockEditor.prototype.detectCardTheme = function () {
+    var self = this;
+    var imgInput = this.root.querySelector("[name=featuredImage]");
+    var url = imgInput ? String(imgInput.value || "").trim() : "";
+    if (!url) { this.setCardTheme(null, "请先填写特色图 URL", true); return; }
+    this.setCardTheme(undefined, "识别图片主色中…");
+    var img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = function () {
+      try {
+        var W = 32, H = 32, c = document.createElement("canvas");
+        c.width = W; c.height = H;
+        var ctx = c.getContext("2d");
+        if (!ctx) { self.setCardTheme(undefined, "未能识别该图片（跨域或解码失败），请手动选色", true); return; }
+        ctx.drawImage(img, 0, 0, W, H);
+        var d = ctx.getImageData(0, 0, W, H).data;
+        var r = 0, g = 0, b = 0, n = 0;
+        for (var i = 0; i < d.length; i += 4) {
+          if (d[i + 3] < 40) continue;
+          r += d[i]; g += d[i + 1]; b += d[i + 2]; n++;
+        }
+        if (n === 0) { self.setCardTheme(undefined, "未能识别该图片（跨域或解码失败），请手动选色", true); return; }
+        var toHex = function (u) {
+          var s = Math.round(u).toString(16);
+          return s.length < 2 ? "0" + s : s;
+        };
+        var hex = "#" + toHex(r / n) + toHex(g / n) + toHex(b / n);
+        self.setCardTheme(hex, "已识别并应用主色 ✓");
+      } catch (e) {
+        self.setCardTheme(undefined, "未能识别该图片（跨域或解码失败），请手动选色", true);
+      }
+    };
+    img.onerror = function () {
+      self.setCardTheme(undefined, "未能识别该图片（跨域或解码失败），请手动选色", true);
+    };
+    img.src = url;
+  };
+  BlockEditor.prototype.initCardTheme = function () {
+    var self = this;
+    var box = this.root.querySelector("[data-cardtheme]");
+    if (!box || box.__bound) return;
+    box.__bound = true;
+    var input = box.querySelector("[data-ctheme-input]");
+    var entity = this.entity;
+    var initial = entity && entity.formatMeta ? entity.formatMeta[BlockEditor.CARD_THEME_META_KEY] : null;
+    if (initial && input && !input.value) input.value = initial;
+    this.setCardTheme(input ? input.value : "");
+    box.querySelectorAll("[data-ctheme-dot]").forEach(function (dot) {
+      dot.addEventListener("click", function () {
+        self.setCardTheme(dot.getAttribute("data-ctheme-dot"));
+      });
+    });
+    if (input) {
+      input.addEventListener("input", function () {
+        var v = input.value;
+        var norm = self.normalizeHex(v);
+        self.setCardTheme(v, v && !norm ? "颜色格式无效，请输入 #rrggbb 或 #rgb" : "", !!(v && !norm));
+      });
+    }
+    var applyBtn = box.querySelector("[data-ctheme-apply]");
+    if (applyBtn) {
+      applyBtn.addEventListener("click", function () {
+        var v = input ? input.value : "";
+        var norm = self.normalizeHex(v);
+        if (!v) { self.setCardTheme(""); return; }
+        if (!norm) { self.setCardTheme(v, "颜色格式无效，请输入 #rrggbb 或 #rgb", true); return; }
+        self.setCardTheme(norm);
+      });
+    }
+    var detectBtn = box.querySelector("[data-ctheme-detect]");
+    if (detectBtn) detectBtn.addEventListener("click", function () { self.detectCardTheme(); });
+    var clearBtn = box.querySelector("[data-ctheme-clear]");
+    if (clearBtn) clearBtn.addEventListener("click", function () { self.setCardTheme(""); });
+  };
   BlockEditor.prototype.payload = function (status) {
     this.collect();
     var form = this.root;
@@ -1145,6 +1253,14 @@
     if (form.querySelector("[data-adm-metas]")) body.metas = this.collectMetas();
 
     if (form.querySelector("[data-adm-format-fields]")) body.formatMeta = this.collectFormatMeta();
+    var ctInput = form.querySelector("[data-ctheme-input]");
+    if (ctInput) {
+      var ctHex = this.normalizeHex(ctInput.value);
+      if (ctHex) {
+        body.formatMeta = body.formatMeta || {};
+        body.formatMeta[BlockEditor.CARD_THEME_META_KEY] = ctHex;
+      }
+    }
     if (status) body.status = status;
     if (body.commentStatus === "on") body.commentStatus = "open";
     return body;
@@ -1179,7 +1295,7 @@
     if (!grid || grid.__bound) return;
     grid.__bound = true;
 
-    var state = { items: [], selected: {} };
+    var state = { items: [], selected: {}, q: "", type: "", tag: "", total: 0 };
     try {
       state.items = JSON.parse(grid.getAttribute("data-media") || "{}").items || [];
     } catch (e) {}
@@ -1194,16 +1310,33 @@
     var countEl = document.querySelector("[data-media-count]");
     var bulkBtn = document.querySelector("[data-media-bulk]");
     var allCb = document.querySelector("[data-media-all]");
+    var variantsAllBtn = document.querySelector("[data-media-variants-all]");
+    var searchInput = document.querySelector("[data-media-search]");
+    var typeSel = document.querySelector("[data-media-type]");
+    var moreBtn = document.querySelector("[data-media-more]");
+    var totalEl = document.querySelector("[data-media-total]");
     var emptyEl = document.querySelector("[data-media-empty]");
     var editModal = document.querySelector("[data-media-edit]");
     var editAlt = document.querySelector("[data-media-edit-alt]");
     var editName = document.querySelector("[data-media-edit-name]");
     var editImg = document.querySelector("[data-media-edit-img]");
+    var editUsage = document.querySelector("[data-media-edit-usage]");
     var preview = document.querySelector("[data-media-preview]");
     var prevImg = document.querySelector("[data-media-preview-img]");
     var prevOpen = document.querySelector("[data-media-preview-open]");
     var prevMeta = document.querySelector("[data-media-preview-meta]");
+    var replaceFile = document.querySelector("[data-media-replace-file]");
+    var copyallBtn = document.querySelector("[data-media-copyall]");
+    var tagBtn = document.querySelector("[data-media-tagbtn]");
+    var tagModal = document.querySelector("[data-media-tagmodal]");
+    var tagInput = document.querySelector("[data-media-tag-input]");
+    var tagCount = document.querySelector("[data-media-tag-count]");
+    var tagSave = document.querySelector("[data-media-tag-save]");
+    var tagFilter = document.querySelector("[data-media-tagfilter]");
+    var editTags = document.querySelector("[data-media-edit-tags]");
     var editing = null;
+    var pendingReplaceId = null;
+    var dragId = null;
 
     function esc(s) {
       return String(s == null ? "" : s)
@@ -1231,27 +1364,41 @@
       var ids = selectedIds();
       if (countEl) countEl.textContent = "已选 " + ids.length + " / " + state.items.length;
       if (bulkBtn) bulkBtn.disabled = ids.length === 0;
+      if (copyallBtn) copyallBtn.disabled = ids.length === 0;
+      if (tagBtn) tagBtn.disabled = ids.length === 0;
       if (allCb) allCb.checked = state.items.length > 0 && ids.length === state.items.length;
     }
     function cardHtml(m) {
+      var isImg = String(m.mimeType).indexOf("image/") === 0;
+      var tags = String(m.tags || "").split(",").map(function (t) { return t.trim(); }).filter(Boolean);
       var tile =
-        String(m.mimeType).indexOf("image/") === 0
+        isImg
           ? '<img class="adm-media-thumb" src="' + esc(m.url) + '" alt="' + esc(m.alt || m.filename) +
             '" loading="lazy" data-media-preview-btn>'
           : '<div class="adm-media-file" data-media-preview-btn>' + admIc("file", 18) + "<span>" +
             esc(m.mimeType) + "</span></div>";
       return (
-        '<div class="adm-media-card" data-media-id="' + m.id + '">' +
+        '<div class="adm-media-card" data-media-id="' + m.id + '" draggable="true">' +
         '<label class="adm-media-check"><input type="checkbox" class="adm-media-sel" value="' + m.id + '"' +
         (state.selected[m.id] ? " checked" : "") + "></label>" +
         tile +
         '<div class="adm-media-meta">' +
         '<p class="adm-media-name" title="' + esc(m.filename) + '">' + esc(m.filename) + "</p>" +
         '<p class="adm-hint">' + sizeText(m.size) + "</p>" +
+        (tags.length
+          ? '<p class="adm-media-tags">' + tags.map(function (t) {
+              return '<span class="adm-media-tag">' + esc(t) + "</span>";
+            }).join("") + "</p>"
+          : "") +
         '<div class="adm-media-actions"><div class="row-actions">' +
         '<button type="button" class="adm-iconbtn" data-media-preview-btn title="查看 / 详情">' + admIc("eye", 14) + "</button>" +
         '<button type="button" class="adm-iconbtn" data-media-copy data-url="' + esc(m.url) + '" title="复制链接">' + admIc("link", 14) + "</button>" +
         '<button type="button" class="adm-iconbtn" data-media-edit-btn title="编辑信息">' + admIc("pencil", 14) + "</button>" +
+        '<button type="button" class="adm-iconbtn" data-media-replace-btn title="替换文件（保留引用链接）">' + admIc("replace", 14) + "</button>" +
+        (isImg
+          ? '<button type="button" class="adm-iconbtn" data-media-variants title="响应式变体（查看 / 补生成）">' +
+            admIc("layers", 14) + "</button>"
+          : "") +
         "</div>" +
         '<button type="button" class="adm-iconbtn danger" data-media-del data-url="/api/media/' + m.id +
         '" data-confirm="删除该媒体？此操作不可恢复。" title="删除">' + admIc("trash-2", 14) + "</button>" +
@@ -1263,12 +1410,23 @@
       if (emptyEl) emptyEl.classList.toggle("is-hidden", state.items.length > 0);
       syncSel();
     }
-    async function load() {
+    async function load(append) {
       try {
-        var d = await api("GET", "/api/media?limit=100");
-        state.items = d.items || [];
-        state.selected = {};
+        var qs = "/api/media?limit=100";
+        if (state.q) qs += "&q=" + encodeURIComponent(state.q);
+        if (state.type) qs += "&type=" + encodeURIComponent(state.type);
+        if (state.tag) qs += "&tag=" + encodeURIComponent(state.tag);
+        if (append) qs += "&offset=" + state.items.length;
+        var d = await api("GET", qs);
+        state.total = Number(d.total || 0);
+        if (append) state.items = state.items.concat(d.items || []);
+        else {
+          state.items = d.items || [];
+          state.selected = {};
+        }
         render();
+        if (moreBtn) moreBtn.hidden = state.items.length >= state.total;
+        if (totalEl) totalEl.textContent = state.total ? "已显示 " + state.items.length + " / " + state.total + " 个" : "";
       } catch (e) {
         setMsg(e.message, false);
       }
@@ -1336,6 +1494,178 @@
       fileInput.addEventListener("change", function () { pickName(fileInput.files[0]); });
     }
 
+    document.addEventListener("paste", async function (e) {
+      var files = e.clipboardData && e.clipboardData.files;
+      if (!files || !files.length) return;
+      var images = Array.prototype.filter.call(files, function (f) {
+        return /^image\//.test(f.type);
+      });
+      if (!images.length) return;
+      e.preventDefault();
+      for (var i = 0; i < images.length; i++) {
+        var f = images[i];
+        var fd = new FormData();
+        fd.append("file", f);
+        if (altInput && altInput.value) fd.append("alt", altInput.value);
+        setMsg("正在上传粘贴的图片（" + (i + 1) + "/" + images.length + "）…", true);
+        try {
+          var res = await fetch("/api/media", { method: "POST", body: fd });
+          var data = null;
+          try { data = await res.json(); } catch (e2) {}
+          if (!res.ok) throw new Error((data && data.error) || "上传失败 (" + res.status + ")");
+          setMsg("粘贴上传成功", true);
+        } catch (err) {
+          setMsg(err.message, false);
+        }
+      }
+      await load();
+    });
+
+    if (copyallBtn) {
+      copyallBtn.addEventListener("click", async function () {
+        var urls = selectedIds().map(function (id) {
+          var m = byId(id);
+          return m && m.url;
+        }).filter(Boolean);
+        if (!urls.length) return;
+        try {
+          await navigator.clipboard.writeText(urls.join("\n"));
+          toast("已复制 " + urls.length + " 个链接", "ok");
+        } catch (e) {
+          toast("复制失败，请手动复制", "err");
+        }
+      });
+    }
+
+    function openTagModal() {
+      var ids = selectedIds();
+      if (!ids.length || !tagModal) return;
+      if (tagCount) tagCount.textContent = "将为选中的 " + ids.length + " 个媒体设置标签";
+      if (tagInput) tagInput.value = "";
+      tagModal.hidden = false;
+      if (tagInput) tagInput.focus();
+    }
+    if (tagBtn) tagBtn.addEventListener("click", openTagModal);
+    document.querySelectorAll("[data-media-tag-close]").forEach(function (b) {
+      b.addEventListener("click", function () { if (tagModal) tagModal.hidden = true; });
+    });
+    if (tagModal) {
+      tagModal.addEventListener("click", function (e) {
+        if (e.target === tagModal) tagModal.hidden = true;
+      });
+    }
+    if (tagSave) {
+      tagSave.addEventListener("click", async function () {
+        var ids = selectedIds();
+        var tags = tagInput ? tagInput.value.trim() : "";
+        if (!ids.length || !tags) { toast("请输入至少一个标签", "err"); return; }
+        var modeEl = tagModal.querySelector('input[name="media-tag-mode"]:checked');
+        var mode = (modeEl && modeEl.value) === "replace" ? "replace" : "add";
+        tagSave.disabled = true;
+        try {
+          var r = await api("POST", "/api/media/tag", { ids: ids, tags: tags, mode: mode });
+          var n = r && r.updated ? r.updated.length : 0;
+          var skip = r && r.skipped ? r.skipped.length : 0;
+          toast("已更新 " + n + " 个媒体" + (skip ? "（跳过 " + skip + " 个）" : ""), "ok");
+          if (tagModal) tagModal.hidden = true;
+          await load();
+        } catch (err) {
+          toast(err.message, "err");
+        }
+        tagSave.disabled = false;
+      });
+    }
+
+    if (tagFilter) {
+      var tagTimer = null;
+      tagFilter.addEventListener("input", function () {
+        if (tagTimer) clearTimeout(tagTimer);
+        tagTimer = setTimeout(function () {
+          state.tag = tagFilter.value.trim();
+          load();
+        }, 250);
+      });
+    }
+
+    grid.addEventListener("dragstart", function (e) {
+      var card = e.target.closest && e.target.closest(".adm-media-card");
+      if (!card) return;
+      dragId = Number(card.getAttribute("data-media-id"));
+      card.classList.add("is-dragging");
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+        try { e.dataTransfer.setData("text/plain", String(dragId)); } catch (err) {}
+      }
+    });
+    grid.addEventListener("dragend", function () {
+      dragId = null;
+      grid.querySelectorAll(".adm-media-card").forEach(function (c) {
+        c.classList.remove("is-dragging", "is-drag-over");
+      });
+    });
+    grid.addEventListener("dragover", function (e) {
+      if (dragId == null) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      var card = e.target.closest && e.target.closest(".adm-media-card");
+      grid.querySelectorAll(".adm-media-card").forEach(function (c) {
+        c.classList.toggle("is-drag-over", !!card && c === card && Number(c.getAttribute("data-media-id")) !== dragId);
+      });
+    });
+    grid.addEventListener("drop", async function (e) {
+      if (dragId == null) return;
+      e.preventDefault();
+      var id = dragId;
+      dragId = null;
+      grid.querySelectorAll(".adm-media-card").forEach(function (c) {
+        c.classList.remove("is-dragging", "is-drag-over");
+      });
+      var card = e.target.closest && e.target.closest(".adm-media-card");
+      var over = card ? Number(card.getAttribute("data-media-id")) : null;
+      if (over == null || over === id) return;
+      var ids = state.items.map(function (m) { return m.id; });
+      var from = ids.indexOf(id);
+      if (from < 0) return;
+      ids.splice(from, 1);
+      var to = ids.indexOf(over);
+      if (to < 0) return;
+      var r = card.getBoundingClientRect();
+      if (e.clientY > r.top + r.height / 2) to++;
+      ids.splice(to, 0, id);
+      var map = {};
+      state.items.forEach(function (m) { map[m.id] = m; });
+      state.items = ids.map(function (x) { return map[x]; }).filter(Boolean);
+      render();
+      try {
+        await api("POST", "/api/media/reorder", { ids: ids });
+        toast("顺序已保存", "ok");
+      } catch (err) {
+        toast(err.message, "err");
+        load();
+      }
+    });
+
+    if (replaceFile) {
+      replaceFile.addEventListener("change", async function () {
+        var f = replaceFile.files && replaceFile.files[0];
+        var id = pendingReplaceId;
+        pendingReplaceId = null;
+        replaceFile.value = "";
+        if (!f || !id) return;
+        if (!confirm("用新文件覆盖该媒体？\n原内容将被替换，但引用此文件的文章 / 页面链接保持不变。")) return;
+        try {
+          var fd = new FormData();
+          fd.append("file", f);
+          var res = await fetch("/api/media/replace?id=" + id, { method: "POST", body: fd });
+          var data = null;
+          try { data = await res.json(); } catch (e2) {}
+          if (!res.ok) throw new Error((data && data.error) || "替换失败 (" + res.status + ")");
+          toast("已替换文件（引用链接保持不变）", "ok");
+          await load();
+        } catch (err) { toast(err.message, "err"); }
+      });
+    }
+
     grid.addEventListener("change", function (e) {
       if (!e.target.closest || !e.target.closest(".adm-media-sel")) return;
       var cb = e.target.closest(".adm-media-sel");
@@ -1349,7 +1679,18 @@
       var del = e.target.closest("[data-media-del]");
       if (del) {
         e.preventDefault();
-        if (!confirm(del.getAttribute("data-confirm") || "删除该媒体？此操作不可恢复。")) return;
+        var msg = del.getAttribute("data-confirm") || "删除该媒体？此操作不可恢复。";
+        try {
+          var card = del.closest("[data-media-id]");
+          var uid = Number(card && card.getAttribute("data-media-id"));
+          if (uid) {
+            var use = await api("GET", "/api/media/usage?id=" + uid);
+            if (use && use.count) {
+              msg = "该媒体被 " + use.count + " 处内容引用（文章 / 页面）。\n删除后这些位置将显示失效图片。\n\n" + msg;
+            }
+          }
+        } catch (e2) { /* ignore */ }
+        if (!confirm(msg)) return;
         try {
           await api("DELETE", del.getAttribute("data-url"));
           await load();
@@ -1362,6 +1703,18 @@
       var eb = e.target.closest("[data-media-edit-btn]");
       if (eb) {
         openEdit(Number(eb.closest("[data-media-id]").getAttribute("data-media-id")));
+        return;
+      }
+      var rb = e.target.closest("[data-media-replace-btn]");
+      if (rb) {
+        var rcard = rb.closest("[data-media-id]");
+        pendingReplaceId = Number(rcard && rcard.getAttribute("data-media-id"));
+        if (replaceFile) replaceFile.click();
+        return;
+      }
+      var vbtn = e.target.closest("[data-media-variants]");
+      if (vbtn) {
+        variantsAction(Number(vbtn.closest("[data-media-id]").getAttribute("data-media-id")));
         return;
       }
       var pb = e.target.closest("[data-media-preview-btn]");
@@ -1397,13 +1750,85 @@
         }
       });
     }
+    if (variantsAllBtn) {
+      variantsAllBtn.addEventListener("click", async function () {
+        if (!confirm("为媒体库中所有缺少变体的图片补齐响应式尺寸？\n已齐全的图片不会重复处理。")) return;
+        variantsAllBtn.disabled = true;
+        try {
+          toast("正在扫描并生成…", "ok");
+          var r = await api("POST", "/api/media/variants?all=1");
+          if (r.regenerated) toast("已为 " + r.regenerated + " 个图片补全变体（检查 " + r.checked + " 个" + (r.failed ? "，失败 " + r.failed + " 个" : "") + "）", "ok");
+          else toast("无需处理：所有图片变体齐全（检查 " + r.checked + " 个" + (r.failed ? "，失败 " + r.failed + " 个" : "") + "）", "ok");
+        } catch (err) { toast(err.message, "err"); }
+        variantsAllBtn.disabled = false;
+      });
+    }
+    if (searchInput) {
+      var searchTimer = null;
+      searchInput.addEventListener("input", function () {
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = setTimeout(function () {
+          state.q = searchInput.value.trim();
+          load();
+        }, 250);
+      });
+    }
+    if (typeSel) {
+      typeSel.addEventListener("change", function () {
+        state.type = typeSel.value || "";
+        load();
+      });
+    }
+    if (moreBtn) {
+      moreBtn.addEventListener("click", function () {
+        moreBtn.disabled = true;
+        load(true).then(function () { moreBtn.disabled = false; });
+      });
+    }
+
+    async function variantsAction(id) {
+      try {
+        var st = await api("GET", "/api/media/variants?id=" + id);
+        if (!st.isImage) { toast("仅图片支持变体", "err"); return; }
+        if (!st.available) { toast("无法定位该文件", "err"); return; }
+        if (!st.missing || !st.missing.length) {
+          toast("变体齐全（" + st.variants.length + "/" + st.variants.length + "）", "ok");
+          return;
+        }
+        if (!confirm("缺少变体宽度：" + st.missing.join(" / ") + "px\n\n立即生成？")) return;
+        toast("正在生成变体…", "ok");
+        var after = await api("POST", "/api/media/variants?id=" + id);
+        if (after.missing && after.missing.length) {
+          toast("已生成部分，仍缺 " + after.missing.join(" / ") + "px（原图可能更小）", "err");
+        } else {
+          toast("变体已生成（" + after.variants.length + "/" + after.variants.length + "）", "ok");
+        }
+      } catch (err) { toast(err.message, "err"); }
+    }
 
     function openEdit(id) {
       var m = byId(id);
       if (!m || !editModal) return;
       editing = m;
       editAlt.value = m.alt || "";
+      if (editTags) editTags.value = m.tags || "";
       editName.textContent = m.filename;
+      if (editUsage) {
+        editUsage.hidden = true;
+        editUsage.innerHTML = "";
+        api("GET", "/api/media/usage?id=" + id).then(function (u) {
+          if (!u || !u.count || editing !== m) return;
+          var links = [];
+          (u.posts || []).forEach(function (p) {
+            links.push('<a href="/admin/posts/' + p.id + '">文章：' + esc(p.title) + "</a>");
+          });
+          (u.pages || []).forEach(function (g) {
+            links.push('<a href="/admin/pages/' + g.id + '">页面：' + esc(g.title) + "</a>");
+          });
+          editUsage.innerHTML = "<div style=\"margin-bottom:4px\">被引用 " + u.count + " 处：</div>" + links.join("<br>");
+          editUsage.hidden = false;
+        }).catch(function () { /* advisory */ });
+      }
       if (editImg) {
         if (String(m.mimeType).indexOf("image/") === 0) {
           editImg.src = m.url;
@@ -1427,9 +1852,14 @@
       saveBtn.addEventListener("click", async function () {
         if (!editing) return;
         try {
-          var updated = await api("PATCH", "/api/media/" + editing.id, { alt: editAlt.value });
+          var body = { alt: editAlt.value };
+          if (editTags) body.tags = editTags.value;
+          var updated = await api("PATCH", "/api/media/" + editing.id, body);
           var m = byId(editing.id);
-          if (m) m.alt = updated.alt;
+          if (m) {
+            m.alt = updated.alt;
+            m.tags = updated.tags;
+          }
           render();
           closeEdit();
           toast("已更新", "ok");
@@ -1465,7 +1895,11 @@
       });
     }
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") { closeEdit(); closePreview(); }
+      if (e.key === "Escape") {
+        closeEdit();
+        closePreview();
+        if (tagModal) tagModal.hidden = true;
+      }
     });
 
     render();
@@ -1507,6 +1941,8 @@
       var pa = root.querySelector("[name=publishedAt]");
       if (pa && entity.publishedAt) pa.value = toLocalInput(entity.publishedAt);
     }
+
+    editor.initCardTheme();
 
     var timer = null;
     root.addEventListener("input", function () {
@@ -2490,6 +2926,7 @@
       label.textContent = "保存中…";
       try {
         var payload = form.collect();
+
         ["homePageId", "postsPageId"].forEach(function (k) {
           if (!(k in payload)) return;
           payload[k] = payload[k] === "" || payload[k] == null ? null : Number(payload[k]);

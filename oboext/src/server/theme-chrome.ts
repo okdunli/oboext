@@ -205,6 +205,17 @@ function readThemeCss(slug: string, file: string): { css: string; mtime: number 
   }
 }
 
+function fontPreloadLinks(slug: string): string {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(THEMES_DIR, slug, "manifest.json"), "utf-8")) as { fonts?: string[] };
+    return (m.fonts ?? [])
+      .map((f) => `<link rel="preload" as="font" type="font/woff2" href="/theme-assets/${slug}/${f}" crossorigin>`)
+      .join("");
+  } catch {
+    return "";
+  }
+}
+
 function themeCssHref(slug: string): string {
   if (slug === "skyscraper") return "/public/theme.css";
   const main = readThemeCss(slug, slug + ".css");
@@ -489,7 +500,7 @@ const skyscraperChrome: ThemeChrome = {
   slug: "skyscraper",
   cssHref: () => "/public/theme.css",
   bodyFix: () => "",
-  headExtra: () => `<script src="/public/noflash.js"></script>`,
+  headExtra: () => fontPreloadLinks("bluemix") + `<script src="/public/noflash.js"></script>`,
   nav: (settings) => R.topNav(settings),
   bodyOpen: () =>
     `<div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">`,
@@ -2333,7 +2344,7 @@ const bluemixChrome: ThemeChrome = {
   cssHref: () => themeCssHref("bluemix"),
   
   bodyFix: () => `<style id="rv-body-fix">body{background:#e5e9ef!important;color:var(--text-color-2)!important}html{background:#e5e9ef!important}</style>`,
-  headExtra: () => `<style id="rv-theme-bluemix-vars">${BLUEMIX_VARS}</style>`,
+  headExtra: () => fontPreloadLinks("bluemix") + `<style id="rv-theme-bluemix-vars">${BLUEMIX_VARS}</style>`,
   nav: (settings, items) => bmixNav(settings, items),
   bodyOpen: (settings, items) =>
     

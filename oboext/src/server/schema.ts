@@ -210,6 +210,8 @@ export const media = pgTable(
     width: integer("width"),
     height: integer("height"),
     alt: text("alt"),
+    tags: text("tags"),
+    sortOrder: integer("sort_order").notNull().default(0),
     uploadedById: integer("uploaded_by_id").references(() => users.id, {
       onDelete: "set null",
     }),

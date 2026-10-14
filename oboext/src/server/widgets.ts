@@ -14,6 +14,7 @@
  */
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "./db.js";
+import { memoQuery, SIDEBAR_TTL } from "./cache.js";
 import {
   categories,
   comments,
@@ -425,7 +426,15 @@ function withWidgetUrls(type: string, data: unknown, cfg: PermalinkConfig): unkn
   return data;
 }
 
-async function resolveWidgetData(
+export async function resolveWidgetData(
+  type: string,
+  config: Record<string, unknown>,
+): Promise<unknown> {
+  const key = `widget:${type}:${JSON.stringify(config)}`;
+  return memoQuery(key, SIDEBAR_TTL, () => resolveWidgetDataRaw(type, config));
+}
+
+async function resolveWidgetDataRaw(
   type: string,
   config: Record<string, unknown>,
 ): Promise<unknown> {

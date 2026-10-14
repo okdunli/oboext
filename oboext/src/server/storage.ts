@@ -73,6 +73,25 @@ export async function deleteFile(url: string): Promise<void> {
 }
 
 /**
+ * F2e: the absolute disk path of an /uploads URL, or null for anything that
+ * is not an uploads URL (remote images, data URIs) or escapes the root. The
+ * responsive-variant pipeline (media.ts generation + render.ts srcset) uses
+ * this to find the sibling `.wNNN` files beside an upload.
+ */
+export function uploadsAbsPath(url: string): string | null {
+  if (!url.startsWith("/uploads/")) return null;
+  try {
+    const rel = decodeURIComponent(url.replace(/^\/uploads\//, ""));
+    const target = path.resolve(UPLOADS_DIR, rel);
+    const root = path.resolve(UPLOADS_DIR);
+    if (!target.startsWith(root + path.sep) && target !== root) return null;
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Serve /uploads/<rel> straight from content/uploads. Returns a 404 Response
  * for missing files or traversal attempts — never throws.
  */

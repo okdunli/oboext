@@ -13,6 +13,9 @@
   function isImage(m) {
     return String(m.mimeType || "").indexOf("image/") === 0;
   }
+  function tagList(m) {
+    return String(m.tags || "").split(",").map(function (t) { return t.trim(); }).filter(Boolean);
+  }
   function sizeText(n) {
     n = Number(n) || 0;
     if (n < 1024) return n + " B";
@@ -31,7 +34,7 @@
       <input type="file" class="adm-hidden-file" data-media-file>
       <div class="adm-dz-icon"><span class="adm-ic adm-ic-xl" style="--i:url(/public/icons/upload.svg)"></span></div>
       <p class="adm-dz-text" data-media-dz-text>点击选择文件，或拖拽到此处上传</p>
-      <p class="adm-dz-hint">支持图片、文档等任意类型</p>
+      <p class="adm-dz-hint">支持图片、文档等任意类型；截图可直接 Ctrl+V 粘贴上传</p>
     </div>
     <div class="adm-upload-row">
       <div class="adm-field" style="flex:1;min-width:240px">
@@ -44,16 +47,30 @@
   </div>
 </form>
 
+<!-- shared hidden input for the "replace file" action (kept outside the
+     upload form so it never rides along with a normal upload) -->
+<input type="file" class="adm-hidden-file" data-media-replace-file>
+
 <div class="adm-toolbar" style="margin-top:16px">
   <label class="adm-check-line"><input type="checkbox" data-media-all> 全选</label>
+  <input class="adm-input" data-media-search placeholder="搜索文件名 / 备注" style="max-width:220px">
+  <select class="adm-input" data-media-type style="max-width:120px">
+    <option value="">全部类型</option>
+    <option value="image">仅图片</option>
+    <option value="doc">仅非图片</option>
+  </select>
+  <input class="adm-input" data-media-tagfilter placeholder="按标签筛选" style="max-width:130px">
   <span style="flex:1"></span>
   <span class="adm-hint" data-media-count>已选 0 / 0</span>
+  <button type="button" class="adm-btn adm-btn-sm" data-media-copyall disabled title="复制所有选中项的链接（每行一个）">复制链接</button>
+  <button type="button" class="adm-btn adm-btn-sm" data-media-tagbtn disabled title="为选中项批量设置标签">打标签</button>
+  <button type="button" class="adm-btn adm-btn-sm" data-media-variants-all title="为所有缺少变体的图片补齐响应式尺寸">补全变体</button>
   <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-media-bulk disabled>批量删除</button>
 </div>
 
-<div class="adm-media-grid" data-media-grid data-media={dataJson()}>
+<div class="adm-media-grid" data-media-grid data-media={dataJson()} title="拖拽卡片可调整媒体库顺序">
   {#each items() as m}
-  <div class="adm-media-card" data-media-id={m.id}>
+  <div class="adm-media-card" data-media-id={m.id} draggable="true">
     <label class="adm-media-check">
       <input type="checkbox" class="adm-media-sel" value={m.id}>
     </label>
@@ -66,17 +83,26 @@
     <div class="adm-media-meta">
       <p class="adm-media-name" title={m.filename}>{m.filename}</p>
       <p class="adm-hint">{sizeText(m.size)}</p>
+      {#if (() => tagList(m).length)()}
+      <p class="adm-media-tags">{#each tagList(m) as t}<span class="adm-media-tag">{t}</span>{/each}</p>
+      {/if}
       <div class="adm-media-actions">
         <div class="row-actions">
           <button type="button" class="adm-iconbtn" data-media-preview-btn title="查看 / 详情"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/eye.svg)"></span></button>
           <button type="button" class="adm-iconbtn" data-media-copy data-url={m.url} title="复制链接"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/link.svg)"></span></button>
           <button type="button" class="adm-iconbtn" data-media-edit-btn title="编辑信息"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pencil.svg)"></span></button>
+          <button type="button" class="adm-iconbtn" data-media-replace-btn title="替换文件（保留引用链接）"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/replace.svg)"></span></button>
         </div>
         <button type="button" class="adm-iconbtn danger" data-media-del data-url={"/api/media/" + m.id} data-confirm="删除该媒体？此操作不可恢复。" title="删除"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span></button>
       </div>
     </div>
   </div>
   {/each}
+</div>
+
+<div style="margin-top:16px;text-align:center">
+  <button type="button" class="adm-btn adm-btn-ghost" data-media-more hidden>加载更多</button>
+  <p class="adm-hint" data-media-total style="margin-top:8px"></p>
 </div>
 
 <div class={"adm-empty adm-media-empty" + (items().length ? " is-hidden" : "")} data-media-empty style="padding:48px 16px">
@@ -97,11 +123,16 @@
         <span class="adm-hint" style="display:block;margin-bottom:4px">备注（作为图片替代文本 alt，利于 SEO 与无障碍）</span>
         <textarea class="adm-textarea" rows="3" data-media-edit-alt></textarea>
       </label>
+      <label class="adm-field" style="display:block;margin-top:10px">
+        <span class="adm-hint" style="display:block;margin-bottom:4px">标签（逗号分隔，可用于筛选）</span>
+        <input class="adm-input" data-media-edit-tags placeholder="如：封面, 头像">
+      </label>
       <div class="adm-hint" style="margin-top:10px">
         实际文件名
         <div class="adm-media-realname" data-media-edit-name></div>
       </div>
       <img class="adm-media-edit-img" data-media-edit-img alt="">
+      <div class="adm-hint" style="margin-top:10px" data-media-edit-usage hidden></div>
     </div>
     <div class="adm-modal-ft">
       <button type="button" class="adm-btn adm-btn-ghost" data-media-edit-close>取消</button>
@@ -117,5 +148,27 @@
     <img class="adm-media-preview-img" data-media-preview-img alt="">
     <a class="adm-btn adm-btn-ghost adm-media-preview-open" target="_blank" rel="noopener" data-media-preview-open>打开文件</a>
     <div class="adm-media-preview-meta" data-media-preview-meta></div>
+  </div>
+</div>
+
+<!-- batch tag modal -->
+<div class="adm-modal" data-media-tagmodal hidden>
+  <div class="adm-modal-box">
+    <div class="adm-modal-hd">
+      <strong>批量打标签</strong>
+      <button type="button" class="adm-iconbtn" data-media-tag-close aria-label="关闭"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/x.svg)"></span></button>
+    </div>
+    <div class="adm-modal-bd">
+      <p class="adm-hint" data-media-tag-count style="margin-top:0"></p>
+      <input class="adm-input" data-media-tag-input placeholder="标签，逗号分隔，如：封面, 头像">
+      <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+        <label class="adm-check-line"><input type="radio" name="media-tag-mode" value="add" checked> 追加（保留已有标签）</label>
+        <label class="adm-check-line"><input type="radio" name="media-tag-mode" value="replace"> 覆盖（清空后写入）</label>
+      </div>
+    </div>
+    <div class="adm-modal-ft">
+      <button type="button" class="adm-btn adm-btn-ghost" data-media-tag-close>取消</button>
+      <button type="button" class="adm-btn" data-media-tag-save>保存</button>
+    </div>
   </div>
 </div>

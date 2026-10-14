@@ -34,9 +34,10 @@
     return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/' + n + '.svg)"></span>';
   }
   function catGlyph(c) {
-    const v = c.icon || "";
+    const v = (c.icon || "").trim();
     if (/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v)) return ic(v);
-    if (v) return '<span class="adm-tax-emoji">' + v + "</span>";
+    // Reject emoji / arbitrary glyphs: fall back to the folder icon so the
+    // admin stays icon-consistent. The icon picker only offers SVG names.
     return ic("folder");
   }
 </script>

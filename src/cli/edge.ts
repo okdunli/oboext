@@ -90,6 +90,7 @@ export async function createEdgeHandler(
       client = null;
     }
   }
+  if (client && client.includes('chunks/')) client = null;
   if (preloaded && 'styles' in preloaded) {
     styles = preloaded.styles ?? '';
   } else {
@@ -139,10 +140,18 @@ export async function createEdgeHandler(
       if (mw) return hookCtx ? mod.runResponseHooks(hookCtx, mw) : mw;
     }
     if (mod.isApi(pathname)) {
+      if (request.method !== 'GET') {
+        const fn = (mod as any).invalidateRenderCache;
+        if (typeof fn === 'function') fn();
+      }
       const apiRes = await mod.handleApi(request.method, pathname, request);
       return hookCtx ? mod.runResponseHooks(hookCtx, apiRes) : apiRes;
     }
     const form = request.method === 'POST' ? await request.formData() : undefined;
+    if (form) {
+      const fn = (mod as any).invalidateRenderCache;
+      if (typeof fn === 'function') fn();
+    }
     if (!form && !broken.has(pathname) && !mod.isBuffered?.(pathname) && mod.canStream(pathname) && !mod.isNoJs(pathname)) {
       const nonce = mod.cspNonce?.(pathname) ? mintNonce() : '';
       const streamed = new Response(null, {
@@ -165,7 +174,13 @@ export async function createEdgeHandler(
       });
       return new Response(stream, { status: head.status, headers: head.headers });
     }
-    const page = await mod.renderPage(pathname, form);
+    const cookieHeader = request.headers.get('cookie') || '';
+    const memoHit = !form && (mod as any).isCachedRoute?.(pathname)
+      ? (mod as any).peekRenderCache?.(pathname, cookieHeader)
+      : null;
+    const page = memoHit ?? ((mod as any).renderPageCached && !form
+      ? await (mod as any).renderPageCached(pathname, cookieHeader)
+      : await mod.renderPage(pathname, form));
     const nonce = mod.cspNonce?.(pathname) ? mintNonce() : '';
     const html = buildShell(page.html, page.state, client, page.head, styles, page.csr !== false, page.lang, page.dir, nonce, page.shell !== false);
     const buffered = new Response(html, {

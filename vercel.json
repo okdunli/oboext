@@ -6,6 +6,19 @@
       "includeFiles": "{db,themes,content,plugins}/**",
       "maxDuration": 30
     }
-  }
+  },
+  "headers": [
+    {
+      "source": "/chunks/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    },
+    {
+      "source": "/public/(.*\\.js)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    }
+  ]
 }
-

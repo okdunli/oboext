@@ -22,11 +22,7 @@ import { uploadsAbsPath } from "./storage.js";
 import fsMod from "node:fs";
 import pathMod from "node:path";
 
-/**
- * Subtitle extraction: titles like "测试文章 085 · 前端实践笔记 · 副标题演示"
- * yield "前端实践笔记 · 副标题演示". The separator is "·" (U+00B7) and the
- * prefix is any text followed by a number (the article ID).
- */
+
 export function extractSubtitle(title: string): string {
   const match = title.match(/^(.+?)\s+\d+\s*·\s*(.+)$/);
   if (!match) return "";
@@ -543,10 +539,18 @@ export function shareBar(p: PostView, siteName = "", siteDescription = ""): stri
   );
 }
 
-export function postHead(p: PostView, siteTitle: string, siteDescription: string, origin: string): string {
+export function postHead(
+  p: PostView,
+  siteTitle: string,
+  siteDescription: string,
+  origin: string,
+  /** Social-card fallback when the post has no cover: the site logo. */
+  logoUrl?: string,
+): string {
   const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
   const desc = p.seoDescription || p.excerpt || siteDescription;
   const url = `${origin}${p.url}`;
+  const ogImage = p.featuredImage || logoUrl || "";
   const author = p.author?.name;
   const iso = (v: Date | string | null | undefined) => new Date(v ?? p.publishedAt!).toISOString();
   const crumbs: Array<{ name: string; url: string }> = [
@@ -575,7 +579,7 @@ export function postHead(p: PostView, siteTitle: string, siteDescription: string
     `<meta property="og:title" content="${esc(fullTitle)}">`,
     `<meta property="og:description" content="${esc(desc)}">`,
     `<meta property="og:url" content="${esc(url)}">`,
-    p.featuredImage ? `<meta property="og:image" content="${esc(p.featuredImage)}">` : "",
+    ogImage ? `<meta property="og:image" content="${esc(ogImage)}">` : "",
     `<meta property="og:type" content="article">`,
     `<meta property="article:published_time" content="${iso(p.publishedAt)}">`,
     `<meta property="article:modified_time" content="${iso(p.updatedAt || p.publishedAt)}">`,
@@ -615,6 +619,9 @@ export type CommentModel = {
   enabled: boolean;
   provider: string;
   requireNameEmail: boolean;
+  /** Guest comments must carry a link. Independent of requireNameEmail. */
+  requireAuthorUrl: boolean;
+  authorUrlLabel: string;
   defaultContent: string;
   me: { id: number; name: string; email: string } | null;
   items: FlatComment[];
@@ -716,32 +723,34 @@ function builtinCommentsHtml(m: CommentModel): string {
     : "";
   const guestFields = m.me
     ? ""
-    : '<div class="guest-info fields flex gx-3 mx-5">' +
+    : '<div class="guest-info flex">' +
       '<div class="item"><input type="text" class="comment-field" name="authorName" autocomplete="nickname" placeholder=' +
       `"昵称${m.requireNameEmail ? " *" : ""}">` +
       `<i>${ICON_USER}</i></div>` +
       '<div class="item"><input type="email" class="comment-field" name="authorEmail" autocomplete="email" placeholder=' +
       `"邮箱${m.requireNameEmail ? " *" : ""}">` +
       `<i>${ICON_MAIL}</i></div>` +
-      `<div class="item"><input type="url" class="comment-field" name="authorUrl" autocomplete="url" placeholder="个人首页"><i>${ICON_LINK}</i></div>` +
+      `<div class="item"><input type="url" class="comment-field" name="authorUrl" autocomplete="url" placeholder="${esc(m.authorUrlLabel)}${m.requireAuthorUrl ? " *" : ""}"><i>${ICON_LINK}</i></div>` +
       "</div>";
 
   const form =
     '<form class="comment-form sf-comment-form my-5" novalidate data-comment-form ' +
-    `data-post-id=${m.postId} data-post-type=${esc(m.postType)} data-require=${m.requireNameEmail ? "1" : "0"}>` +
+    `data-post-id=${m.postId} data-post-type=${esc(m.postType)} data-require=${m.requireNameEmail ? "1" : "0"}` +
+    ` data-require-url=${m.requireAuthorUrl ? "1" : "0"}>` +
     '<input type="hidden" name="parentId" value="">' +
     meBox +
+    guestFields +
     '<div class="input">' +
     `<textarea name="content" placeholder="请输入...">${esc(m.defaultContent || "")}</textarea></div>` +
-    '<div class="funcs mx-5">' +
+    '<div class="sf-toolbar">' +
+    '<div class="funcs">' +
     `<button type="button" aria-label="表情" title="表情" data-comment-emoji>${ICON_SMILE}</button>` +
     '<span class="emoji-panel-wrap" data-emoji-panel aria-hidden="true"></span>' +
     "</div>" +
-    guestFields +
-    '<div class="mt-5 form-actions text-right">' +
+    '<div class="form-actions">' +
     `<button type="button" class="cancel" data-comment-cancel style="display:none">${ICON_RESET}取消回复</button>` +
     `<button type="submit" class="btn-submit">${ICON_SEND}<span data-submit-label>发表评论</span></button>` +
-    "</div></form>";
+    "</div></div></form>";
 
   const tree = m.items.length
     ? renderCommentNodes(buildCommentTree(m.items), m, 0)
@@ -877,10 +886,18 @@ export function jsonLd(obj: unknown): string {
   return `<script type="application/ld+json">${json}</script>`;
 }
 
-export function pageHead(p: PageView, siteTitle: string, siteDescription: string, origin: string): string {
+export function pageHead(
+  p: PageView,
+  siteTitle: string,
+  siteDescription: string,
+  origin: string,
+  /** Social-card fallback when the page has no cover: the site logo. */
+  logoUrl?: string,
+): string {
   const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
   const desc = p.seoDescription || p.excerpt || siteDescription;
   const url = `${origin}${p.url}`;
+  const ogImage = p.featuredImage || logoUrl || "";
   return [
     `<title>${esc(fullTitle)}</title>`,
     `<meta name="description" content="${esc(desc)}">`,
@@ -889,7 +906,7 @@ export function pageHead(p: PageView, siteTitle: string, siteDescription: string
     `<meta property="og:title" content="${esc(fullTitle)}">`,
     `<meta property="og:description" content="${esc(desc)}">`,
     `<meta property="og:url" content="${esc(url)}">`,
-    p.featuredImage ? `<meta property="og:image" content="${esc(p.featuredImage)}">` : "",
+    ogImage ? `<meta property="og:image" content="${esc(ogImage)}">` : "",
     `<meta property="og:type" content="website">`,
 
     `<meta name="twitter:card" content="summary_large_image">`,

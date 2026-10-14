@@ -19,12 +19,15 @@ bcrypt.setRandomFallback((len: number) => Array.from(crypto.randomBytes(len)));
 import { and, desc, eq, gt, or, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
 import { users, securityEvents } from "./schema.js";
+import { pruneSecurityEvents } from "./security-events.js";
 import type { Role } from "./schema.js";
 import { ServiceError } from "./errors.js";
 import { getAdminSecurity } from "./security.js";
 
 export const COOKIE_NAME = "cms_session";
-const SESSION_DAYS = 7;
+/** Session lifetime in days. Also the CSRF token's, since it shadows this
+ *  cookie - see csrf.ts, which imports it rather than repeating the number. */
+export const SESSION_DAYS = 7;
 const DEV_SECRET_PATH = path.resolve(process.cwd(), ".data", ".auth-secret");
 
 export type SessionUser = {
@@ -39,10 +42,17 @@ export function getSecret(): Uint8Array {
   if (secret && secret.length >= 16) return new TextEncoder().encode(secret);
   if (process.env.NODE_ENV === "production") {
     console.warn(
-      "[oboext] AUTH_SECRET is not set — using an auto-generated local secret. " +
-        "Set AUTH_SECRET in production to keep sessions stable across instances.",
+      "[oboext] AUTH_SECRET is not set — deriving a stable secret from the database " +
+        "connection string so sessions survive across serverless instances. Set AUTH_SECRET " +
+        "in production for a non-derivable secret.",
     );
   }
+
+  const stable = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || process.env.VERCEL_URL;
+  if (stable) {
+    return new TextEncoder().encode(crypto.createHash("sha256").update(stable).digest("hex"));
+  }
+
   try {
     fs.mkdirSync(path.dirname(DEV_SECRET_PATH), { recursive: true });
     if (!fs.existsSync(DEV_SECRET_PATH)) {
@@ -72,9 +82,15 @@ export async function signSession(user: SessionUser): Promise<string> {
     .sign(getSecret());
 }
 
-/** Set-Cookie header VALUE establishing the session. */
-export async function sessionCookieValue(user: SessionUser): Promise<string> {
-  const token = await signSession(user);
+/**
+ * Set-Cookie header VALUE establishing the session.
+ *
+ * Split from sessionCookieValue() so the CSRF cookie can be derived from the
+ * SAME token in one place: csrf.ts composes the pair, and a second call to
+ * signSession() would mint a different token, leaving the two cookies
+ * describing different sessions.
+ */
+export function sessionCookieValueFor(token: string): string {
   return [
     `${COOKIE_NAME}=${token}`,
     "HttpOnly",
@@ -83,6 +99,11 @@ export async function sessionCookieValue(user: SessionUser): Promise<string> {
     `Max-Age=${SESSION_DAYS * 24 * 60 * 60}`,
     ...(process.env.NODE_ENV === "production" ? ["Secure"] : []),
   ].join("; ");
+}
+
+/** Set-Cookie header VALUE establishing the session. */
+export async function sessionCookieValue(user: SessionUser): Promise<string> {
+  return sessionCookieValueFor(await signSession(user));
 }
 
 /** Set-Cookie header VALUE expiring the session. */
@@ -206,6 +227,7 @@ export async function recordLoginEvent(input: {
       ip: input.ip ?? null,
       userAgent: input.userAgent ?? null,
     });
+    await pruneSecurityEvents();
   } catch (e) {
     console.error("[security-events] write failed:", e);
   }
@@ -213,10 +235,30 @@ export async function recordLoginEvent(input: {
 
 export class LoginThrottledError extends Error {}
 
-export async function hasAnyUser(): Promise<boolean> {
-  await ensureMigrations();
-  const [row] = await db.select({ count: sql<number>`count(*)` }).from(users);
-  return Number(row?.count ?? 0) > 0;
+/**
+ * Whether the install has been initialized (at least one user row).
+ *
+ * Memoized on globalThis for two reasons. Correctness: the answer only ever
+ * flips false -> true, and it flips exactly once - inside createFirstAdmin.
+ * Cost: a bare `count(*)` on every request is a wasted round trip on the hot
+ * path, and the middleware asks this question for EVERY public page render
+ * (that is what sends a fresh install to /admin/setup instead of showing an
+ * empty blog). One promise per process, reset by createFirstAdmin so the
+ * redirect cannot outlive the install it was protecting.
+ */
+export function hasAnyUser(): Promise<boolean> {
+  const g = globalThis as unknown as { __oboeHasAnyUser?: Promise<boolean> };
+  if (!g.__oboeHasAnyUser) {
+    g.__oboeHasAnyUser = (async () => {
+      await ensureMigrations();
+      const [row] = await db.select({ count: sql<number>`count(*)` }).from(users);
+      return Number(row?.count ?? 0) > 0;
+    })().catch((e) => {
+      g.__oboeHasAnyUser = undefined;
+      throw e;
+    });
+  }
+  return g.__oboeHasAnyUser;
 }
 
 export async function createFirstAdmin(input: {
@@ -234,6 +276,7 @@ export async function createFirstAdmin(input: {
       role: "admin",
     })
     .returning();
+  (globalThis as unknown as { __oboeHasAnyUser?: Promise<boolean> }).__oboeHasAnyUser = undefined;
   return { id: row.id, email: row.email, name: row.name, role: row.role };
 }
 

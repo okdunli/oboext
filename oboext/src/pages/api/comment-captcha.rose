@@ -1,14 +1,31 @@
 <script>
 
-  import { createCommentCaptcha } from "@server/comment-captcha";
+  // /api/comment-captcha
+  //   GET ?action=check&token=&answer=   non-consuming answer probe (returns
+  //                                      { ok }) — the client calls this on blur
+  //                                      to render ✓/✗ inside the answer field
+  //                                      WITHOUT burning the one-shot token.
+  //   GET                                issues a fresh challenge { token, svg }.
+  import { createCommentCaptcha, validateCommentCaptcha } from "@server/comment-captcha";
 
-  export async function GET() {
+  const HEADERS = {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store, max-age=0",
+  };
+
+  export async function GET(request) {
+    const q = new URL(request.url).searchParams;
+    if (q.get("action") === "check") {
+      const token = q.get("token") || "";
+      const answer = q.get("answer") || "";
+      return new Response(JSON.stringify({ ok: validateCommentCaptcha(token, answer) }), {
+        status: 200,
+        headers: HEADERS,
+      });
+    }
     return new Response(JSON.stringify(createCommentCaptcha()), {
       status: 200,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        "cache-control": "no-store, max-age=0",
-      },
+      headers: HEADERS,
     });
   }
 </script>

@@ -4,7 +4,8 @@
   // opens the session. Only valid while the users table is empty
   // (createFirstAdmin enforces it). Mirrors app/api/setup/route.ts.
   import { apiGate, jsonFail, readBody, bootstrapSiteSettings } from "@server/admin";
-  import { hasAnyUser, createFirstAdmin, sessionCookieValue } from "@server/auth";
+  import { hasAnyUser, createFirstAdmin } from "@server/auth";
+  import { sessionCookiePair } from "@server/csrf";
 
   export async function GET() {
     return apiGate(async () => {
@@ -28,15 +29,22 @@
       const footerText = String(body.footerText || "").trim();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
         return jsonFail("请输入合法邮箱", 422);
-      if (!name) return jsonFail("请输入昵称", 422);
       if (password.length < 8) return jsonFail("密码至少 8 位", 422);
-      const user = await createFirstAdmin({ email, name, password });
+      // The display name is optional in the installer: the email IS the login,
+      // and a first-run owner should not have to invent a handle to get going.
+      // Fall back to the mailbox's local part so the admin list, the article
+      // signature and the session cookie all still carry something readable.
+      const user = await createFirstAdmin({
+        email,
+        name: name || email.split("@")[0],
+        password,
+      });
       await bootstrapSiteSettings({ siteTitle, siteDescription, tagline, footerText });
       return new Response(JSON.stringify({ user }), {
         status: 201,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "set-cookie": await sessionCookieValue(user),
+          "set-cookie": await sessionCookiePair(user),
         },
       });
     });

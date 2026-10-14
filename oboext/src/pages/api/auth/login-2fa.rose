@@ -11,10 +11,10 @@
     verifyChallengeTicket,
     recordLoginEvent,
     LOGIN_EVENTS,
-    sessionCookieValue,
     clientIp,
     clientUa,
   } from "@server/auth";
+  import { sessionCookiePair } from "@server/csrf";
   import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
   import { getAdminSecurity, isEntryReferer } from "@server/security";
 
@@ -59,7 +59,7 @@
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "set-cookie": await sessionCookieValue(user),
+          "set-cookie": await sessionCookiePair(user),
         },
       });
     });

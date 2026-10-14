@@ -16,9 +16,19 @@
   //
   // The loader registry (dispatch/documents/ready/exists) is
   // installed on globalThis by pages/api/data.rose at module-eval time (a
-  // static import in the server bundle), so this file needs no ESM import of
-  // its own - the component compiler keeps non-exported statements inside
-  // render(), where an import declaration would be illegal.
+  // static import in the server bundle), so this file needs no import of the
+  // registry itself. CSRF is the exception: it is a real module and is
+  // imported normally, exactly as pages/api/*.rose do.
+  //
+  // CSRF is enforced HERE rather than in each of the 77 write routes on
+  // purpose. The check is "does this request carry a session cookie, and does
+  // it prove same-origin" - a property of the request alone, decided before
+  // any route, loader or resolver runs. Putting it in the routes would mean
+  // 77 chances to forget one, and the forgotten route is silently
+  // unprotected. It also means the guest surface needs no exemption list:
+  // without a session cookie there is nothing to forge.
+  import { checkCsrf, needsCsrf, isSafeMethod } from "@server/csrf";
+
   export async function handle(request) {
     const reg = globalThis.__oboeLoaders;
     if (reg && reg.ready) {
@@ -42,6 +52,35 @@
 
     const u = new URL(request.url);
     const p = u.pathname;
+
+    // ------------------------------------------------- CSRF (single choke point)
+    // Runs before every branch below, so no route, plugin gateway or static
+    // handler can be reached by a forged state-changing request. checkCsrf
+    // itself returns "no-session" for a request with no session cookie, and
+    // that case is ALLOWED: there are no credentials to abuse, so the entire
+    // guest surface (comments, likes, login, registration, captcha) needs no
+    // exemption list. Only cookie-authenticated writes are gated.
+    //
+    // The response is a bare 400 with no detail. Naming the failure mode
+    // ("no-token" vs "mismatch" vs "invalid") would tell an attacker which
+    // half of the defence he still has to solve.
+    if (!isSafeMethod(request.method) && needsCsrf(request)) {
+      // Two steps, not one: needsCsrf() scopes the check to requests that
+      // actually carry a session cookie, and checkCsrf() then judges it.
+      // Folding them into a single `if (!checkCsrf(req).ok)` reads fine and is
+      // wrong — an earlier version did that and rejected every guest write on
+      // the site, because "no session cookie, nothing to forge" is a PASS and
+      // not a failure. Asking the scoping question separately makes that
+      // mistake impossible to write.
+      const verdict = checkCsrf(request);
+      if (!verdict.ok) {
+        console.warn(`[csrf] rejected ${request.method} ${p} (${verdict.reason})`);
+        return new Response(JSON.stringify({ error: "请求校验失败，请刷新页面后重试" }), {
+          status: 400,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      }
+    }
 
     // Browser-side loader fetches hit /api/data from whatever admin page the
     // user is on; x-rv-url carries THAT page's URL so the loader context
@@ -72,6 +111,11 @@
     // ----------------------------------------------- theme CSS assets
     // /theme-style/<slug> serves the combined CSS for non-skyscraper themes.
     // Skyscraper uses /public/theme.css directly; other themes ride this route.
+    // The ?v= stamp is the file mtime, so the bytes behind a given URL never
+    // change and immutable is safe: a theme switch picks a different slug, and
+    // an edited stylesheet picks a different v. Without the stamp this route
+    // served one immutable URL for every build, which is what left a switched
+    // theme looking unchanged.
     if (p.indexOf("/theme-style/") === 0) {
       const slug = p.slice("/theme-style/".length).replace(/\/+$/, "");
       if (!slug || !reg.themeStyle) return new Response("Not found", { status: 404 });
@@ -89,6 +133,39 @@
     if (!reg) return;
 
     const rp = real.pathname;
+
+    // ------------------------------------------- first-run wall (whole site)
+    // A fresh install has no user, so every public page renders an empty blog
+    // shell - the visitor lands on a homepage with no content and no hint that
+    // the site needs initializing. Send the WHOLE site to /admin/setup until
+    // the first admin exists, not just /admin (which is where the wall used to
+    // live, so the root path behaved differently from the admin path).
+    //
+    // Assets and APIs are exempt: the setup page itself pulls the admin bundle
+    // and calls /api/data, and redirecting those would either 404 the
+    // document's own scripts or bounce the installer's POST. The probe is
+    // memoized per process (auth.hasAnyUser), so this costs one query per
+    // instance, not one per request.
+    if (
+      !rp.startsWith("/admin") &&
+      !rp.startsWith("/api/") &&
+      !rp.startsWith("/public/") &&
+      !rp.startsWith("/uploads/") &&
+      !rp.startsWith("/theme-assets/") &&
+      !rp.startsWith("/plugin-assets/") &&
+      !rp.startsWith("/theme-style/") &&
+      rp !== "/favicon.ico" &&
+      rp !== "/manifest.webmanifest" &&
+      rp !== "/robots.txt" &&
+      rp !== "/sitemap.xml" &&
+      rp !== "/feed.xml" &&
+      rp !== "/rss.xml" &&
+      rp !== "/feed"
+    ) {
+      if (!(await reg.auth.hasAnyUser())) {
+        return Response.redirect(new URL("/admin/setup", real.origin), 302);
+      }
+    }
 
     // ----------------------------------------------- /admin login wall
     // Whitelist: /admin/login and /admin/setup. First run (no users) sends
@@ -121,6 +198,28 @@
       const sec = await reg.security.get();
       if (sec.entryEnabled && getContext().user && rp === sec.entryPath) {
         return Response.redirect(new URL("/admin", real.origin), 302);
+      }
+    }
+
+    // ----------------------------------------------- app static assets
+    // /public/<rel> serves the app's own compiled assets from PUBLIC_DIR
+    // (admin.css, admin.js, comments.js, icons/**, theme-*.js, vendor/**).
+    // These are linked as /public/** and normally answered by the platform's
+    // static layer, which runs first. This handler is the safety net for when
+    // that layer is missing or stale: without it the request falls through
+    // every other branch into page routing, which 302s to /admin/login, so the
+    // browser gets HTML for a .css/.js request and the admin's CSP rejects it
+    // (unstyled admin). Same public/immutable caching as the static layer.
+    // GET/HEAD only; servePublic is traversal-protected and 404s, never throws.
+    if (rp.indexOf("/public/") === 0) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return new Response("Method not allowed", {
+          status: 405,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+      if (reg && reg.publicStatic) {
+        return reg.publicStatic.serve(rp, request.method);
       }
     }
 
@@ -203,12 +302,21 @@
       const doc = await reg.sitemap.document(request);
       if (!doc) return new Response("Not found", { status: 404 });
       return new Response(doc.xml, {
-        headers: { "content-type": doc.contentType },
+        headers: {
+          "content-type": doc.contentType,
+          "cache-control": "public, max-age=300",
+        },
       });
     }
     if (rp === "/feed.xml" || rp === "/rss.xml" || rp === "/feed") {
+      // RSS readers poll aggressively; 5 minutes of edge cache keeps repeat
+      // polls from re-rendering the feed body through the function. New posts
+      // surface within that window, which is fine for a feed.
       return new Response(await reg.documents.feed(ctx), {
-        headers: { "content-type": "application/rss+xml; charset=utf-8" },
+        headers: {
+          "content-type": "application/rss+xml; charset=utf-8",
+          "cache-control": "public, max-age=300",
+        },
       });
     }
     if (rp === "/robots.txt") {
@@ -216,7 +324,8 @@
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }
-
+    
+    
     if (rp === "/manifest.webmanifest") {
       return new Response(await reg.documents.manifest(ctx), {
         headers: { "content-type": "application/manifest+json" },

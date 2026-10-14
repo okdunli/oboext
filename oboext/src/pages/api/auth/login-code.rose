@@ -10,7 +10,6 @@
     assertLoginAllowed,
     recordLoginEvent,
     LOGIN_EVENTS,
-    sessionCookieValue,
     signChallengeTicket,
     findUserByContact,
     normalizeContactTarget,
@@ -19,6 +18,7 @@
     clientUa,
     LoginThrottledError,
   } from "@server/auth";
+  import { sessionCookiePair } from "@server/csrf";
   import { verifyCode } from "@server/verify-codes";
   import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { verifyLoginCaptcha, readCaptchaCookie } from "@server/captcha";
@@ -93,7 +93,7 @@
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "set-cookie": await sessionCookieValue(user),
+          "set-cookie": await sessionCookiePair(user),
         },
       });
     });

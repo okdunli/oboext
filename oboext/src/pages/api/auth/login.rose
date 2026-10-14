@@ -11,12 +11,12 @@
     assertLoginAllowed,
     recordLoginEvent,
     LOGIN_EVENTS,
-    sessionCookieValue,
     signChallengeTicket,
     clientIp,
     clientUa,
     LoginThrottledError,
   } from "@server/auth";
+  import { sessionCookiePair } from "@server/csrf";
   import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { verifyLoginCaptcha, readCaptchaCookie } from "@server/captcha";
   import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
@@ -79,7 +79,7 @@
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "set-cookie": await sessionCookieValue(user),
+          "set-cookie": await sessionCookiePair(user),
         },
       });
     });

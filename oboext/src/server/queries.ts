@@ -6,7 +6,7 @@
  */
 import { createHash } from "crypto";
 import { and, asc, desc, eq, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
-import { db } from "./db.js";
+import { db, isConnectionError } from "./db.js";
 import {
   categories,
   comments,
@@ -28,9 +28,10 @@ import {
   tagUrlFor,
 } from "./links.js";
 import { attachPostMetas, getPostMetas } from "./metas.js";
+import { uploadExists } from "./storage.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ServiceError } from "./errors.js";
-import { memoQuery, SIDEBAR_TTL } from "./cache.js";
+import { invalidate, memoQuery, memoStrict, SIDEBAR_TTL } from "./cache.js";
 
 /**
  * Scheduled publishing (time gate): a `published` post whose publishedAt is
@@ -43,7 +44,7 @@ import { memoQuery, SIDEBAR_TTL } from "./cache.js";
  */
 const publishedVisible = or(isNull(posts.publishedAt), lte(posts.publishedAt, sql`now()`));
 
-export type TaxRef = { id: number; name: string; slug: string; url: string; icon?: string | null };
+export type TaxRef = { id: number; name: string; slug: string; url: string; icon?: string | null; parentId?: number | null };
 
 export type PostView = Post & {
   url: string;
@@ -53,6 +54,28 @@ export type PostView = Post & {
   /** Custom fields (post_metas); themes consume e.g. bluemix_card_theme. */
   metas: Record<string, string>;
 };
+
+/**
+ * Drop a featured_image whose local file is gone.
+ *
+ * The column is plain text, so it can outlive the upload: a demo seed naming
+ * /uploads/media/demo-01.png, or a media record deleted from the panel while
+ * the post kept the path. Handing such a URL to the theme produced a broken
+ * <img>, and the share poster - whose palette is sampled from that same image -
+ * lost its colors and rendered as a black card. Nulling it lets the theme's own
+ * no-image presentation take over. Remote and data URLs are left alone.
+ *
+ * Applied on every public read path so no theme has to re-check.
+ */
+function withUsableCover<T extends { featuredImage?: string | null }>(view: T): T {
+  if (view.featuredImage && !uploadExists(view.featuredImage)) {
+    console.warn(
+      `[queries] featured_image ${view.featuredImage} is missing on disk, rendering without a cover`,
+    );
+    return { ...view, featuredImage: null };
+  }
+  return view;
+}
 
 export type PostQuery = {
   status?: string;
@@ -72,19 +95,25 @@ export type PostQuery = {
   offset?: number;
 };
 
-let settingsCache: { at: number; value: any } = { at: 0, value: null };
-
+/**
+ * Site settings, memoized hard-TTL.
+ *
+ * This used to be a hand-rolled `{ at, value }` check-then-set pair, which is
+ * not atomic: on a cold process every concurrent reader saw `value === null`
+ * and issued its own `select ... from site_settings`. One /archives render
+ * selected the row six times. `memoStrict` puts the in-flight promise in
+ * shared state before the first await, so concurrent readers share one query
+ * and `invalidateSettings()` still drops it immediately on a write.
+ */
 export async function getSettings(): Promise<Record<string, any>> {
-  const now = Date.now();
-  if (settingsCache.value && now - settingsCache.at < 30_000) return settingsCache.value;
-  const rows = await db.select().from(siteSettings).limit(1);
-  const value = rows[0] ?? {};
-  settingsCache = { at: now, value };
-  return value;
+  return memoStrict("settings", 30_000, async () => {
+    const rows = await db.select().from(siteSettings).limit(1);
+    return rows[0] ?? {};
+  });
 }
 
 export function invalidateSettings(): void {
-  settingsCache = { at: 0, value: null };
+  invalidate("settings");
 }
 
 export async function attachTaxonomies(ids: number[]) {
@@ -129,6 +158,27 @@ export async function listCategories(): Promise<CategoryWithUrl[]> {
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
           a.id - b.id,
       );
+  });
+}
+
+/**
+ * Published-post count per category id. Themes render it next to the category
+ * name; listCategories() carries no count column, and counting per category
+ * would be N round trips.
+ */
+export async function categoryPostCounts(): Promise<Map<number, number>> {
+  return memoQuery("tax:catCounts", SIDEBAR_TTL, async () => {
+    const rows = await db.execute(sql`select ${postCategories.categoryId} as cid, count(*)::int as n
+      from ${postCategories}
+      join ${posts} on ${posts.id} = ${postCategories.postId}
+      where ${posts.status} = 'published'
+        and (${posts.publishedAt} is null or ${posts.publishedAt} <= now())
+      group by ${postCategories.categoryId}`);
+    const out = new Map<number, number>();
+    for (const r of (Array.isArray(rows) ? rows : ((rows as any).rows ?? [])) as any[]) {
+      out.set(Number(r.cid), Number(r.n ?? 0));
+    }
+    return out;
   });
 }
 
@@ -270,10 +320,11 @@ export async function listPostsRaw(
     normalOffset = Math.max(0, offset - floatingIds.length);
   }
 
+  const withTotal = floatingIds.length === 0 && normalLimit > 0;
   const normalRows: JoinedRow[] =
     normalLimit > 0
       ? await db
-          .select(rowShape)
+          .select(withTotal ? { ...rowShape, total: sql<number>`count(*) over()` } : rowShape)
           .from(posts)
           .leftJoin(users, eq(posts.authorId, users.id))
           .where(normalWhere)
@@ -284,17 +335,22 @@ export async function listPostsRaw(
 
   const rows = pinnedRows.concat(normalRows);
 
-  const totalRows = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(posts)
-    .where(where);
-  const total = Number(totalRows[0]?.count ?? 0);
+  let total: number;
+  if (withTotal && normalRows.length > 0) {
+    total = Number((normalRows[0] as any).total ?? 0);
+  } else {
+    const totalRows = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(posts)
+      .where(where);
+    total = Number(totalRows[0]?.count ?? 0);
+  }
 
   const cfg = await getPermalinkConfig();
   const ids = rows.map((r) => r.post.id);
   const [tax, metaMap] = await Promise.all([attachTaxonomies(ids), attachPostMetas(ids)]);
 
-  const items: PostView[] = rows.map((r) => ({
+  const items: PostView[] = rows.map((r) => withUsableCover({
     ...r.post,
     url: postUrlFor(cfg, r.post),
     author: r.authorId ? { id: r.authorId, name: r.authorName!, email: r.authorEmail! } : null,
@@ -328,7 +384,7 @@ async function hydrate(row: { post: Post; authorName: string | null; authorEmail
     attachTaxonomies([row.post.id]),
     getPostMetas(row.post.id),
   ]);
-  const item: PostView = {
+  const item: PostView = withUsableCover({
     ...row.post,
     url: postUrlFor(cfg, row.post),
     author: row.authorId
@@ -337,7 +393,7 @@ async function hydrate(row: { post: Post; authorName: string | null; authorEmail
     categories: (tax.categories[row.post.id] ?? []).map((c) => ({ ...c, url: categoryUrlFor(cfg, c) })),
     tags: (tax.tags[row.post.id] ?? []).map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
     metas,
-  };
+  });
   return item;
 }
 
@@ -555,17 +611,17 @@ export async function listComments(opts: {
 
 export async function counts() {
   return memoQuery("counts", SIDEBAR_TTL, async () => {
-    const [pc, cc, tc, cc2] = await Promise.all([
-      db.select({ n: sql<number>`count(*)` }).from(posts).where(and(eq(posts.status, "published"), publishedVisible)),
-      db.select({ n: sql<number>`count(*)` }).from(comments).where(eq(comments.status, "published")),
-      db.select({ n: sql<number>`count(*)` }).from(tags),
-      db.select({ n: sql<number>`count(*)` }).from(categories),
-    ]);
+    const rows = await db.execute(sql`select
+      (select count(*) from ${posts} where ${posts.status} = 'published' and (${posts.publishedAt} is null or ${posts.publishedAt} <= now())) as posts,
+      (select count(*) from ${comments} where ${comments.status} = 'published') as comments,
+      (select count(*) from ${tags}) as tags,
+      (select count(*) from ${categories}) as categories`);
+    const r = (Array.isArray(rows) ? rows : (rows as any).rows)[0] ?? {};
     return {
-      posts: Number(pc[0]?.n ?? 0),
-      comments: Number(cc[0]?.n ?? 0),
-      tags: Number(tc[0]?.n ?? 0),
-      categories: Number(cc2[0]?.n ?? 0),
+      posts: Number(r.posts ?? 0),
+      comments: Number(r.comments ?? 0),
+      tags: Number(r.tags ?? 0),
+      categories: Number(r.categories ?? 0),
     };
   });
 }
@@ -613,29 +669,46 @@ export async function archiveGroups(): Promise<
   });
 }
 
-/** PV always +1; UV +1 once per (post, sha256(ip|ua)). Best effort. */
+/** PV always +1; UV +1 once per (post, sha256(ip|ua)). Best effort.
+ *
+ * One round trip: the visitor INSERT rides a CTE and the UPDATE reads whether
+ * it actually inserted (ON CONFLICT DO NOTHING → empty RETURNING for a repeat
+ * visitor) to decide the unique_views increment. At Neon RTT two serial
+ * statements per pageview are real latency. */
 export async function incrementViews(id: number, ip: string, ua: string): Promise<void> {
-  let isNewVisitor = false;
   if (ip || ua) {
     const key = createHash("sha256").update(`${ip}|${ua}`).digest("hex");
     try {
-      const inserted = await db
-        .insert(postVisitors)
-        .values({ postId: id, visitorKey: key })
-        .onConflictDoNothing()
-        .returning({ postId: postVisitors.postId });
-      isNewVisitor = inserted.length > 0;
-    } catch {
-      isNewVisitor = false;
+      await db.execute(sql`
+        with ins as (
+          insert into ${postVisitors} ("post_id", "visitor_key")
+          values (${id}, ${key})
+          on conflict do nothing
+          returning "post_id"
+        )
+        update ${posts}
+        set views = views + 1,
+            unique_views = unique_views + case when exists (select 1 from ins) then 1 else 0 end
+        where id = ${id}`);
+      return;
+    } catch (e) {
+      if (e instanceof Error && isConnectionError(e)) throw e;
+      // Non-connection failure (e.g. a race on the CTE): fall through to the
+      // plain PV increment below rather than losing the view entirely.
     }
   }
-  if (isNewVisitor) {
-    await db.execute(
-      sql`update ${posts} set views = views + 1, unique_views = unique_views + 1 where id = ${id}`,
-    );
-  } else {
-    await db.execute(sql`update ${posts} set views = views + 1 where id = ${id}`);
-  }
+  await db.execute(sql`update ${posts} set views = views + 1 where id = ${id}`);
+}
+
+/** Current view count for a post (public read used by the live counter). */
+export async function getPostViews(id: number): Promise<number> {
+  if (!Number.isInteger(id) || id <= 0) return 0;
+  const [row] = await db
+    .select({ views: posts.views })
+    .from(posts)
+    .where(eq(posts.id, id))
+    .limit(1);
+  return row?.views ?? 0;
 }
 
 export async function likePost(id: number): Promise<number> {

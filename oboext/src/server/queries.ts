@@ -308,7 +308,15 @@ async function hydrate(row: { post: Post; authorName: string | null; authorEmail
   return item;
 }
 
-/** Published post by stored slug, with pinyin/initial/id fallback for other permalink modes. */
+/**
+ * Published post by any stored tail — slug, pinyin, initials or numeric id.
+ *
+ * The active permalink mode only decides which column is tried FIRST (that is
+ * the indexed hot path); every column is still tried afterwards. Without the
+ * fallbacks a caller that already holds the post and re-resolves by `slug`
+ * (the catch-all loader's postDetail) would 404 under postMode pinyin/initial,
+ * because the mode's own column no longer matches.
+ */
 export async function getPost(tail: string): Promise<PostView | null> {
   const cfg = await getPermalinkConfig();
   let row: { post: Post; authorName: string | null; authorEmail: string | null; authorId: number | null } | undefined;
@@ -323,18 +331,35 @@ export async function getPost(tail: string): Promise<PostView | null> {
     return rows[0];
   };
 
-  if (cfg.postMode === "id" && /^\d+$/.test(tail)) {
+  const isId = /^\d+$/.test(tail);
+  const byText: Array<[string, any]> = [
+    ["slug", eq(posts.slug, tail)],
+    ["pinyin", eq(posts.pinyinSlug, tail)],
+    ["initial", eq(posts.initialSlug, tail)],
+  ];
+  const preferred =
+    cfg.postMode === "pinyin"
+      ? "pinyin"
+      : cfg.postMode === "initial"
+        ? "initial"
+        : cfg.postMode === "id"
+          ? null
+          : "slug";
+
+  if (cfg.postMode === "id" && isId) {
     row = await fetchOne(eq(posts.id, Number(tail)));
-  } else if (cfg.postMode === "pinyin") {
-    row = await fetchOne(eq(posts.pinyinSlug, tail));
-  } else if (cfg.postMode === "initial") {
-    row = await fetchOne(eq(posts.initialSlug, tail));
-  } else {
-    row = await fetchOne(eq(posts.slug, tail));
-    if (!row && /^\d+$/.test(tail)) row = await fetchOne(eq(posts.id, Number(tail)));
-    if (!row) row = await fetchOne(eq(posts.pinyinSlug, tail));
-    if (!row) row = await fetchOne(eq(posts.initialSlug, tail));
   }
+  if (!row) {
+    const ordered = [
+      ...byText.filter(([k]) => k === preferred),
+      ...byText.filter(([k]) => k !== preferred),
+    ];
+    for (const [, cond] of ordered) {
+      row = await fetchOne(cond);
+      if (row) break;
+    }
+  }
+  if (!row && isId) row = await fetchOne(eq(posts.id, Number(tail)));
   return row ? hydrate(row) : null;
 }
 

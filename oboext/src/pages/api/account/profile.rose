@@ -1,7 +1,7 @@
 <script>
 
   import { jsonFail, readBody, apiGate } from "@server/admin";
-  import { sessionCookieValue } from "@server/auth";
+  import { sessionCookiePair } from "@server/csrf";
   import { getOwnProfile, changeOwnProfile } from "@server/account";
   import { normalizeContactTarget } from "@server/auth";
   import { verifyCode } from "@server/verify-codes";
@@ -38,7 +38,10 @@
           status: 200,
           headers: {
             "content-type": "application/json; charset=utf-8",
-            "set-cookie": await sessionCookieValue({
+            // A name/email change re-issues the session (the old token still
+            // carries the previous name), so the CSRF token is re-issued with
+            // it — they are derived from the same token and must not drift.
+            "set-cookie": await sessionCookiePair({
               id: user.id,
               email: user.email,
               name: user.name,

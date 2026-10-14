@@ -10,13 +10,13 @@
 </script>
 
 <head>
-  <title>初始化 - oboext</title>
+  <title>初始化 - Oboext</title>
 </head>
 
 <div class="su-wrap">
   <form class="su-card" data-adm-form="setup" novalidate>
-    <h1 class="su-title">初始化 oboext</h1>
-    <p class="su-lead">检测到系统尚未配置，请创建站长账号并填写站点信息。</p>
+    <h1 class="su-title">初始化 Oboext</h1>
+    <p class="su-lead">检测到系统尚未配置，请创建管理员账号并填写站点信息。</p>
 
     <fieldset class="su-group">
       <legend>数据库</legend>
@@ -65,9 +65,9 @@
     <fieldset class="su-group">
       <legend>站点信息</legend>
       <label class="su-label">站点名称</label>
-      <input class="adm-input su-input" name="siteTitle" value="oboext" required>
+      <input class="adm-input su-input" name="siteTitle" value="Oboext" required>
       <label class="su-label">站点描述</label>
-      <input class="adm-input su-input" name="siteDescription" value="一个 Serverless 友好的内容管理系统">
+      <input class="adm-input su-input" name="siteDescription" value="致力于极致性能的开源博客系统">
       <label class="su-label">副标题 / 标语</label>
       <input class="adm-input su-input" name="tagline">
       <label class="su-label">页脚文字</label>
@@ -75,12 +75,12 @@
     </fieldset>
 
     <fieldset class="su-group su-group-last">
-      <legend>站长账号</legend>
-      <label class="su-label">姓名</label>
-      <input class="adm-input su-input" name="name" autocomplete="name" required autofocus>
-      <label class="su-label">邮箱</label>
-      <input class="adm-input su-input" type="email" name="email" autocomplete="email" required>
-      <label class="su-label">密码（至少 8 位）</label>
+      <legend>管理员账号</legend>
+      <label class="su-label">登录邮箱</label>
+      <input class="adm-input su-input" type="email" name="email" autocomplete="username" placeholder="you@example.com" required autofocus>
+      <label class="su-label">用户昵称</label>
+      <input class="adm-input su-input" name="name" autocomplete="nickname" placeholder="用于后台与文章署名">
+      <label class="su-label">登录密码（至少 8 位）</label>
       <input class="adm-input su-input" type="password" name="password" autocomplete="new-password" minlength="8" required>
     </fieldset>
 

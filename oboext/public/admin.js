@@ -527,7 +527,10 @@
       var op = t.getAttribute("data-op");
 
       var url = t.getAttribute("data-url") || "/api/posts";
-      if (op === "delete" && !confirm("确认删除选中的 " + ids.length + " 项？")) return;
+      if (op === "delete") {
+        var bconfirm = t.getAttribute("data-confirm");
+        if (!confirm(bconfirm || ("确认删除选中的 " + ids.length + " 项？"))) return;
+      }
       try {
         if (url === "/api/comments/bulk") {
           await api("POST", url, op === "delete"
@@ -1956,6 +1959,27 @@
   }
 
   var navToggled = {};
+  function setLeaves(leaves, open) {
+    if (!leaves) return;
+    if (open) {
+      leaves.hidden = false;
+      requestAnimationFrame(function () { leaves.classList.remove("is-collapsing"); });
+      return;
+    }
+    if (leaves.hidden) { leaves.classList.remove("is-collapsing"); return; }
+    leaves.classList.add("is-collapsing");
+    var done = function () {
+      if (!leaves.classList.contains("is-collapsing")) return;
+      leaves.hidden = true;
+      leaves.classList.remove("is-collapsing");
+    };
+    if (leaves.addEventListener) {
+      leaves.addEventListener("transitionend", done, { once: true });
+      setTimeout(done, 400);
+    } else {
+      done();
+    }
+  }
   function syncNavAccordion() {
     document.querySelectorAll(".adm-nav-ghdr").forEach(function (btn) {
       var g = btn.closest("[data-nav-group]");
@@ -1963,8 +1987,20 @@
       var open = navToggled[g.getAttribute("data-nav-group")];
       btn.setAttribute("aria-expanded", open ? "true" : "false");
       var leaves = btn.nextElementSibling;
-      if (leaves && leaves.classList.contains("adm-nav-leaves")) leaves.hidden = !open;
+      if (leaves && leaves.classList.contains("adm-nav-leaves")) setLeaves(leaves, open);
     });
+  }
+  /**
+   * Forget the manual accordion state and collapse everything.
+   *
+   * Clearing navToggled alone is not enough: syncNavAccordion's guard skips any
+   * group with no recorded toggle, so an expanded group would stay expanded
+   * forever. Collapsing first is what actually returns the nav to its
+   * server-rendered shape (the group owning the current route expanded).
+   */
+  function resetNavAccordion() {
+    collapseAllNavGroups();
+    navToggled = {};
   }
   function initNavAccordion() {
     if (window.__navAccBound) return;
@@ -1975,9 +2011,20 @@
       var open = btn.getAttribute("aria-expanded") !== "true";
       btn.setAttribute("aria-expanded", open ? "true" : "false");
       var leaves = btn.nextElementSibling;
-      if (leaves && leaves.classList.contains("adm-nav-leaves")) leaves.hidden = !open;
+      if (leaves && leaves.classList.contains("adm-nav-leaves")) setLeaves(leaves, open);
       var g = btn.closest("[data-nav-group]");
       if (g) navToggled[g.getAttribute("data-nav-group")] = open;
+      if (open) closeNavDrawer();
+    });
+  }
+  /** Collapse every accordion group (used when the drawer takes over). */
+  function collapseAllNavGroups() {
+    document.querySelectorAll(".adm-nav-ghdr").forEach(function (btn) {
+      var leaves = btn.nextElementSibling;
+      btn.setAttribute("aria-expanded", "false");
+      var g = btn.closest("[data-nav-group]");
+      if (g) navToggled[g.getAttribute("data-nav-group")] = false;
+      if (leaves && leaves.classList.contains("adm-nav-leaves")) setLeaves(leaves, false);
     });
   }
 
@@ -1991,6 +2038,7 @@
     document.addEventListener("click", function (e) {
       if (!e.target.closest) return;
       if (e.target.closest("[data-nav-open]")) {
+        resetNavAccordion();
         var sh = document.querySelector(".adm-shell");
         if (sh) sh.classList.add("is-nav-open");
       } else if (e.target.closest("[data-nav-close]")) {
@@ -2008,10 +2056,11 @@
     var here = location.pathname.replace(/\/+$/, "") || "/admin";
     document.querySelectorAll(".adm-nav a").forEach(function (a) {
       var href = a.getAttribute("href");
-      a.classList.toggle("is-active", href === here ||
-        (href !== "/admin" && here.indexOf(href) === 0));
+      var active = href === here ||
+        (href !== "/admin" && here.indexOf(href + "/") === 0);
+      a.classList.toggle("is-active", active);
     });
-    syncNavAccordion();
+    resetNavAccordion();
     closeNavDrawer();
   }
 
@@ -2056,7 +2105,8 @@
     if (!root || root.__bound) return;
     root.__bound = true;
 
-    var state = { menus: [], activeId: null, flat: [], options: {}, tempSeq: 0 };
+    var state = { menus: [], activeId: null, flat: [], options: {}, tempSeq: 0, saved: "" };
+    var saveTimer = 0;
     try {
       var boot = JSON.parse(root.getAttribute("data-menus") || "{}");
       state.menus = boot.menus || [];
@@ -2067,7 +2117,6 @@
     var rowsEl = root.querySelector("[data-menu-rows]");
     var msgEl = root.querySelector("[data-menu-msg]");
     var emptyEl = root.querySelector("[data-menu-empty]");
-    var saveBtn = root.querySelector("[data-menu-save]");
     var addBtn = root.querySelector("[data-menu-add]");
 
     function esc(s) {
@@ -2092,7 +2141,11 @@
       return state.menus.filter(function (m) { return m.id === state.activeId; })[0] || null;
     }
     function useMenu(id) {
+      if (id === state.activeId) return;
+      clearTimeout(saveTimer);
+      if (state.activeId != null) persist();
       state.activeId = id;
+      state.saved = "";
       var m = activeMenu();
       state.flat = m ? flatten(m.items, 0, null, []) : [];
       render();
@@ -2164,7 +2217,7 @@
       if (tabsEl) tabsEl.innerHTML = state.menus.map(tabHtml).join("");
       if (rowsEl) rowsEl.innerHTML = state.flat.map(rowHtml).join("");
       if (emptyEl) emptyEl.classList.toggle("is-hidden", state.flat.length > 0);
-      if (saveBtn) saveBtn.disabled = state.activeId == null;
+      initIconPicker(rowsEl);
     }
     function ensureOptions(type) {
       if (state.options[type] || type === "custom") return Promise.resolve();
@@ -2198,6 +2251,7 @@
         label: "", url: "", referenceSlug: "", target: "_self", icon: "", depth: 0,
       });
       render();
+      scheduleSave();
     });
 
     rowsEl.addEventListener("change", function (e) {
@@ -2205,6 +2259,7 @@
       if (!row) return;
       var idx = [].slice.call(rowsEl.children).indexOf(row);
       var it = state.flat[idx];
+      if (!it) return;
       var f = e.target.getAttribute("data-f");
       if (f === "type") {
         it.type = e.target.value;
@@ -2212,6 +2267,7 @@
         it.url = "";
         render();
         ensureOptions(it.type);
+        scheduleSave();
         return;
       }
       if (f === "ref") {
@@ -2221,6 +2277,13 @@
         it.url = matched ? matched.url : "";
         if (matched) it.label = matched.label;
         render();
+        scheduleSave();
+        return;
+      }
+      if (f === "icon") {
+        it.icon = e.target.value;
+        if (e.target.__icpPaint) e.target.__icpPaint();
+        scheduleSave();
       }
     });
     rowsEl.addEventListener("input", function (e) {
@@ -2232,6 +2295,7 @@
       if (f === "label") it.label = e.target.value;
       else if (f === "url") it.url = e.target.value;
       else if (f === "icon") it.icon = e.target.value;
+      scheduleSave();
     });
     rowsEl.addEventListener("click", function (e) {
       var b = e.target.closest("[data-menu-act]");
@@ -2257,16 +2321,11 @@
         });
       }
       render();
+      scheduleSave();
     });
 
-    saveBtn.addEventListener("click", async function () {
-      if (state.activeId == null) return;
-      for (var i = 0; i < state.flat.length; i++) {
-        if (!state.flat[i].label.trim()) {
-          setMsg("第 " + (i + 1) + " 项缺少显示文字", false);
-          return;
-        }
-      }
+    async function persist() {
+      if (state.activeId == null) return false;
       var payload = {
         items: state.flat.map(function (it, i) {
           return {
@@ -2276,22 +2335,41 @@
           };
         }),
       };
-      saveBtn.disabled = true;
+      var sig = JSON.stringify(payload);
+      if (sig === state.saved) return true;
       try {
         await api("PUT", "/api/menus/" + state.activeId, payload);
+        state.saved = sig;
         setMsg("已保存", true);
-        var data = await api("GET", "/api/menus");
-        state.menus = data || [];
-        useMenu(state.activeId);
+        return true;
       } catch (err) {
         setMsg(err.message, false);
-      } finally {
-        saveBtn.disabled = false;
+        return false;
+      }
+    }
+    function scheduleSave() {
+      setMsg("保存中…", false);
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(persist, 600);
+    }
+
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") {
+        clearTimeout(saveTimer);
+        persist();
       }
     });
 
+    if (state.activeId != null) {
+      var m0 = activeMenu();
+      state.flat = m0 ? flatten(m0.items, 0, null, []) : [];
+    }
     render();
-    if (state.activeId != null) useMenu(state.activeId);
+    var t0 = [];
+    state.flat.forEach(function (it) {
+      if (it.type !== "custom" && t0.indexOf(it.type) < 0) t0.push(it.type);
+    });
+    t0.forEach(ensureOptions);
   }
 
   function initImageFields() {
@@ -3227,8 +3305,9 @@
     icpState.input = null;
   }
 
-  function initIconPicker() {
-    document.querySelectorAll("input[data-icon-picker]").forEach(function (input) {
+  function initIconPicker(root) {
+    var scope = root || document;
+    scope.querySelectorAll("input[data-icon-picker]").forEach(function (input) {
       if (input.getAttribute("data-icp-ready")) return;
       input.setAttribute("data-icp-ready", "1");
       input.type = "hidden";
@@ -3655,14 +3734,53 @@
     applyMode();
   }
 
+  function openCatIconPicker(catId, currentIcon) {
+    icpBuild();
+    var fake = document.createElement("input");
+    fake.type = "hidden";
+    fake.value = currentIcon || "";
+    fake.__icpPaint = function () {};
+    fake.addEventListener("change", function () {
+      var val = fake.value;
+      fetch("/api/categories/" + catId, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ icon: val })
+      }).then(function (r) {
+        if (!r.ok) { toast("更新图标失败", "err"); return; }
+        toast("图标已更新", "ok");
+        var row = document.querySelector('tr[data-cat-id="' + catId + '"]');
+        if (!row) return;
+        var btn = row.querySelector(".adm-cat-ic");
+        if (btn) {
+          btn.innerHTML = val ? admIc(val, 18) : admIc("folder", 18);
+          btn.setAttribute("data-cat-icon-val", val);
+        }
+        // The glyph lives in the .adm-cat-ic button alone; nothing to repaint here.
+      }).catch(function () { toast("更新图标失败", "err"); });
+    });
+    icpState.input = fake;
+    icpState.query = "";
+    icpState.limit = ICP_PAGE;
+    icpModal.querySelector("[data-icp-search]").value = "";
+    icpModal.hidden = false;
+    icpRender();
+    var s = icpModal.querySelector("[data-icp-search]");
+    setTimeout(function () { if (s) s.focus(); }, 30);
+    if (icpNames === null) icpLoadNames().then(icpRender);
+  }
+
   function initTaxonomy() {
     if (window.__taxBound) return;
     window.__taxBound = true;
     document.addEventListener("click", function (e) {
       var edit = e.target.closest && e.target.closest("[data-tax-edit]");
       if (edit) {
-        var modal = document.querySelector("[data-tax-modal]");
+        var modals = document.querySelectorAll("[data-tax-modal]");
+        modals.forEach(function (m, i) { if (i > 0 && m.parentNode) m.parentNode.removeChild(m); });
+        var modal = modals[0];
         if (!modal) return;
+        if (modal.parentNode !== document.body) document.body.appendChild(modal);
         e.preventDefault();
         var fields = { id: "data-id", name: "data-name", slug: "data-slug",
           description: "data-description", icon: "data-icon", parentId: "data-parentid" };
@@ -3686,6 +3804,12 @@
       if (overlay) overlay.hidden = true;
       else if (box) box.hidden = true;
     });
+    document.addEventListener("click", function (e) {
+      var ib = e.target.closest && e.target.closest("[data-cat-icon-id]");
+      if (!ib) return;
+      e.preventDefault();
+      openCatIconPicker(ib.getAttribute("data-cat-icon-id"), ib.getAttribute("data-cat-icon-val"));
+    });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape") {
         var m = document.querySelector("[data-tax-modal]:not([hidden])");
@@ -3694,6 +3818,58 @@
     });
 
     var dragSrc = null;
+    function catTbody() { return document.querySelector(".adm-tax-table tbody"); }
+    function catRows() {
+      var tb = catTbody();
+      return tb ? Array.prototype.slice.call(tb.querySelectorAll("tr[data-cat-id]")) : [];
+    }
+    function catChildMap(rows) {
+      var m = {};
+      rows.forEach(function (r) {
+        var p = r.getAttribute("data-parent-id") || "";
+        (m[p] = m[p] || []).push(r);
+      });
+      return m;
+    }
+    function catDescendants(id, rows, map) {
+      var out = [], stack = [String(id)], seen = {};
+      while (stack.length) {
+        var cur = stack.pop();
+        (map[cur] || []).forEach(function (ch) {
+          var cid = ch.getAttribute("data-cat-id");
+          if (seen[cid]) return;
+          seen[cid] = 1;
+          out.push(ch);
+          stack.push(cid);
+        });
+      }
+      return out;
+    }
+    function catIsInSubtree(maybeId, rootId, rows, map) {
+      if (String(maybeId) === String(rootId)) return true;
+      var p = rows.filter(function (r) { return r.getAttribute("data-cat-id") === String(maybeId); })[0];
+      var guard = 0;
+      while (p) {
+        var pid = p.getAttribute("data-parent-id") || "";
+        if (pid === String(rootId)) return true;
+        if (!pid) return false;
+        p = rows.filter(function (r) { return r.getAttribute("data-cat-id") === pid; })[0];
+        if (++guard > 99) return false;
+      }
+      return false;
+    }
+    function catNameOf(id, rows) {
+      var r = rows.filter(function (x) { return x.getAttribute("data-cat-id") === String(id); })[0];
+      if (!r) return "—";
+      var t = r.querySelector(".adm-tax-name");
+      return t ? t.textContent.trim() : "—";
+    }
+    function catClearDragMarks() {
+      document.querySelectorAll(".is-drag-over,.is-drag-before").forEach(function (r) {
+        r.classList.remove("is-drag-over", "is-drag-before");
+      });
+    }
+
     document.addEventListener("dragstart", function (e) {
       var handle = e.target.closest && e.target.closest(".adm-drag-handle");
       if (!handle) return;
@@ -3702,59 +3878,72 @@
       dragSrc = row;
       row.classList.add("is-dragging");
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", row.getAttribute("data-cat-id"));
+      try { e.dataTransfer.setData("text/plain", row.getAttribute("data-cat-id")); } catch (_) {}
     });
-    document.addEventListener("dragend", function (e) {
+    document.addEventListener("dragend", function () {
       if (dragSrc) dragSrc.classList.remove("is-dragging");
-      document.querySelectorAll(".is-drag-over").forEach(function (r) {
-        r.classList.remove("is-drag-over");
-      });
+      catClearDragMarks();
       dragSrc = null;
     });
     document.addEventListener("dragover", function (e) {
+      catClearDragMarks();
       var row = e.target.closest && e.target.closest("tr[data-cat-id]");
-      if (!row || !dragSrc) return;
-      if (row.getAttribute("data-parent-id") !== dragSrc.getAttribute("data-parent-id")) return;
+      if (!row || !dragSrc || row === dragSrc) return;
+      var rows = catRows();
+      var map = catChildMap(rows);
+      if (catIsInSubtree(row.getAttribute("data-cat-id"), dragSrc.getAttribute("data-cat-id"), rows, map)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      document.querySelectorAll(".is-drag-over").forEach(function (r) {
-        r.classList.remove("is-drag-over");
-      });
-      row.classList.add("is-drag-over");
+      var rect = row.getBoundingClientRect();
+      if (e.clientX < rect.left + 38) row.classList.add("is-drag-before");
+      else row.classList.add("is-drag-over");
     });
     document.addEventListener("drop", function (e) {
       var target = e.target.closest && e.target.closest("tr[data-cat-id]");
-      if (!target || !dragSrc) return;
+      catClearDragMarks();
+      if (!target || !dragSrc || target === dragSrc) return;
       e.preventDefault();
-      if (target.getAttribute("data-parent-id") !== dragSrc.getAttribute("data-parent-id")) return;
-      if (target === dragSrc) return;
-
       var tbody = target.closest("tbody");
       if (!tbody) return;
-      var rows = Array.from(tbody.querySelectorAll("tr[data-cat-id]"));
-      var srcIdx = rows.indexOf(dragSrc);
-      var tgtIdx = rows.indexOf(target);
-      if (srcIdx < 0 || tgtIdx < 0) return;
+      var rows = catRows();
+      var map = catChildMap(rows);
+      var srcId = dragSrc.getAttribute("data-cat-id");
+      if (catIsInSubtree(target.getAttribute("data-cat-id"), srcId, rows, map)) return;
 
-      rows.splice(srcIdx, 1);
-      tgtIdx = rows.indexOf(target);
-      rows.splice(tgtIdx, 0, dragSrc);
+      var rect = target.getBoundingClientRect();
+      var asChild = !(e.clientX < rect.left + 38);
+      var block = [dragSrc].concat(catDescendants(srcId, rows, map));
 
-      rows.forEach(function (r) { tbody.appendChild(r); });
+      var newParentId = asChild
+        ? Number(target.getAttribute("data-cat-id"))
+        : (function () { var tp = target.getAttribute("data-parent-id"); return tp ? Number(tp) : null; })();
 
-      var items = rows.map(function (r, i) {
-        return {
-          id: Number(r.getAttribute("data-cat-id")),
-          parentId: r.getAttribute("data-parent-id") ? Number(r.getAttribute("data-parent-id")) : null,
-          order: i
-        };
+      block.forEach(function (r) { if (r.parentNode) r.parentNode.removeChild(r); });
+      tbody.insertBefore(block[0], asChild ? target.nextSibling : target);
+      for (var k = 1; k < block.length; k++) {
+        tbody.insertBefore(block[k], block[k - 1].nextSibling);
+      }
+
+      dragSrc.setAttribute("data-parent-id", newParentId == null ? "" : String(newParentId));
+      var nameCell = dragSrc.querySelector(".adm-tax-name");
+      if (nameCell) nameCell.classList.toggle("is-child", !!newParentId);
+      var pname = dragSrc.children[4];
+      if (pname) {
+        pname.innerHTML = '<span class="adm-muted">' +
+          (newParentId == null ? "—" : sfEsc(catNameOf(newParentId, catRows()))) + "</span>";
+      }
+
+      var all = catRows();
+      var items = all.map(function (r, i) {
+        var pid = r.getAttribute("data-parent-id");
+        return { id: Number(r.getAttribute("data-cat-id")), parentId: pid ? Number(pid) : null, order: i };
       });
       fetch("/api/categories", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: items })
       }).then(function (res) {
-        if (!res.ok) console.error("Reorder failed", res.status);
+        if (!res.ok) { console.error("Category move failed", res.status); toast("分类移动失败", "err"); }
       });
     });
   }
@@ -3845,7 +4034,9 @@
     if (t) document.title = t.textContent;
     var navCur = document.querySelector(".adm-nav");
     var navNext = doc.querySelector(".adm-nav");
+    var navScroll = navCur ? navCur.scrollTop : 0;
     if (navCur && navNext) navCur.innerHTML = navNext.innerHTML;
+    if (navCur) navCur.scrollTop = navScroll;
     content.classList.remove("adm-nav-in");
     void content.offsetWidth;
     content.classList.add("adm-nav-in");

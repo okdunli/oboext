@@ -1,5 +1,3 @@
-
-
 import crypto from "node:crypto";
 import { getSecret } from "./auth.js";
 
@@ -130,14 +128,19 @@ export function createCommentCaptcha(): CommentCaptchaChallenge {
   return { token: `${body}.${sign(body)}`, svg: renderSvg(puzzle.text) };
 }
 
-export function verifyCommentCaptcha(token: string, answer: string): boolean {
+type DecodedCaptcha = { v: number; j: string; e: number };
+
+/** Verify the HMAC + shape + expiry WITHOUT consuming the token. Returns the
+ *  decoded payload so callers can additionally compare the answer and/or mark
+ *  the jti used. Returns null when the token is malformed/forged/expired. */
+function decodeCaptcha(token: string): DecodedCaptcha | null {
   try {
-    if (!token || !answer) return false;
+    if (!token) return null;
     const dot = token.lastIndexOf(".");
-    if (dot <= 0) return false;
+    if (dot <= 0) return null;
     const body = token.slice(0, dot);
     const sig = token.slice(dot + 1);
-    if (!timingSafeEqualText(sig, sign(body))) return false;
+    if (!timingSafeEqualText(sig, sign(body))) return null;
 
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as {
       v?: unknown;
@@ -149,18 +152,33 @@ export function verifyCommentCaptcha(token: string, answer: string): boolean {
       typeof payload.j !== "string" ||
       typeof payload.e !== "number"
     )
-      return false;
-
-    const now = Date.now();
-    if (payload.e <= now) return false;
-    if (used.has(payload.j)) return false;
-
-    if (normalizeAnswer(answer) !== String(payload.v)) return false;
-
-    used.set(payload.j, payload.e);
-    sweepUsed(now);
-    return true;
+      return null;
+    if (payload.e <= Date.now()) return null;
+    return { v: payload.v, j: payload.j, e: payload.e };
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Non-consuming answer check: signature + expiry + correctness only. Safe to
+ *  call from a live "is it right?" probe (the client re-checks on blur) because
+ *  it neither reads nor writes the `used` set — the token stays valid for the
+ *  real submit-time verifyCommentCaptcha(). */
+export function validateCommentCaptcha(token: string, answer: string): boolean {
+  const decoded = decodeCaptcha(token);
+  if (!decoded || !answer) return false;
+  return normalizeAnswer(answer) === String(decoded.v);
+}
+
+export function verifyCommentCaptcha(token: string, answer: string): boolean {
+  const decoded = decodeCaptcha(token);
+  if (!decoded || !answer) return false;
+
+  const now = Date.now();
+  if (used.has(decoded.j)) return false;
+  if (normalizeAnswer(answer) !== String(decoded.v)) return false;
+
+  used.set(decoded.j, decoded.e);
+  sweepUsed(now);
+  return true;
 }

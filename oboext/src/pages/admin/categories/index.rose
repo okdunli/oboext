@@ -40,6 +40,10 @@
     // admin stays icon-consistent. The icon picker only offers SVG names.
     return ic("folder");
   }
+  // Computed here because the rose compiler rejects a template {:else}.
+  function taxNameClass(c) {
+    return c.parentId ? "adm-tax-name is-child" : "adm-tax-name";
+  }
 </script>
 
 <head>
@@ -77,10 +81,15 @@
   <button class="adm-btn" type="submit">{@html ic("plus")} 添加</button>
 </form>
 
+<div class="adm-toolbar" style="gap:8px;">
+  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-op="delete" data-url="/api/categories" data-confirm="确认删除选中的分类？其下文章将转为未分类，子分类升级为顶级。">批量删除</button>
+</div>
+
 <div class="adm-card adm-table-wrap adm-tax-table">
   <table class="adm-table">
     <thead>
       <tr>
+        <th style="width:34px"><input type="checkbox" data-adm-act="check-all" title="全选"></th>
         <th style="width:32px"></th>
         <th>名称</th>
         <th style="width:24%">别名</th>
@@ -92,11 +101,13 @@
     <tbody>
       {#each cats() as c}
       <tr data-cat-id={c.id} data-parent-id={c.parentId || ""}>
-        <td>
-          <span class="adm-drag-handle" draggable="true" title="拖动排序">{@html ic("grip-vertical")}</span>
+        <td><input type="checkbox" class="adm-check" value={c.id}></td>
+        <td class="adm-cat-td">
+          <button type="button" class="adm-iconbtn adm-cat-ic" data-cat-icon-id={c.id} data-cat-icon-val={iconOf(c)} title="更换图标">{@html catGlyph(c)}</button>
+          <span class="adm-drag-handle" draggable="true" title="拖动排序（拖到行左侧空白＝同级/置顶，拖到行身＝成为其子分类）">{@html ic("grip-vertical")}</span>
         </td>
         <td>
-          <span class="adm-tax-name" style={c.parentId ? "padding-left:18px" : ""}>{@html (c.parentId ? '<span class="adm-tax-child">└</span>' : "") + catGlyph(c)}<span class="title">{c.name}</span></span>
+          <span class={taxNameClass(c)}>{c.name}</span>
         </td>
         <td><span class="adm-muted">{c.slug}</span></td>
         <td><span class="adm-muted">{parentName(c)}</span></td>

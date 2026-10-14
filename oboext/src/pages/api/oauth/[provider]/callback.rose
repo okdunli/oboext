@@ -3,7 +3,7 @@
 
   import { handleOAuthCallback, STATE_COOKIE } from "@server/oauth";
   import { getAdminSecurity } from "@server/security";
-  import { sessionCookieValue } from "@server/auth";
+  import { sessionCookiePair } from "@server/csrf";
   import { ServiceError } from "@server/errors";
 
   function pathProvider(request) {
@@ -60,11 +60,16 @@
       if (result.mode === "registered" && result.needProfile) {
         to = "/admin/account?oauth_new=1";
       }
+      // Three cookies, as an array. This used to be one string joined with
+      // "; ", which is not how Set-Cookie works: the whole thing parses as a
+      // SINGLE cookie, and everything after the first "; " is read as an
+      // attribute of it. So the state cookie was never actually cleared and
+      // the CSRF token never arrived.
       return new Response(null, {
         status: 302,
         headers: {
           location: new URL(to, origin).toString(),
-          "set-cookie": `${await sessionCookieValue(result.user)}; ${CLEAR_COOKIE}`,
+          "set-cookie": [...(await sessionCookiePair(result.user)), CLEAR_COOKIE],
         },
       });
     } catch (e) {

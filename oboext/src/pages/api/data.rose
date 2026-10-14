@@ -14,8 +14,8 @@
   import { buildSitemapDocument } from "@server/sitemap";
   import { themeCssContent, serveThemeAsset } from "@server/theme-chrome";
   import { servePluginAsset } from "@server/plugin-assets";
-  import { serveUpload } from "@server/storage";
-  import { ensureMigrations } from "@server/db";
+  import { serveUpload, servePublic } from "@server/storage";
+  import { ensureMigrations, withDbRetry } from "@server/db";
   import { getSessionFromRequest, hasAnyUser } from "@server/auth";
   import { getAdminSecurity } from "@server/security";
   import { getAdminMenuPrefs, homeRedirectFor } from "@server/admin-menu";
@@ -28,13 +28,17 @@
   // syncs plugins/ on disk into the plugins table (new plugins disabled)
   // and loads the enabled set.
   let readyPromise;
-  const ready = () => (readyPromise ||= ensureMigrations()
-    .then(() => syncPlugins())
-    .then(() => ensurePluginsLoaded())
-    .catch((err) => {
-      console.error("[oboext] database init failed:", err);
-      throw err;
-    }));
+  // withDbRetry, not a bare call: a serverless Postgres drops the connection
+  // of a suspended compute during the TLS handshake, and every route then
+  // fails identically. The retry rebuilds the client after a short wait.
+  const ready = () => (readyPromise = readyPromise || withDbRetry(async () => {
+    await ensureMigrations();
+    await syncPlugins();
+    await ensurePluginsLoaded();
+  }).catch((err) => {
+    console.error("[oboext] database init failed:", err);
+    throw err;
+  }));
 
   globalThis.__oboeLoaders = {
     ready,
@@ -48,6 +52,15 @@
     },
     uploads: {
       serve: (pathname, method) => serveUpload(pathname, method),
+    },
+    // Safety net for the app's own compiled assets, linked as /public/**
+    // (admin.css, admin.js, comments.js, icons/**, theme-*.js, vendor/**).
+    // The Vercel static layer normally answers these first; this handler only
+    // matters when that layer is missing/stale, where the request would
+    // otherwise fall into page routing and 302 to /admin/login (breaking every
+    // stylesheet/script under the admin's CSP). Mirrors uploads.serve.
+    publicStatic: {
+      serve: (pathname, method) => servePublic(pathname, method),
     },
     // Hook-based sitemap: buildSitemapDocument runs sitemap.urls +
     // sitemap.document filters (sitemap-plus and friends extend it), and
@@ -97,7 +110,21 @@
     try {
       payload = JSON.parse(u.searchParams.get("d") || "{}");
     } catch (e) {}
-    const data = await dispatch(key, payload, getContext());
+    const ctx = getContext();
+    // The registry mixes public loaders (home, resolve, …) with admin
+    // screens. Admin loaders themselves throw without a session, but that
+    // surfaced as an opaque 500; answer a plain 401 before dispatching so
+    // anonymous probing gets nothing but the status code.
+    if (key.indexOf("admin.") === 0 && !(ctx as Record<string, unknown>).user) {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 401,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+        },
+      });
+    }
+    const data = await dispatch(key, payload, ctx);
     return new Response(JSON.stringify(data), {
       status: 200,
       headers: {

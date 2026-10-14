@@ -1,7 +1,7 @@
 <script>
   // /api/categories — GET list (all readers), POST create (taxonomy:manage),
   // PUT reorder (taxonomy:manage)
-  import { apiGate, readBody, createCategory, reorderCategories } from "@server/admin";
+  import { apiGate, readBody, createCategory, reorderCategories, bulkDeleteCategories } from "@server/admin";
   import { listCategories } from "@server/queries";
 
   export async function GET() {
@@ -24,6 +24,19 @@
       const body = await readBody(request);
       await reorderCategories(getContext().user, body.items || []);
       return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+
+  // Bulk delete: { ids: number[] }. Affected posts are detached (uncategorized);
+  // surviving children of a deleted category are promoted to top-level.
+  export async function PATCH(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const ids = Array.isArray(body && body.ids) ? body.ids : [];
+      const res = await bulkDeleteCategories(getContext().user, ids);
+      return new Response(JSON.stringify(res), {
         headers: { "content-type": "application/json; charset=utf-8" },
       });
     });

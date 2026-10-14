@@ -38,6 +38,7 @@ import {
   type DashboardCardItem,
 } from "./admin-menu.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
+import { PUBLIC_DIR } from "./storage.js";
 import { listPlugins, getPlugin, ensurePluginsLoaded } from "./plugins.js";
 import { getNotifySettings } from "./notify.js";
 import { getMemberSettings } from "./members.js";
@@ -300,7 +301,7 @@ export async function adminSecurityLogs(p: unknown, ctx: Ctx) {
 
 export async function adminIcons(_p: unknown, ctx: Ctx) {
   requireUser(ctx);
-  const dir = path.resolve(process.cwd(), "oboext/public/icons");
+  const dir = path.join(PUBLIC_DIR, "icons");
   let names: string[] = [];
   try {
     names = readdirSync(dir)

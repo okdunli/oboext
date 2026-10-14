@@ -1,6 +1,5 @@
-
-
-export function loginCardHtml(): string {
+export function loginCardHtml(captcha?: { enabled: boolean; mode: "builtin" | "custom" | null }): string {
+  const showCaptcha = !!captcha && captcha.enabled;
   return (
     `<div class="adm-auth-card" data-login-root>` +
     `<h2 data-login-title>欢迎回来</h2>` +
@@ -8,7 +7,7 @@ export function loginCardHtml(): string {
     `<form data-adm-form="login" data-login-mode="login">` +
 
     `<div class="adm-field" data-login-show="login forgot codelogin">` +
-    `<label>邮箱或昵称</label>` +
+    `<label>邮箱 / 昵称</label>` +
     `<input class="adm-input" name="account" autocomplete="username" required autofocus>` +
     `</div>` +
 
@@ -47,14 +46,16 @@ export function loginCardHtml(): string {
     `<p class="adm-hint" style="margin:6px 0 0;">打开验证器 App 获取当前 6 位动态码；手机不可用时可输入任一未使用的恢复码。</p>` +
     `</div>` +
 
-    `<div class="adm-field" data-login-captcha data-login-show="login codelogin forgot" hidden>` +
-    `<label>验证码</label>` +
-    `<div style="display:flex;align-items:center;gap:8px;">` +
-    `<input class="adm-input" name="captcha" maxlength="4" autocomplete="off" spellcheck="false" placeholder="4 位字符" style="width:120px;text-transform:uppercase;letter-spacing:.18em;" data-login-captcha-builtin>` +
-    `<img data-login-captcha-img src="/api/captcha/image" alt="验证码" title="看不清？点击刷新" style="height:38px;width:120px;cursor:pointer;border:1px solid var(--adm-border);border-radius:6px;background:#eef2f7;">` +
-    `<input class="adm-input" name="captchaToken" maxlength="200" autocomplete="off" placeholder="第三方验证码凭证" data-login-captcha-custom hidden>` +
-    `</div>` +
-    `</div>` +
+    (showCaptcha
+      ? `<div class="adm-field" data-login-captcha data-login-show="login codelogin forgot" hidden>` +
+        `<label>验证码</label>` +
+        `<div style="display:flex;align-items:center;gap:8px;">` +
+        `<input class="adm-input" name="captcha" maxlength="4" autocomplete="off" spellcheck="false" placeholder="4 位字符" style="width:120px;text-transform:uppercase;letter-spacing:.18em;" data-login-captcha-builtin>` +
+        `<img data-login-captcha-img src="/api/captcha/image" alt="验证码" title="看不清？点击刷新" style="height:38px;width:120px;cursor:pointer;border:1px solid var(--adm-border);border-radius:6px;background:#eef2f7;">` +
+        `<input class="adm-input" name="captchaToken" maxlength="200" autocomplete="off" placeholder="第三方验证码凭证" data-login-captcha-custom hidden>` +
+        `</div>` +
+        `</div>`
+      : "") +
     `<button class="adm-btn adm-btn-block" type="submit" data-login-submit>登 录</button>` +
     `<p class="adm-auth-msg" data-adm-msg></p>` +
     `</form>` +
@@ -66,17 +67,17 @@ export function loginCardHtml(): string {
 
     `<div data-login-oauth data-login-show="login codelogin" hidden></div>` +
     `<p class="adm-hint" style="margin-top:14px;text-align:center;">` +
-    `可用邮箱或昵称登录 · <a class="adm-auth-link" href="/">返回站点首页</a>` +
+    `可用邮箱 / 昵称登录 · <a class="adm-auth-link" href="/">返回站点首页</a>` +
     `</p>` +
     `</div>`
   );
 }
 
-export function secretEntryPageHtml(): string {
+export function secretEntryPageHtml(captcha?: { enabled: boolean; mode: "builtin" | "custom" | null }): string {
   return (
     `<div class="adm-auth">` +
     `<div class="adm-auth-main" style="min-height:100vh;">` +
-    loginCardHtml() +
+    loginCardHtml(captcha) +
     `</div>` +
     `</div>` +
     `<link rel="stylesheet" href="/public/admin.css">` +

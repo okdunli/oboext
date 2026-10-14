@@ -226,6 +226,13 @@ export const SITE_SETTINGS_SCHEMA: SettingsSchema = [
         half: true,
       },
       {
+        key: "requireAuthorUrl",
+        label: "游客必须填链接",
+        type: "switch",
+        default: false,
+        half: true,
+      },
+      {
         key: "commentModeration",
         label: "所有评论先进审核队列",
         type: "switch",

@@ -729,6 +729,8 @@ export async function createPublicComment(input: PublicCommentInput) {
   } else {
     if (settings.requireNameEmail && (!input.authorName?.trim() || !input.authorEmail?.trim()))
       throw new ServiceError("请填写昵称和邮箱", 422);
+    if (settings.requireAuthorUrl && !input.authorUrl?.trim())
+      throw new ServiceError("请填写链接", 422);
   }
 
   await assertNotImpersonation({ authorName, authorEmail, authorUrl, siteHost: input.siteHost });
@@ -935,6 +937,24 @@ export async function deleteCategory(user: SessionUser, id: number) {
   return { id };
 }
 
+/**
+ * Bulk-delete categories. Posts attached to any deleted category are detached
+ * from it (their post_categories rows are removed, so they fall back to
+ * "uncategorized") rather than being deleted. Surviving children of a deleted
+ * category are promoted to top-level. Explicit junction cleanup keeps the
+ * cascade correct even if the FK onDelete rule was not applied by migrations.
+ */
+export async function bulkDeleteCategories(user: SessionUser, ids: number[]) {
+  requireCap(user, "taxonomy:manage");
+  const set = Array.from(new Set((ids || []).filter((n) => Number.isInteger(n) && n > 0)));
+  if (!set.length) return { deleted: 0 };
+  await db.delete(postCategories).where(inArray(postCategories.categoryId, set));
+  await db.update(categories).set({ parentId: null }).where(inArray(categories.parentId, set));
+  await db.delete(categories).where(inArray(categories.id, set));
+  invalidateContentCaches();
+  return { deleted: set.length };
+}
+
 export async function reorderCategories(
   user: SessionUser,
   items: Array<{ id: number; parentId: number | null; order: number }>,
@@ -987,6 +1007,21 @@ export async function deleteTag(user: SessionUser, id: number) {
   return { id };
 }
 
+/**
+ * Bulk-delete tags. The post_tags junction rows for the deleted tags are
+ * removed explicitly so every affected post simply loses that tag (it is not
+ * deleted). Mirrors bulkDeleteCategories' defensive stance on the cascade.
+ */
+export async function bulkDeleteTags(user: SessionUser, ids: number[]) {
+  requireCap(user, "taxonomy:manage");
+  const set = Array.from(new Set((ids || []).filter((n) => Number.isInteger(n) && n > 0)));
+  if (!set.length) return { deleted: 0 };
+  await db.delete(postTags).where(inArray(postTags.tagId, set));
+  await db.delete(tags).where(inArray(tags.id, set));
+  invalidateContentCaches();
+  return { deleted: set.length };
+}
+
 /** Whitelisted site_settings columns the admin form may patch. */
 const SETTINGS_FIELDS = {
   str: [
@@ -1004,7 +1039,7 @@ const SETTINGS_FIELDS = {
   num: ["avatarSize", "postsPerPage", "feedItems", "excerptLength"],
   /** Nullable integer columns: empty/absent → null, otherwise coerced. */
   numNullable: ["homePageId", "postsPageId"],
-  bool: ["commentsEnabled", "requireNameEmail", "commentModeration", "giscusReactions"],
+  bool: ["commentsEnabled", "requireNameEmail", "requireAuthorUrl", "commentModeration", "giscusReactions"],
   json: ["socialLinks", "footerLinks", "verifications"],
 } as const;
 
@@ -1038,7 +1073,9 @@ export async function updateSettings(user: SessionUser, input: Record<string, un
     .returning();
   invalidateSettings();
   if (typeof input.activeThemeSlug === "string") {
-    invalidateRenderCache();
+    invalidateContentCaches();
+    const { invalidateActiveThemeCache } = await import("./themes.js");
+    invalidateActiveThemeCache();
   }
   return row;
 }

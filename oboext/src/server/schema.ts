@@ -166,6 +166,10 @@ export const posts = pgTable(
     slugIdx: uniqueIndex("posts_slug_idx").on(t.slug),
     statusIdx: index("posts_status_idx").on(t.status),
     pinnedIdx: index("posts_pinned_idx").on(t.pinned),
+    statusPublishedIdx: index("posts_status_published_idx").on(t.status, t.publishedAt),
+    viewsIdx: index("posts_views_idx").on(t.views, t.publishedAt),
+    likesIdx: index("posts_likes_idx").on(t.likes, t.publishedAt),
+    commentsIdx: index("posts_comments_idx").on(t.commentsCount, t.publishedAt),
     pinyinIdx: uniqueIndex("posts_pinyin_slug_idx").on(t.pinyinSlug),
     initialIdx: uniqueIndex("posts_initial_slug_idx").on(t.initialSlug),
   }),
@@ -261,7 +265,9 @@ export const postTags = pgTable(
       .notNull()
       .references(() => tags.id, { onDelete: "cascade" }),
   },
-  (t) => ({ pk: uniqueIndex("post_tags_pk").on(t.postId, t.tagId) }),
+  (t) => ({
+    pk: uniqueIndex("post_tags_pk").on(t.postId, t.tagId),
+  }),
 );
 
 export const postCategories = pgTable(
@@ -378,6 +384,7 @@ export const siteSettings = pgTable("site_settings", {
   footerText: text("footer_text"),
   commentsEnabled: boolean("comments_enabled").notNull().default(true),
   requireNameEmail: boolean("require_name_email").notNull().default(false),
+  requireAuthorUrl: boolean("require_author_url").notNull().default(false),
   commentModeration: boolean("comment_moderation").notNull().default(false),
   commentModerationWords: text("comment_moderation_words").notNull().default(""),
   commentDefaultContent: text("comment_default_content").notNull().default(""),

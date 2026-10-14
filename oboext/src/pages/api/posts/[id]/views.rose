@@ -1,0 +1,20 @@
+<script>
+  // /api/posts/:id/views — public read of the current view count.
+  // Returns { views: number }. Client pages poll this so the displayed
+  // read count stays live even though the article HTML is render-cached.
+  import { apiGate, jsonOk, jsonFail } from "@server/admin";
+  import { getPostViews } from "@server/queries";
+
+  function pathId(request) {
+    const seg = new URL(request.url).pathname.split("/").filter(Boolean);
+    return Number(seg[2]);
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const id = pathId(request);
+      if (!Number.isInteger(id) || id <= 0) return jsonFail("文章不存在", 404);
+      return jsonOk({ views: await getPostViews(id) });
+    });
+  }
+</script>

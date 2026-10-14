@@ -1,5 +1,5 @@
 <script>
-  // Dashboard — counters, post status distribution, recent activity.
+  // Dashboard — counters, post status distribution, recent activity, API entry.
   let st = $data(() => __rvLoad("admin.dashboard", {}));
   // Accessors, never eager top-level reads: the compiler initializes $data
   // state after the script body (0.2.4), so reading st() here is a TDZ error.
@@ -16,6 +16,16 @@
   }
   function recentComments() {
     return st().recentComments;
+  }
+  // Stat cards pushed by plugins through the dashboard.cards filter hook.
+  function pluginCards() {
+    return st().cards || [];
+  }
+  function linkedCards() {
+    return pluginCards().filter(function (c) { return !!c.href; });
+  }
+  function plainCards() {
+    return pluginCards().filter(function (c) { return !c.href; });
   }
   function fmtDate(iso) {
     if (!iso) return "—";
@@ -46,15 +56,30 @@
 </head>
 
 <div class="adm-grid adm-stats">
-  <div class="adm-card adm-stat"><div class="k">{@html ic("file-text")} 文章</div><div class="v">{counts().posts}</div></div>
-  <div class="adm-card adm-stat"><div class="k">{@html ic("message-square")} 评论</div><div class="v">{counts().comments}</div></div>
-  <div class="adm-card adm-stat"><div class="k">{@html ic("hourglass")} 待审评论</div><div class="v">{counts().commentsPending}</div></div>
-  <div class="adm-card adm-stat"><div class="k">{@html ic("users")} 用户</div><div class="v">{counts().users}</div></div>
-  <div class="adm-card adm-stat"><div class="k">{@html ic("folder")} 分类</div><div class="v">{counts().categories}</div></div>
-  <div class="adm-card adm-stat"><div class="k">{@html ic("tags")} 标签</div><div class="v">{counts().tags}</div></div>
-  <div class="adm-card adm-stat"><div class="k">{@html ic("image")} 媒体</div><div class="v">{counts().media}</div></div>
-  <div class="adm-card adm-stat"><div class="k">{@html ic("file")} 页面</div><div class="v">{counts().pages}</div></div>
+  <a class="adm-card adm-stat" href="/admin/posts"><div class="k">{@html ic("file-text")} 文章</div><div class="v">{counts().posts}</div></a>
+  <a class="adm-card adm-stat" href="/admin/pages"><div class="k">{@html ic("file")} 页面</div><div class="v">{counts().pages}</div></a>
+  <a class="adm-card adm-stat" href="/admin/comments"><div class="k">{@html ic("message-square")} 评论</div><div class="v">{counts().comments}</div>{#if counts().commentsPending > 0}<div class="sub">{counts().commentsPending} 条待审</div>{/if}</a>
+  <a class="adm-card adm-stat" href="/admin/media"><div class="k">{@html ic("image")} 媒体</div><div class="v">{counts().media}</div></a>
+  <a class="adm-card adm-stat" href="/admin/categories"><div class="k">{@html ic("folder")} 分类</div><div class="v">{counts().categories}</div></a>
+  <a class="adm-card adm-stat" href="/admin/tags"><div class="k">{@html ic("tags")} 标签</div><div class="v">{counts().tags}</div></a>
+  <a class="adm-card adm-stat" href="/admin/users"><div class="k">{@html ic("users")} 用户</div><div class="v">{counts().users}</div></a>
 </div>
+
+{#if linkedCards().length > 0}
+<div class="adm-grid adm-stats">
+  {#each linkedCards() as c}
+  <a class="adm-card adm-stat" href={c.href}><div class="k">{c.label}</div><div class="v">{c.value}</div>{#if c.sub}<div class="sub">{c.sub}</div>{/if}</a>
+  {/each}
+</div>
+{/if}
+
+{#if plainCards().length > 0}
+<div class="adm-grid adm-stats">
+  {#each plainCards() as c}
+  <div class="adm-card adm-stat"><div class="k">{c.label}</div><div class="v">{c.value}</div>{#if c.sub}<div class="sub">{c.sub}</div>{/if}</div>
+  {/each}
+</div>
+{/if}
 
 <div class="adm-grid adm-cols-2" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
   <div class="adm-card">
@@ -122,5 +147,17 @@
         </tbody>
       </table>
     </div>
+  </div>
+</div>
+
+<div class="adm-card" style="margin-top:16px;">
+  <div class="adm-card-hd">API 接入</div>
+  <div class="adm-card-bd">
+    <p class="adm-hint" style="margin:0 0 10px">本系统提供 REST 与 GraphQL 两种接口：</p>
+    <ul class="adm-api-list">
+      <li>REST：<code>GET /api/posts?status=published</code></li>
+      <li>GraphQL：<code>POST /api/graphql</code>（浏览器访问可打开 Playground）</li>
+      <li>订阅源：<code>GET /feed.xml</code> · 站点地图：<code>GET /sitemap.xml</code></li>
+    </ul>
   </div>
 </div>

@@ -70,13 +70,16 @@
   <title>管理后台</title>
   <meta name="robots" content="noindex,nofollow">
   <link rel="stylesheet" href="/public/admin.css">
+  <!-- Must precede admin.js: it wraps window.fetch, and a script that captured
+       the native reference before the wrapper installed would bypass it. -->
+  <script src="/public/csrf.js"></script>
   <script src="/public/admin.js"></script>
 </head>
 
 {#if authed()}
 <div class="adm-shell">
   <aside class="adm-side">
-    <div class="adm-logo"><span class="adm-auth-mark"><span class="adm-ic adm-ic-lg" style="--i:url(/public/icons/layout-dashboard.svg)"></span></span> oboext<button type="button" class="adm-logo-x" data-nav-close aria-label="关闭菜单"><span class="adm-ic" style="--i:url(/public/icons/x.svg)"></span></button></div>
+    <div class="adm-logo"><span class="adm-auth-mark"><span class="adm-ic adm-ic-lg" style="--i:url(/public/icons/layout-dashboard.svg)"></span></span> Oboext<button type="button" class="adm-logo-x" data-nav-close aria-label="关闭菜单"><span class="adm-ic" style="--i:url(/public/icons/x.svg)"></span></button></div>
     <nav class="adm-nav">
       {@html navRaw()}
     </nav>
@@ -89,7 +92,7 @@
   <div class="adm-main">
     <div class="adm-mbar">
       <button type="button" class="adm-mbar-btn" data-nav-open aria-label="打开菜单"><span class="adm-ic" style="--i:url(/public/icons/menu.svg)"></span></button>
-      <span class="adm-mbar-title">oboext 管理后台</span>
+      <span class="adm-mbar-title">Oboext 管理后台</span>
     </div>
     <div class="adm-scrim" data-nav-close aria-hidden="true"></div>
     <header class="adm-topbar">

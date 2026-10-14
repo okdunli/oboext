@@ -1,4 +1,13 @@
 <script>
+  export const bundle = 'split';
+  // TTFB: the whole public content surface (home + posts + pages) memoizes
+  // for 15s per cookie principal. Server actions (comment/member/admin
+  // POSTs) invalidate the memo on write, so edits surface immediately.
+  // Disabled (0): esbuild tree-shakes invalidateRenderCache() out of
+  // dist/prod.mjs (the call sites in prod-server.ts / edge.ts are invisible
+  // to this module's bundle). Re-enable once the framework exports the
+  // function in a way esbuild can see.
+  export const cache = 0;
   // The single public content entry point (original parity:
   // app/(site)/[[...slug]]/page.tsx). `slug` arrives as the segment ARRAY;
   // the "resolve" loader maps it through the permalink gateway to the
@@ -30,4 +39,6 @@
 </head>
 {/if}
 
+{@html view().bodyOpen ?? ""}
 {@html view().main}
+{@html view().bodyClose ?? ""}

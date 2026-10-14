@@ -1,0 +1,16 @@
+<script>
+  // /api/feed — RSS 2.0 feed. Delegates to the loaders' documents.feed (the
+  // single source of truth, shared with the /feed virtual route) so the
+  // feedContent setting, page entries and per-post tag categories all apply
+  // here too - this file used to carry its own older copy of the logic.
+  import { documents } from "@server/loaders";
+
+  export async function GET(request) {
+    const origin = new URL(request.url).origin;
+    const xml = await documents.feed({ origin });
+    return new Response(xml, {
+      status: 200,
+      headers: { "content-type": "application/rss+xml; charset=utf-8", "cache-control": "public, max-age=600" },
+    });
+  }
+</script>

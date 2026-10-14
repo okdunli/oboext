@@ -144,6 +144,16 @@ export type AdminMenuSection = {
 
 export type AdminMenuEntry = AdminMenuItem | AdminMenuSection;
 
+/** Serializable stat card added to the dashboard via the `dashboard.cards`
+ *  hook (port of lib/admin-extensions.ts DashboardCardItem). `href` makes the
+ *  card a link; `sub` renders as a small badge under the value. */
+export type DashboardCardItem = {
+  label: string;
+  value: string | number;
+  sub?: string;
+  href?: string;
+};
+
 export function isAdminMenuSection(entry: AdminMenuEntry): entry is AdminMenuSection {
   return (
     typeof (entry as AdminMenuSection)?.section === "string" &&

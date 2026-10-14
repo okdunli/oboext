@@ -25,6 +25,15 @@
   function taxNames(list) {
     return (list || []).map((t) => t.name).join(" · ");
   }
+  // Scheduled badge: a draft whose publish time is still in the future.
+  function scheduledLabel(p) {
+    if (p.status !== "draft" || !p.publishedAt) return "";
+    const t = new Date(p.publishedAt).getTime();
+    return t > Date.now() ? "定时 " + fmtDate(p.publishedAt) : "";
+  }
+  function viewUrl(p) {
+    return p.url || "#";
+  }
   function tabClass(s) {
     return (__rvQs().get("status") || "") === s ? "is-active" : "";
   }
@@ -79,6 +88,7 @@
 <div class="adm-toolbar" style="gap:8px;">
   <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-op="publish">批量发布</button>
   <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-op="draft">转草稿</button>
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-op="archive">批量归档</button>
   <button class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-op="delete">批量删除</button>
 </div>
 
@@ -104,11 +114,14 @@
           <div class="sub">/{p.slug} · {taxNames(p.categories)} <span style="opacity:.55">{taxNames(p.tags)}</span></div>
         </td>
         <td>{p.authorName || "—"}</td>
-        <td><span class={"adm-tag " + p.status}>{statusLabel(p.status)}</span></td>
+        <td><span class={"adm-tag " + p.status}>{statusLabel(p.status)}</span>
+          {#if scheduledLabel(p)}<span class="adm-tag scheduled">{scheduledLabel(p)}</span>{/if}
+        </td>
         <td class="adm-hint">{fmtDate(p.updatedAt)}</td>
         <td class="adm-hint">{p.views}</td>
         <td>
           <div class="row-actions">
+            <a class="adm-iconbtn" href={viewUrl(p)} target="_blank" rel="noopener noreferrer" title="查看">查看</a>
             <a class="adm-iconbtn" href={"/admin/posts/" + p.id}>编辑</a>
             <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/posts/" + p.id} data-confirm={"确认删除文章「" + p.title + "」？"}>删除</button>
           </div>

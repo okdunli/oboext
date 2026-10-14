@@ -1,0 +1,692 @@
+/* ===========================================================================
+   Default theme - sidebar & chrome redesign
+   ---------------------------------------------------------------------------
+   Written by hand rather than generated: this stylesheet is a prebuilt
+   artifact (compiled once by a Tailwind pipeline that no longer exists), so a
+   utility that only appears in theme-chrome.ts's server-composed HTML was
+   never emitted. Everything below is therefore plain CSS with plain selectors.
+
+   Motion rules, applied throughout:
+   - transform / opacity / color only. `width`, `top`, `max-height` and
+     `filter` would work but each one forces layout or paint on every frame;
+     on a low-power laptop that is what makes a sidebar feel sticky.
+   - a transform paired with a transition is compositor-only, so these stay
+     smooth even while the page streams.
+   - durations are 120-260ms. Below ~100ms the change reads as a flicker;
+     above ~300ms it lags the pointer.
+   =========================================================================== */
+
+/* --------------------------------------------------------------- tokens */
+.df-aside {
+  --df-edge: color-mix(in srgb, var(--accent) 18%, var(--border));
+  --df-edge-soft: color-mix(in srgb, var(--accent) 9%, transparent);
+  --df-tint: color-mix(in srgb, var(--accent) 8%, transparent);
+  --df-tint-strong: color-mix(in srgb, var(--accent) 14%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  position: sticky;
+  top: 5rem;
+  /* The rail must not be taller than the viewport: a sticky sidebar taller
+     than the screen never reaches its own top offset, so it just scrolls. */
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--df-edge) transparent;
+}
+.df-aside::-webkit-scrollbar { width: 6px; }
+.df-aside::-webkit-scrollbar-thumb {
+  background: var(--df-edge);
+  border-radius: 9999px;
+}
+.df-aside::-webkit-scrollbar-track { background: transparent; }
+
+/* Screen-reader-only text. The sidebar search used to carry aria-label on the
+   input; a real <label> is the reliable form and costs nothing visually. */
+.df-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.df-empty {
+  display: block;
+  padding: .5rem 0;
+  color: var(--muted);
+  font-size: .8125rem;
+}
+
+/* --------------------------------------------------------------- cards */
+.df-card {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  padding: 1rem 1rem 1.125rem;
+  /* Two properties, so the lift and the border tint can differ in timing:
+     the shadow arrives slightly after the border, which reads as depth
+     rather than as a colour switch. */
+  transition: box-shadow .26s ease, border-color .26s ease;
+}
+.df-card:hover {
+  border-color: var(--df-edge);
+  box-shadow: 0 6px 24px -12px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.df-card-head {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin: 0 0 .75rem;
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.df-card-head > svg {
+  flex: none;
+  color: var(--accent);
+  transition: transform .26s cubic-bezier(.34, 1.56, .64, 1);
+}
+/* The icon tips towards the viewer on hover - a 6deg tilt, enough to register
+   as movement without reading as a wobble. */
+.df-card:hover .df-card-head > svg {
+  transform: rotate(-8deg) scale(1.12);
+}
+
+/* --------------------------------------------------------------- search */
+.df-search-form { margin-left: auto; }
+
+/* The header search is hidden on narrow screens: the sidebar one takes over.
+   Both forms share .df-search-form, so the rule has to stay scoped to the
+   media query - an unscoped display:none hides the sidebar field too. */
+@media (max-width: 639px) {
+  .df-search-form:not(.df-search-form-block) { display: none; }
+}
+.df-search-form-block { display: block; margin-left: 0; }
+
+.df-search-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  height: 2.25rem;
+  padding: 0 .625rem 0 .75rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--bg) 55%, var(--surface));
+  color: var(--muted);
+  /* The field itself is the animated surface: focus lifts it and warms the
+     border, so the affordance is the same shape the visitor is already
+     looking at. */
+  transition: border-color .2s ease, box-shadow .2s ease, background-color .2s ease;
+}
+.df-search-box-block { display: flex; width: 100%; }
+.df-search-box:hover {
+  border-color: var(--df-edge);
+}
+.df-search-box:focus-within {
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+/* The glyph is a flex item, NOT an absolute overlay. An absolutely-positioned
+   one escaped the field whenever no ancestor established the containing
+   block - the exact bug that emptied the search box once already. It also
+   nudges and rotates a touch on focus: the field is alive, but only 4px and
+   6deg, so the pointer target never moves. */
+.df-search-box .df-search-ic {
+  position: static;
+  transform: none;
+  flex: none;
+  color: var(--muted);
+  pointer-events: none;
+  transition: transform .26s cubic-bezier(.34, 1.56, .64, 1), color .2s ease;
+}
+.df-search-box:focus-within .df-search-ic {
+  color: var(--accent);
+  transform: scale(1.12);
+}
+
+/* ------------------------------------------------ search suggestions
+   The panel is a sibling of the field inside .df-search-box, which is already
+   position:relative, so it anchors to the pill without needing a wrapper.
+   z-index sits above the sticky header (30) so the list is not clipped by it
+   when the header field opens the panel. */
+.df-suggest {
+  position: absolute;
+  top: calc(100% + .375rem);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  min-width: 15rem;
+  max-height: min(22rem, 60vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: .3125rem;
+  border: 1px solid var(--border);
+  border-radius: .75rem;
+  background: var(--surface);
+  box-shadow: 0 12px 32px -12px rgb(0 0 0 / .35);
+}
+.df-suggest[hidden] { display: none; }
+.df-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .4375rem .5rem;
+  border-radius: .5rem;
+  color: var(--text);
+  font-size: .875rem;
+  line-height: 1.35;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.df-suggest-item:hover,
+.df-suggest-item.is-active {
+  background: var(--df-tint);
+  color: var(--accent);
+}
+.df-suggest-thumb {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  border-radius: .375rem;
+  object-fit: cover;
+  background: var(--df-tint);
+}
+.df-suggest-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.df-suggest-empty,
+.df-suggest-status {
+  padding: .625rem .5rem;
+  color: var(--muted);
+  font-size: .8125rem;
+}
+.df-suggest-foot {
+  margin-top: .25rem;
+  padding: .375rem .5rem .125rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: .75rem;
+}
+/* Highlight the matched run inside a title. The mark carries no colour of its
+   own so it inherits the row, which keeps the accent consistent whether the
+   row is hovered, active, or at rest. */
+.df-suggest-mark {
+  background: none;
+  color: inherit;
+  font-weight: 600;
+}
+
+.df-search-input {
+  width: 11rem;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: .875rem;
+  padding: 0;
+}
+.df-search-box-block .df-search-input { width: 100%; }
+.df-search-input::placeholder { color: var(--muted); }
+.df-search-input::-webkit-search-cancel-button { display: none; }
+
+/* The shortcut hint. Fades out as soon as the field has focus - once you are
+   typing, the "/" is noise, and the space it frees goes to the input. */
+.df-search-kbd {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 .25rem;
+  border: 1px solid var(--border);
+  border-radius: .3125rem;
+  background: var(--bg);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .6875rem;
+  line-height: 1;
+  pointer-events: none;
+  transition: opacity .2s ease, transform .2s ease;
+}
+.df-search-box:focus-within .df-search-kbd {
+  opacity: 0;
+  transform: scale(.85);
+}
+/* Only advertise the hint where it works: the "/" handler is not bound on
+   touch, where no keyboard exists to press it. */
+@media (hover: none) {
+  .df-search-kbd { display: none; }
+}
+
+/* ------------------------------------------------------- category tree */
+.df-cat-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: .125rem;
+}
+.df-cat-li { position: relative; }
+
+.df-cat {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .4375rem .5rem;
+  border: 1px solid transparent;
+  border-radius: .5rem;
+  text-decoration: none;
+  /* Four properties in one declaration: background, border, colour and the
+     icon's own transform all change on hover, and splitting them would let
+     them drift out of step. */
+  transition: background-color .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
+}
+/* A hairline always, not only on hover: the row has to read as a control
+   before the pointer arrives. Fully transparent at rest so it costs nothing
+   visually, but the border width is constant, so hovering does not shift
+   anything by a pixel. */
+.df-cat:hover {
+  background: var(--df-tint-strong);
+  border-color: var(--df-edge);
+  transform: translateX(2px);
+}
+.df-cat:active { transform: translateX(2px) scale(.985); }
+
+.df-cat-ic {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent);
+  transition: transform .22s cubic-bezier(.34, 1.56, .64, 1);
+}
+.df-cat:hover .df-cat-ic { transform: scale(1.15) rotate(-6deg); }
+
+.df-cat-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: .875rem;
+}
+
+.df-cat-n {
+  flex: none;
+  min-width: 1.25rem;
+  padding: .0625rem .3125rem;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  color: var(--muted);
+  font-size: .6875rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  transition: background-color .18s ease, color .18s ease;
+}
+.df-cat:hover .df-cat-n {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+
+/* --- group disclosure ---
+   A <details>/<summary> pair: no JavaScript, keyboard-operable, and its state
+   survives a pjax swap because the node is re-inserted rather than rebuilt.
+   The summary marker is hidden and replaced by a rotating chevron. */
+.df-cat-group { margin: 0; }
+.df-cat-summary {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .4375rem .5rem;
+  border: 1px solid transparent;
+  border-radius: .5rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  transition: background-color .18s ease, border-color .18s ease;
+}
+.df-cat-summary::-webkit-details-marker { display: none; }
+.df-cat-summary::marker { content: ""; }
+.df-cat-summary:hover {
+  background: var(--df-tint-strong);
+  border-color: var(--df-edge);
+}
+/* Keyboard focus needs a visible ring; :focus-visible keeps it off mouse
+   clicks, which otherwise leaves a ring on every tap. */
+.df-cat-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.df-cat-caret {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+  /* The chevron is the state indicator, so it rotates on the group's own
+     open/close - the one animation that has to be exact. */
+  transition: transform .24s cubic-bezier(.4, 0, .2, 1), color .18s ease;
+}
+.df-cat-group[open] > .df-cat-summary .df-cat-caret {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+.df-cat-summary:hover .df-cat-caret { color: var(--accent); }
+
+.df-cat-groupname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: .875rem;
+  font-weight: 600;
+}
+.df-cat-summary:hover .df-cat-groupname { color: var(--accent); }
+
+/* The parent link sits beside the summary, so the parent category is still a
+   destination. Icon-only because the name is already in the summary right
+   next to it. */
+.df-cat-parent {
+  position: absolute;
+  top: .4375rem;
+  right: .25rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  justify-content: center;
+  border-radius: .375rem;
+  opacity: .55;
+  z-index: 1;
+}
+.df-cat-parent:hover { opacity: 1; }
+/* Keep the count clear of the parent link.
+   Unconditional, and that is the fix: the offset used to be scoped to
+   .df-cat-group[open], as if the parent link only existed while expanded. It
+   does not - .df-cat-parent is a sibling of <details>, always rendered, and
+   only its opacity changes. So a COLLAPSED group had the absolutely-positioned
+   icon sitting on top of the post count, and expanding the group "fixed" it.
+   Same class of mistake as writing the rule for the state you happened to be
+   looking at: an absolutely-positioned overlay needs its space reserved in
+   every state, not the one where the collision is visible. */
+.df-cat-summary .df-cat-n { margin-right: 2rem; }
+
+/* --- children ---
+   grid-template-rows 0fr -> 1fr animates to the content's natural height
+   without hardcoding one, so a group with 2 children and one with 6 both
+   animate correctly. Requires the child wrapper's min-height:0. */
+.df-cat-sub {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .26s cubic-bezier(.4, 0, .2, 1);
+}
+.df-cat-group[open] > .df-cat-sub {
+  grid-template-rows: 1fr;
+}
+.df-cat-sub > li {
+  min-height: 0;
+  overflow: hidden;
+}
+/* The rail: a line from the parent's icon down past the children, so the
+   nesting is visible without relying on indentation alone. */
+.df-cat-sub > li::before {
+  content: "";
+  position: absolute;
+  left: .9375rem;
+  width: 1px;
+  height: 100%;
+  margin-top: -.4375rem;
+  background: linear-gradient(var(--df-edge), transparent);
+  opacity: 0;
+  transition: opacity .26s ease;
+}
+.df-cat-group[open] > .df-cat-sub > li::before { opacity: 1; }
+
+.df-cat-d1 {
+  padding-left: 1.75rem;
+}
+.df-cat-d1 .df-cat-ic { color: color-mix(in srgb, var(--accent) 72%, var(--muted)); }
+.df-cat-d1 .df-cat-name { font-size: .8125rem; }
+/* A child announces itself on hover by sliding towards its own rail, so the
+   motion points along the hierarchy rather than across it. */
+.df-cat-d1:hover { transform: translateX(4px); }
+
+/* --------------------------------------------------------------- tags */
+.df-tags { display: flex; flex-wrap: wrap; gap: .375rem; }
+.df-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: .1875rem .5rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  font-size: .75rem;
+  text-decoration: none;
+  transition: background-color .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
+}
+.df-tag:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px -6px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* ------------------------------------------------------- recent posts */
+.df-recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+.df-recent {
+  padding-left: .75rem;
+  border-left: 2px solid transparent;
+  transition: border-color .2s ease, transform .2s ease;
+}
+.df-recent:hover {
+  border-left-color: var(--accent);
+  transform: translateX(2px);
+}
+.df-recent-link {
+  display: block;
+  font-size: .8125rem;
+  line-height: 1.45;
+  text-decoration: none;
+  /* Clamped to two lines: a long title used to stretch the sidebar to several
+     times its own height and push the other cards off screen. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  transition: color .18s ease;
+}
+.df-recent-date {
+  margin: .1875rem 0 0;
+  color: var(--muted);
+  font-size: .6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------- header menu */
+.dfm-list {
+  display: flex;
+  flex-direction: column;
+  gap: .125rem;
+}
+/* The mobile drawer's search field.
+   The drawer used to hold only the nav links, so a phone visitor had no way to
+   search from it at all: the header field lives inside `hidden ... md:block`
+   and therefore does not exist below md, and the sidebar one is far down the
+   page. The field reuses the shared .df-search-box, so it only needs to be
+   wide enough to type in and given the panel's own bottom padding - the
+   suggestion list positions against .df-search-box (position:relative) and
+   needs no rule here. */
+.dfm-panel .df-search-form-mobile {
+  margin: 0 0 .375rem;
+}
+.dfm-panel .df-search-box {
+  width: 100%;
+}
+.dfm-panel .df-search-input {
+  /* 16px, not 13px: anything smaller makes iOS Safari zoom the viewport on
+     focus, which then leaves the drawer half off screen. */
+  font-size: 16px;
+}
+.dfm-panel .df-search-kbd {
+  display: none;
+}
+/* The suggestion panel is wider than the drawer and anchored to the field, so
+   it must be allowed to overhang to the left rather than clipped. */
+.dfm-panel .df-suggest {
+  min-width: 100%;
+  left: 0;
+  right: auto;
+  width: max(100%, 15rem);
+  max-width: 70vw;
+}
+/* The mobile drawer renders the SAME items as the desktop bar, so it needs the
+   same "you are here" state - otherwise the highlight appears only once the
+   viewport is wide enough to show the bar it belongs to. */
+.dfm-list .df-menu-link {
+  width: 100%;
+  padding: .5rem .625rem;
+}
+
+.df-menu-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.df-menu-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: .375rem;
+  padding: .4375rem .625rem;
+  border-radius: .5rem;
+  text-decoration: none;
+  transition: color .18s ease, background-color .18s ease;
+}
+.df-menu-link:hover {
+  background: var(--df-tint-strong);
+  /* Slides in from the left edge of the glyph: reads as a highlight sweeping
+     across the label rather than the label simply changing colour. */
+  background-image: linear-gradient(90deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 85%);
+  background-repeat: no-repeat;
+  background-size: 220% 100%;
+  background-position: 100% 0;
+  transition: color .18s ease, background-color .18s ease, background-position .32s cubic-bezier(.4, 0, .2, 1);
+}
+.df-menu-ic {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent);
+  transition: transform .22s cubic-bezier(.34, 1.56, .64, 1);
+}
+.df-menu-link:hover .df-menu-ic { transform: translateY(-1px) scale(1.12); }
+
+/* An underline that wipes in from the left on hover. A pseudo-element rather
+   than border-bottom so the animated line does not shift the label by 1px. */
+.df-menu-link::after {
+  content: "";
+  position: absolute;
+  left: .625rem;
+  right: .625rem;
+  bottom: .1875rem;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform .28s cubic-bezier(.4, 0, .2, 1);
+}
+.df-menu-link:hover::after { transform: scaleX(1); }
+
+/* "You are here", decided on the server from the real pathname. The underline
+   is the SAME wipe the hover uses, driven from scaleX(1) instead of
+   scaleX(0) - so the current page looks like the page under the pointer, and
+   the two states share one animation instead of two look-alike ones. */
+.df-menu-link.is-current {
+  color: var(--accent);
+  background: var(--df-tint);
+}
+.df-menu-link.is-current::after { transform: scaleX(1); }
+.dfm-list .df-menu-link.is-current { background: var(--df-tint-strong); }
+
+.df-menu-list-foot { font-size: .8125rem; }
+.df-menu-list-foot .df-menu-link { color: var(--muted); }
+.df-menu-list-foot .df-menu-link:hover { color: var(--text); }
+
+/* The nested list, when a menu item has children. */
+.df-menu-sub {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  z-index: 20;
+  display: none;
+  min-width: 11rem;
+  padding: .3125rem;
+  border: 1px solid var(--border);
+  border-radius: .625rem;
+  background: var(--surface);
+  box-shadow: 0 12px 32px -16px rgba(0, 0, 0, .45);
+}
+.df-menu-sub .df-menu-link {
+  width: 100%;
+  border-radius: .375rem;
+  padding: .375rem .5rem;
+}
+.df-group:hover > .df-menu-sub,
+.df-group:focus-within > .df-menu-sub { display: block; }
+.df-menu-list-foot .df-menu-sub { position: static; box-shadow: none; border: 0; background: none; }
+
+/* --------------------------------------------------- motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  /* Transforms and box-shadows are what these animations move; neutralising the
+     duration is enough, and it keeps the END state (which the rules above
+     set unconditionally) rather than snapping back to a stale one. */
+  .df-aside,
+  .df-card,
+  .df-search-box,
+  .df-search-box .df-search-ic,
+  .df-search-kbd,
+  .df-cat,
+  .df-cat-ic,
+  .df-cat-caret,
+  .df-cat-sub,
+  .df-cat-summary,
+  .df-tag,
+  .df-recent,
+  .df-menu-link,
+  .df-menu-link::after,
+  .df-menu-ic {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+  }
+}

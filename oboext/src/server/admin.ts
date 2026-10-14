@@ -37,6 +37,7 @@ import {
   listTags as allTags,
 } from "./queries.js";
 import { getPostMetas, setPostMetas } from "./metas.js";
+import { pinyinSlug as pinyinSlugOf } from "./pinyin.js";
 import { getPermalinkConfig, postUrlFor } from "./links.js";
 import type { SessionUser } from "./auth.js";
 import { hashPassword } from "./auth.js";
@@ -197,6 +198,43 @@ async function takenSlugs(base: string): Promise<Set<string>> {
     .from(posts)
     .where(sql`${posts.slug} LIKE ${base + "%"}`);
   return new Set(rows.map((r) => r.v));
+}
+
+/** Column values already taken under a `base%` prefix (for uniqueness checks). */
+async function takenColumn(
+  col: typeof posts.pinyinSlug | typeof posts.initialSlug,
+  base: string,
+): Promise<Set<string>> {
+  const rows = await db
+    .select({ v: col })
+    .from(posts)
+    .where(sql`${col} LIKE ${base + "%"}`);
+  return new Set(rows.map((r) => r.v).filter((v): v is string => !!v));
+}
+
+/**
+ * Persisted pinyin / initials tails for `postMode` "pinyin" / "initial".
+ *
+ * Both columns are uniquely indexed, so each tail gets the same -2/-3
+ * de-duplication the plain slug does. `exclude` carries the row's current
+ * values so editing keeps a post's tail instead of re-deriving it.
+ */
+async function uniqueLinkTails(
+  title: string,
+  exclude: { pinyin?: string | null; initial?: string | null } = {},
+): Promise<{ pinyinSlug: string; initialSlug: string }> {
+  const pyBase = pinyinSlugOf(title, "full");
+  const iniBase = pinyinSlugOf(title, "initial");
+  const [pyTaken, iniTaken] = await Promise.all([
+    takenColumn(posts.pinyinSlug, pyBase),
+    takenColumn(posts.initialSlug, iniBase),
+  ]);
+  if (exclude.pinyin) pyTaken.delete(exclude.pinyin);
+  if (exclude.initial) iniTaken.delete(exclude.initial);
+  return {
+    pinyinSlug: uniqueSlug(pyBase, pyTaken),
+    initialSlug: uniqueSlug(iniBase, iniTaken),
+  };
 }
 
 async function attachTaxonomyIds(ids: number[]) {
@@ -367,6 +405,7 @@ export async function createPost(user: SessionUser, input: PostInput) {
   const content = Array.isArray(input.content) ? input.content : [];
   const slugBase = slugify(input.slug || title);
   const slug = uniqueSlug(slugBase, await takenSlugs(slugBase));
+  const tails = await uniqueLinkTails(title);
   const authorId =
     (user.role === "admin" || user.role === "editor") && input.authorId
       ? Number(input.authorId)
@@ -380,8 +419,8 @@ export async function createPost(user: SessionUser, input: PostInput) {
     .values({
       title,
       slug,
-      pinyinSlug: slug,
-      initialSlug: slug,
+      pinyinSlug: tails.pinyinSlug,
+      initialSlug: tails.initialSlug,
       excerpt,
       content,
       status,
@@ -417,6 +456,14 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
     slug = uniqueSlug(base, taken);
   }
   const content = input.content ?? (existing.content as Block[]);
+  const nextTitle = input.title ?? existing.title;
+  const tails =
+    input.title !== undefined && input.title !== existing.title
+      ? await uniqueLinkTails(nextTitle, {
+          pinyin: existing.pinyinSlug,
+          initial: existing.initialSlug,
+        })
+      : null;
   let publishedAt = existing.publishedAt;
   if (input.publishedAt) publishedAt = new Date(input.publishedAt);
   else if (input.status === "published" && !existing.publishedAt) publishedAt = new Date();
@@ -431,6 +478,7 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
       title: input.title ?? existing.title,
       authorId,
       slug,
+      ...(tails ? { pinyinSlug: tails.pinyinSlug, initialSlug: tails.initialSlug } : {}),
       excerpt:
         input.excerpt !== undefined
           ? input.excerpt || excerptFrom(blocksToPlainText(content))

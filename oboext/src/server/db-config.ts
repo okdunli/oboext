@@ -1,17 +1,17 @@
-/**
- * Installer database/storage configuration — ported from
- * app/api/db-config/route.ts. Writes .env.local (merged, unrelated lines
- * preserved), applies the choice to the running process, and migrates the
- * new target before /api/setup creates the first admin.
- */
+// Installer database/storage configuration — ported from app/api/db-config/route.ts.
 import fs from "fs";
 import path from "path";
 import { ensureMigrations, reconfigureDatabase } from "./db.js";
+import { invalidateOptionCache } from "./options.js";
+import { invalidateAll } from "./cache.js";
+import { invalidateSettings } from "./queries.js";
+import { reloadPlugins } from "./plugins.js";
 import { ServiceError } from "./admin.js";
 
 const ENV_CONFIG = path.resolve(process.cwd(), ".env.local");
 
 async function verifyPostgres(url: string): Promise<string | null> {
+  // Non-literal specifier keeps `postgres` out of the esbuild bundle.
   const postgres = (await import("post" + "gres")).default;
   const client = postgres(url, { max: 1, connect_timeout: 5 });
   try {
@@ -67,6 +67,7 @@ export async function applyDbConfig(input: {
   const entries: Record<string, string> = {
     DB_DRIVER: driver,
     DATABASE_URL: driver === "postgres" ? url : "./.data/pglite_live",
+    // Route A (local): empty token makes the storage layer write to disk.
     BLOB_READ_WRITE_TOKEN: storage === "vercel-blob" ? blobToken : "",
   };
   const alreadyProvided =
@@ -75,6 +76,12 @@ export async function applyDbConfig(input: {
     (storage !== "vercel-blob" || process.env.BLOB_READ_WRITE_TOKEN === blobToken);
   if (!alreadyProvided) writeEnvLocal(entries);
 
+  // PGlite cannot reliably close + re-open a data dir inside the same WASM
+  // process (re-init panics inside _pg_initdb). The installer always starts
+  // on the default pglite driver, so an unchanged selection just persists
+  // .env.local and keeps the live, already-migrated connection. A genuine
+  // pglite -> postgres switch does reconfigure (the postgres client is a
+  // plain TCP driver and initialises cleanly).
   const current = (process.env.DB_DRIVER || "pglite") as "pglite" | "postgres";
   if (driver !== current) {
     await reconfigureDatabase(
@@ -82,6 +89,17 @@ export async function applyDbConfig(input: {
       driver === "postgres" ? url : "./.data/pglite_live",
     );
     await ensureMigrations();
+    // The database identity just changed, so every in-process read cache
+    // holds values from the OLD one: the option store, the settings bag, the
+    // query SWR store and the plugin registry. Drop them all — the same set
+    // the backup restore path drops (backup.ts), plus the SWR store, which is
+    // keyed by content and knows nothing about which DB produced it. Without
+    // this the wizard reports success while the app keeps serving the old
+    // database's settings until restart.
+    invalidateOptionCache();
+    invalidateAll();
+    invalidateSettings();
+    await reloadPlugins();
   }
 
   if (storage === "vercel-blob") process.env.BLOB_READ_WRITE_TOKEN = blobToken;

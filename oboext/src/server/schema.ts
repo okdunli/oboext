@@ -1,8 +1,4 @@
-/**
- * oboext schema — ported verbatim from the original app
- * (db/schema.ts). The Block type formerly imported from @/lib/blocks is
- * inlined here so the server layer has no app-alias dependency.
- */
+// Oboext schema — ported verbatim from the original app (db/schema.ts).
 import {
   integer,
   jsonb,
@@ -166,7 +162,11 @@ export const posts = pgTable(
     slugIdx: uniqueIndex("posts_slug_idx").on(t.slug),
     statusIdx: index("posts_status_idx").on(t.status),
     pinnedIdx: index("posts_pinned_idx").on(t.pinned),
+    // Declared to match db/migrations/0018 so a future `drizzle-kit generate` does not read them as missing and try to recreate them.
     statusPublishedIdx: index("posts_status_published_idx").on(t.status, t.publishedAt),
+    // Declared to match db/migrations/0020: the admin listings sort by
+    // (updated_at DESC, id DESC) after filtering on status.
+    statusUpdatedIdx: index("posts_status_updated_idx").on(t.status, t.updatedAt, t.id),
     viewsIdx: index("posts_views_idx").on(t.views, t.publishedAt),
     likesIdx: index("posts_likes_idx").on(t.likes, t.publishedAt),
     commentsIdx: index("posts_comments_idx").on(t.commentsCount, t.publishedAt),
@@ -200,6 +200,9 @@ export const pages = pgTable(
   (t) => ({
     slugIdx: uniqueIndex("pages_slug_idx").on(t.slug),
     statusIdx: index("pages_status_idx").on(t.status),
+    // Declared to match db/migrations/0020: the admin pages listing sorts by
+    // (updated_at DESC, id DESC) after filtering on status.
+    statusUpdatedIdx: index("pages_status_updated_idx").on(t.status, t.updatedAt, t.id),
   }),
 );
 
@@ -265,6 +268,7 @@ export const postTags = pgTable(
       .notNull()
       .references(() => tags.id, { onDelete: "cascade" }),
   },
+  // See postCategories for why the second column needs its own index.
   (t) => ({
     pk: uniqueIndex("post_tags_pk").on(t.postId, t.tagId),
   }),
@@ -280,6 +284,7 @@ export const postCategories = pgTable(
       .notNull()
       .references(() => categories.id, { onDelete: "cascade" }),
   },
+  // Category_id / tag_id need NO extra index: EXPLAIN shows the sibling lookups in queries.ts (~513) already served by the composite pk via a //.
   (t) => ({ pk: uniqueIndex("post_categories_pk").on(t.postId, t.categoryId) }),
 );
 
@@ -384,6 +389,7 @@ export const siteSettings = pgTable("site_settings", {
   footerText: text("footer_text"),
   commentsEnabled: boolean("comments_enabled").notNull().default(true),
   requireNameEmail: boolean("require_name_email").notNull().default(false),
+  // Whether a guest comment must carry a link.
   requireAuthorUrl: boolean("require_author_url").notNull().default(false),
   commentModeration: boolean("comment_moderation").notNull().default(false),
   commentModerationWords: text("comment_moderation_words").notNull().default(""),

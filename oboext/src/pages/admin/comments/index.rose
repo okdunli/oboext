@@ -5,6 +5,7 @@
     __rvLoad("admin.comments", {
       status: __rvQs().get("status") || "",
       page: Number(__rvQs().get("page") || 1),
+      after: __rvQs().get("after") || "",
     }),
   );
   // NB: {#each} compiles its expression as a zero-arg call, so iteration

@@ -6,6 +6,7 @@
       status: __rvQs().get("status") || "",
       search: __rvQs().get("q") || "",
       page: Number(__rvQs().get("page") || 1),
+      after: __rvQs().get("after") || "",
     }),
   );
   // NB: {#each} compiles its expression as a zero-arg call, so iteration

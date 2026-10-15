@@ -12,6 +12,7 @@ import {
 } from "./verify-codes.js";
 import { sendSmtpMail, type SmtpSecurity } from "./smtp.js";
 import { ServiceError } from "./admin.js";
+import { DEFAULT_LOCALE, makeT, type Locale } from "./i18n.js";
 
 const OPTION_KEY = "notifySettings";
 
@@ -534,35 +535,61 @@ async function deliverViaSms(to: string, code: string) {
   });
 }
 
-const PURPOSE_LABEL: Record<CodePurpose, string> = {
-  register: "注册",
-  reset: "找回密码",
-  bind: "绑定",
-  login: "登录",
+const PURPOSE_LABEL_KEY: Record<CodePurpose, string> = {
+  register: "notify.label_register",
+  reset: "notify.label_reset",
+  bind: "notify.label_bind",
+  login: "notify.label_login",
 };
+
+/**
+ * The verification-code email in the recipient's locale. The templates live
+ * in the catalog (notify.subject / notify.body / notify.html_lead /
+ * notify.html_foot), so a new language is a catalog edit, not a code edit;
+ * the zh output stays byte-equal to the pre-i18n template. siteName is
+ * escaped only inside the HTML body, matching the original markup.
+ */
+export function renderVerificationEmail(
+  locale: Locale,
+  siteName: string,
+  purpose: CodePurpose,
+  code: string,
+): { subject: string; text: string; html: string } {
+  const t = makeT(locale);
+  const label = t(PURPOSE_LABEL_KEY[purpose]);
+  const html =
+    `<div style="padding:24px;font-family:system-ui,sans-serif">` +
+    `<h2 style="margin:0 0 12px">${escapeHtml(siteName)}</h2>` +
+    `<p>${t("notify.html_lead", { label })}</p>` +
+    `<p style="font-size:28px;font-weight:700;letter-spacing:6px">${code}</p>` +
+    `<p style="color:#888;font-size:12px">${t("notify.html_foot")}</p>` +
+    `</div>`;
+  return {
+    subject: t("notify.subject", { site: siteName, label, code }),
+    text: t("notify.body", { label, code }),
+    html,
+  };
+}
 
 export async function sendVerificationCode(input: {
   channel: CodeChannel;
   target: string;
   purpose: CodePurpose;
   ip?: string | null;
+  locale?: Locale;
 }): Promise<{ resendAfter: number }> {
   await ensureMigrations();
   const code = await issueCode(input);
   try {
     const settings = await getSettings();
     const siteName = settings.siteTitle || "oboext";
-    const label = PURPOSE_LABEL[input.purpose];
     if (input.channel === "email") {
-      const subject = `【${siteName}】${label}验证码 ${code}`;
-      const text = `您正在进行${label}操作，验证码：${code}，10 分钟内有效，请勿泄露给他人。`;
-      const html =
-        `<div style="padding:24px;font-family:system-ui,sans-serif">` +
-        `<h2 style="margin:0 0 12px">${escapeHtml(siteName)}</h2>` +
-        `<p>您正在进行${label}操作，验证码为：</p>` +
-        `<p style="font-size:28px;font-weight:700;letter-spacing:6px">${code}</p>` +
-        `<p style="color:#888;font-size:12px">10 分钟内有效，请勿泄露给他人。如非本人操作请忽略此邮件。</p>` +
-        `</div>`;
+      const { subject, text, html } = renderVerificationEmail(
+        input.locale ?? DEFAULT_LOCALE,
+        siteName,
+        input.purpose,
+        code,
+      );
       await deliverViaEmail(input.target, subject, text, html, {
         code,
         purpose: input.purpose,

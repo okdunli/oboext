@@ -395,6 +395,14 @@ export const zhCatalog: Record<string, string> = {
   "stats.views": "总阅读",
   "stats.uptime": "已运行",
   "stats.days": "{n} 天",
+  "notify.label_register": "注册",
+  "notify.label_reset": "找回密码",
+  "notify.label_bind": "绑定",
+  "notify.label_login": "登录",
+  "notify.subject": "【{site}】{label}验证码 {code}",
+  "notify.body": "您正在进行{label}操作，验证码：{code}，10 分钟内有效，请勿泄露给他人。",
+  "notify.html_lead": "您正在进行{label}操作，验证码为：",
+  "notify.html_foot": "10 分钟内有效，请勿泄露给他人。如非本人操作请忽略此邮件。",
 };
 
 /** English overlays. Missing keys fall back to zhCatalog by design. */
@@ -764,6 +772,14 @@ export const enCatalog: Record<string, string> = {
   "stats.views": "Total views",
   "stats.uptime": "Uptime",
   "stats.days": "{n} days",
+  "notify.label_register": "registration",
+  "notify.label_reset": "password reset",
+  "notify.label_bind": "binding",
+  "notify.label_login": "login",
+  "notify.subject": "[{site}] {label} verification code: {code}",
+  "notify.body": "Your verification code for {label} is: {code}. It is valid for 10 minutes. Do not share it with anyone.",
+  "notify.html_lead": "Verification code for {label}:",
+  "notify.html_foot": "Valid for 10 minutes. Do not share it with anyone. If this wasn't you, please ignore this email.",
 };
 
 /** The catalog for a locale: English overlaid on the Chinese defaults. */

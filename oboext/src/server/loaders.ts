@@ -808,7 +808,7 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
       widgets,
       drawerPosts,
       sidebarData,
-      settings,
+      settings: { ...settings, t },
       themeSettings: ts,
 
       total,
@@ -877,6 +877,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
         themeSlug === "bluemix" || themeSlug === "codeman" || themeSlug === "pseudolinear"
           ? category.name
           : t("list.category_title", { name: category.name }),
+      crumbLast: category.name,
       sub,
       items,
       page,
@@ -892,7 +893,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
       widgets,
       drawerPosts,
       sidebarData,
-      settings,
+      settings: { ...settings, t },
       themeSettings: ts,
 
       titleIcon: themeSlug === "bluemix"
@@ -947,10 +948,11 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
 
   const contentTc = isSk ? tc : getThemeChrome("default");
   return {
-    headTitle: `${t("crumb.tag")}：#${tag.name} - ${settings.siteTitle ?? ""}`,
+    headTitle: `${t("list.tag_title", { name: tag.name })} - ${settings.siteTitle ?? ""}`,
     pluginHead,
     main: contentTc.listPage({
-      title: `${t("crumb.tag")}：#${tag.name}`,
+      title: t("list.tag_title", { name: tag.name }),
+      crumbLast: `#${tag.name}`,
 
       sub: isSk ? t("list.sub", { n: total, page, total: totalPages }) : "",
       items,
@@ -963,7 +965,7 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
       drawerPosts,
 
       sidebarData,
-      settings,
+      settings: { ...settings, t },
       themeSettings: ts,
     }),
   };

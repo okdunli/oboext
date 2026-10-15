@@ -2,11 +2,13 @@
 
   import { apiGate, jsonFail } from "@server/admin";
   import { getAdminSecurity, isEntryReferer } from "@server/security";
+  import { makeT, headerLocale } from "@server/i18n";
 
   export async function GET(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const sec = await getAdminSecurity();
-      if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);
+      if (!isEntryReferer(request, sec)) return jsonFail(t("api.no_entry"), 404);
       return {
         enabled: sec.captchaEnabled,
         mode: sec.captchaEnabled ? sec.captchaMode : null,

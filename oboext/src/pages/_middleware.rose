@@ -2,7 +2,7 @@
   // Oboext request interceptor (runs once per request on the Node server).
   import { checkCsrf, needsCsrf, isSafeMethod, selfHealCsrfCookie } from "@server/csrf";
   import { createLogger } from "@server/logger";
-  import { splitLocalePath, localeFromCookieHeader, localeHref } from "@server/i18n";
+  import { splitLocalePath, localeFromCookieHeader, localeHref, headerLocale, makeT } from "@server/i18n";
   const log = createLogger("middleware");
 
   export async function handle(request) {
@@ -34,11 +34,12 @@
       if (!verdict.ok) {
         log.warn(`[csrf] rejected ${request.method} ${p} (${verdict.reason})`);
         const heal = selfHealCsrfCookie(request);
+        const t = makeT(headerLocale(request));
         const headers: Record<string, string> = {
           "content-type": "application/json; charset=utf-8",
         };
         if (heal) headers["set-cookie"] = heal;
-        return new Response(JSON.stringify({ error: "请求校验失败，请刷新页面后重试" }), {
+        return new Response(JSON.stringify({ error: t("api.csrf_rejected") }), {
           status: 400,
           headers,
         });

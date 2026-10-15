@@ -4,18 +4,20 @@
   import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { getMemberSettings, isRegisterReferer } from "@server/members";
   import { CAPTCHA_COOKIE, captchaSvg, generateCaptchaCode, signCaptchaToken } from "@server/captcha";
+  import { makeT, headerLocale } from "@server/i18n";
 
   export async function GET(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const [sec, member] = await Promise.all([getAdminSecurity(), getMemberSettings()]);
       if (!isEntryReferer(request, sec) && !isRegisterReferer(request, member)) {
-        return jsonFail("接口不存在", 404);
+        return jsonFail(t("api.no_entry"), 404);
       }
       const builtinWanted =
         sec.captchaMode === "builtin" &&
         (sec.captchaEnabled || (member.registerEnabled && member.captchaEnabled));
 
-      if (!builtinWanted) return jsonFail("接口不存在", 404);
+      if (!builtinWanted) return jsonFail(t("api.no_entry"), 404);
 
       const code = generateCaptchaCode();
       const token = await signCaptchaToken(code);

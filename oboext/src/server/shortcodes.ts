@@ -1,9 +1,4 @@
-/**
- * `[tag]` macros expanded at render time — port of oboext lib/shortcodes.ts.
- * Plugins register custom tags via registerShortcode() (e.g. friend-links);
- * `[[tag]]` double brackets survive as literal text. Built-ins cover the
- * original set (alert/button/details/columns/…/gallery/posts/toc/year/site).
- */
+// `[tag]` macros expanded at render time — port of oboext lib/shortcodes.ts.
 import { applyFilters, HOOKS } from "./hooks.js";
 
 export type ShortcodeAttrs = Record<string, string>;
@@ -58,6 +53,8 @@ export function registerShortcode(def: ShortcodeDefinition): void {
   store().set(def.name.toLowerCase(), def);
 }
 
+/* ------------------------------------------------------------------ parsing */
+
 function esc(s: string): string {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -83,16 +80,16 @@ export function parseAttrs(raw: string): ShortcodeAttrs {
 
 const ESCAPE_TOKEN = "\u0000OBOE_SC\u0000";
 
-/**
- * Expand every registered shortcode inside an HTML string.
- * Runs up to `depth` passes so a shortcode may emit another shortcode.
- */
+// Expand every registered shortcode inside an HTML string. Runs up to `depth` passes so a shortcode may emit another shortcode.
 export async function renderShortcodes(
   html: string,
   ctx: ShortcodeContext = {},
   depth = 3,
 ): Promise<string> {
-  if (!html) return html;
+  // Every registered shortcode is spelled `[name ...]`, so a body with no
+  // `[` anywhere cannot match: bail before the registry read and the three
+  // full-string scans (escape pass, up to `depth` exec passes, restore pass).
+  if (!html || html.indexOf("[") === -1) return html;
   const registry = applyFilters(HOOKS.shortcodes, { shortcodes: store() }).shortcodes;
   if (!registry.size) return html;
 
@@ -100,6 +97,7 @@ export async function renderShortcodes(
     .map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("|");
 
+  // Protect `[[name ...]]` so it survives as literal text.
   let out = html.replace(
     new RegExp(`\\[\\[(${names})([^\\]]*)\\]\\]`, "gi"),
     (_all, n: string, a: string) => `${ESCAPE_TOKEN}${n}${a}${ESCAPE_TOKEN}`,
@@ -123,6 +121,7 @@ export async function renderShortcodes(
     }
     if (!matches.length) break;
 
+    // Render sequentially from the end so indices stay valid.
     for (let i = matches.length - 1; i >= 0; i--) {
       const item = matches[i];
       const def = registry.get(item.name);
@@ -140,9 +139,12 @@ export async function renderShortcodes(
     }
   }
 
+  // Restore escaped literals.
   const restore = new RegExp(`${ESCAPE_TOKEN}([\\s\\S]*?)${ESCAPE_TOKEN}`, "g");
   return out.replace(restore, (_a, body: string) => `[${body}]`);
 }
+
+/* --------------------------------------------------------------- built-ins */
 
 function registerBuiltins() {
   registerShortcode({
@@ -373,6 +375,7 @@ function registerBuiltins() {
   });
 }
 
+// Register once per process (idempotent thanks to the Map).
 if (!store().size) registerBuiltins();
 
 /** Explicit initialiser for call sites that must guarantee registration. */

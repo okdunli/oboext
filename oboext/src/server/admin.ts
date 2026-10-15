@@ -540,6 +540,19 @@ export async function deletePost(user: SessionUser, id: number) {
   return { id };
 }
 
+export const BULK_CONTENT_ACTIONS = ["publish", "draft", "archive", "delete"] as const;
+export type BulkContentAction = (typeof BULK_CONTENT_ACTIONS)[number];
+
+// One whitelist for every bulk content route (posts, pages). The posts route
+// used to pass the raw body string straight into bulkPosts, whose else-branch
+// defaults to "draft" — so a typo ("publsh") or a junk value silently
+// mass-drafted the selection instead of failing. Unknown action -> null.
+export function parseBulkAction(raw: unknown): BulkContentAction | null {
+  return typeof raw === "string" && (BULK_CONTENT_ACTIONS as readonly string[]).includes(raw)
+    ? (raw as BulkContentAction)
+    : null;
+}
+
 export async function bulkPosts(
   user: SessionUser | null,
   ids: number[],

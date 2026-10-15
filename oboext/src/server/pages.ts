@@ -1,5 +1,5 @@
 // Static pages service — ported from lib/services/pages.ts + metas.ts.
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { pages as pagesTable, type Block, type Page } from "./schema.js";
 import type { SessionUser } from "./auth.js";
@@ -374,4 +374,34 @@ export async function deletePage(user: SessionUser | null, id: number): Promise<
   await db.delete(pagesTable).where(eq(pagesTable.id, id));
   invalidateContentCaches();
   return { id };
+}
+
+// Bulk sibling of the single-row writes above. Pages carry no authorId, so
+// requirePageManager is the whole contract - editors/admins only, exactly
+// like updatePage/deletePage. Mirrors bulkPosts' shape (one UPDATE/DELETE per
+// action, never a loop) and its publish semantics (COALESCE keeps the first
+// publish time).
+export async function bulkPages(
+  user: SessionUser | null,
+  ids: number[],
+  action: "publish" | "draft" | "archive" | "delete",
+): Promise<{ affected: number }> {
+  requirePageManager(user);
+  const cleanIds = ids.filter((n) => Number.isInteger(n) && n > 0);
+  if (!cleanIds.length) return { affected: 0 };
+  if (action === "delete") {
+    await db.delete(pagesTable).where(inArray(pagesTable.id, cleanIds));
+  } else {
+    const status = action === "publish" ? "published" : action === "archive" ? "archived" : "draft";
+    await db
+      .update(pagesTable)
+      .set(
+        action === "publish"
+          ? { status, publishedAt: sql`COALESCE(${pagesTable.publishedAt}, now())`, updatedAt: new Date() }
+          : { status, updatedAt: new Date() },
+      )
+      .where(inArray(pagesTable.id, cleanIds));
+  }
+  invalidateContentCaches();
+  return { affected: cleanIds.length };
 }

@@ -1,11 +1,7 @@
 <script>
-  // /api/pages
-  //   GET   page list (?status=&limit=&offset=). Guests are forced to
-  //         status=published (original app/api/pages parity); staff with
-  //         content:read may pass any status.
-  //   POST  create a page (content:update:any — editors/admins only)
-  import { apiGate, readBody, can } from "@server/admin";
-  import { adminListPages, listPublishedPages, createPage } from "@server/pages";
+  // /api/pages GET page list (?status=&limit=&offset=).
+  import { apiGate, readBody, jsonFail, can, parseBulkAction } from "@server/admin";
+  import { adminListPages, listPublishedPages, createPage, bulkPages } from "@server/pages";
 
   export async function GET(request) {
     return apiGate(async () => {
@@ -29,6 +25,21 @@
         status: 201,
         headers: { "content-type": "application/json; charset=utf-8" },
       });
+    });
+  }
+
+  // Bulk status/delete. Action is whitelisted (a typo must 422, never silently
+  // fall through to "draft"); ids must be a non-empty array of positive ints.
+  export async function PATCH(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const action = parseBulkAction(body.action);
+      if (!action) return jsonFail("未知的批量操作", 422);
+      const ids = Array.isArray(body.ids)
+        ? body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+        : [];
+      if (!ids.length) return jsonFail("未选择任何项目", 422);
+      return bulkPages(getContext().user, ids, action);
     });
   }
 </script>

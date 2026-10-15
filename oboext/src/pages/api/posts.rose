@@ -1,16 +1,12 @@
 <script>
-  // /api/posts
-  //   GET    public post list (?status=&authorId=&categoryId=&tagId=&search=
-  //          &limit=&offset=). Unauthenticated callers only ever see published
-  //          content (the site search popover uses this hot path to decide
-  //          "unique hit → jump straight to the post").
-  //   POST   create a post
-  //   PATCH  bulk action { ids, action: publish|draft|archive|delete }
+  // /api/posts GET public post list (?status=&authorId=&categoryId=&tagId=&search= &limit=&offset=).
   import {
     apiGate,
     readBody,
+    jsonFail,
     createPost,
     bulkPosts,
+    parseBulkAction,
   } from "@server/admin";
   import { listPosts } from "@server/queries";
 
@@ -46,10 +42,13 @@
   export async function PATCH(request) {
     return apiGate(async () => {
       const body = await readBody(request);
+      const action = parseBulkAction(body.action);
+      if (!action) return jsonFail("未知的批量操作", 422);
       const ids = Array.isArray(body.ids)
-        ? body.ids.map(Number).filter((n) => Number.isInteger(n))
+        ? body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
         : [];
-      return bulkPosts(getContext().user, ids, body.action);
+      if (!ids.length) return jsonFail("未选择任何项目", 422);
+      return bulkPosts(getContext().user, ids, action);
     });
   }
 </script>

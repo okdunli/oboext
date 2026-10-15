@@ -134,7 +134,7 @@ class DeploymentAutomation {
       this.log('检查静态资源...');
       const staticFiles = [
         'public/theme.css',
-        'public/theme.js',
+        'public/pjax.js',
         'public/icons-sprite.svg',
         'public/icons-sprite.css'
       ];

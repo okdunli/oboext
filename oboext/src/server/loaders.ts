@@ -1967,13 +1967,19 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
       .filter(Boolean);
     const sec = await getAdminSecurity();
     if (sec.entryEnabled && decoded.join("/") === sec.entryPath.replace(/^\//, "")) {
+      const locale = localeOf(ctx);
+      const t = makeT(locale);
       return {
         kind: "secret-entry",
-        head: `<title>登录</title><meta name="robots" content="noindex, nofollow">`,
-        main: secretEntryPageHtml({
-          enabled: sec.captchaEnabled,
-          mode: sec.captchaEnabled ? sec.captchaMode : null,
-        }),
+        head: `<title>${t("login.page_title")}</title><meta name="robots" content="noindex, nofollow">`,
+        main: secretEntryPageHtml(
+          {
+            enabled: sec.captchaEnabled,
+            mode: sec.captchaEnabled ? sec.captchaMode : null,
+          },
+          t,
+          locale
+        ),
       };
     }
     const registerCfg = await getPublicRegisterConfig();

@@ -42,6 +42,8 @@
 
   <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
   <meta name="robots" content="index, follow">
+  <meta name="color-scheme" content={publicPath() ? "light dark" : "dark"}>
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta property="og:title" content={chrome().siteTitle}>
   <meta property="og:description" content={chrome().siteDescription}>
   <meta property="og:type" content="website">

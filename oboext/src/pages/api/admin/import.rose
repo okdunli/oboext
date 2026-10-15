@@ -1,0 +1,37 @@
+<script>
+  // POST /api/admin/import — multipart: file + policy(skip|overwrite) + dryRun(1).
+  // dryRun=1 returns the plan only (counts, conflicts, issues); otherwise the
+  // plan is applied through the normal create/update paths.
+  import { apiGate, jsonFail, requireCap } from "@server/admin";
+  import { buildImportPlan, applyImport, summarizePlan, IMPORT_MAX_BYTES } from "@server/import";
+  import { invalidateContentCaches } from "@server/cache";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      let form;
+      try {
+        form = await request.formData();
+      } catch {
+        return jsonFail("导入请求必须是 multipart 表单上传", 400);
+      }
+      const file = form.get("file");
+      if (!(file instanceof File) || file.size === 0) {
+        return jsonFail("请选择有效的导入文件", 400);
+      }
+      if (file.size > IMPORT_MAX_BYTES) {
+        return jsonFail("文件过大（上限 2MB）", 400);
+      }
+      const policy = form.get("policy") === "overwrite" ? "overwrite" : "skip";
+      const dryRun = form.get("dryRun") === "1";
+      const text = await file.text();
+      const plan = await buildImportPlan(text);
+      if (dryRun) {
+        return { dryRun: true, ...summarizePlan(plan), issues: [...plan.posts.issues, ...plan.pages.issues] };
+      }
+      const applied = await applyImport(getContext().user, plan, policy);
+      await invalidateContentCaches();
+      return { dryRun: false, ...summarizePlan(plan), applied };
+    });
+  }
+</script>

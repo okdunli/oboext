@@ -1,0 +1,40 @@
+-- Indexes for the ADMIN listings, which order by updated_at DESC.
+--
+-- 0018 covered the public listings (status + published_at). The admin
+-- listings (adminListPosts / adminListPages) sort by updated_at DESC, and no
+-- index provides that order today, so every admin list request asks the
+-- planner to sort the whole filtered set:
+--
+--   Limit -> Sort (Sort Key: updated_at DESC) -> Index Scan using posts_status_idx
+--
+-- Measured before this migration with tools/admin-list-plan-check.mts
+-- (EXPLAIN without ANALYZE against a copy of the data directory, so nothing
+-- was executed and the live lock was never contested). The plan above is the
+-- "before" for both posts and pages; comments was included as a control and
+-- is already ordered by its primary key.
+--
+-- Honest framing, same as 0018: at the current row counts (posts ~20,
+-- pages ~4) the planner still prefers a scan, because scanning beats an index
+-- walk on a table that small. These indexes are insurance for growth - the
+-- cheap way to already have them when the table is large enough to need them.
+-- Re-check the table size before running this against a database that has
+-- grown a lot since: CREATE INDEX takes a SHARE lock and blocks writes for
+-- the duration of the build.
+--
+-- id DESC rides along as the third column because updated_at is not unique:
+-- the listings sort by (updated_at DESC, id DESC) so the offset walk and the
+-- keyset walk return the same sequence, and an index that covers only the
+-- first key would leave the planner a Sort node for the tiebreaker.
+--
+-- Composite, status first, because every listing tab filters on status and
+-- then sorts; the reverse column order would not be usable for that plan.
+-- The all-statuses tab (no filter) is NOT covered by this index and still
+-- scans - a leading-column equality is what makes an ordered index scan
+-- possible, and that tab has none.
+--
+-- NOT UNIQUE: nothing about (status, updated_at, id) needs to be unique -
+-- id alone already is, and a unique constraint here would buy nothing while
+-- costing an extra uniqueness check per write.
+CREATE INDEX IF NOT EXISTS "posts_status_updated_idx" ON "posts" ("status", "updated_at" DESC, "id" DESC);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "pages_status_updated_idx" ON "pages" ("status", "updated_at" DESC, "id" DESC);

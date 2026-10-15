@@ -127,6 +127,7 @@ export async function adminPosts(p: any, ctx: Ctx) {
     search: p?.search || undefined,
     limit,
     offset: (page - 1) * limit,
+    after: p?.after || undefined,
   });
   return { ...out, page, limit };
 }
@@ -159,6 +160,7 @@ export async function adminPages(p: any, ctx: Ctx) {
     status: p?.status || undefined,
     limit,
     offset: (page - 1) * limit,
+    after: p?.after || undefined,
   });
   return { ...out, page, limit };
 }
@@ -371,6 +373,7 @@ export async function adminComments(p: any, ctx: Ctx) {
     status: p?.status || undefined,
     limit,
     offset: (page - 1) * limit,
+    after: p?.after || undefined,
   });
   return { ...out, page, limit };
 }

@@ -1,5 +1,5 @@
 // Static pages service — ported from lib/services/pages.ts + metas.ts.
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { pages as pagesTable, type Block, type Page } from "./schema.js";
 import type { SessionUser } from "./auth.js";
@@ -8,6 +8,7 @@ import { blocksToPlainText } from "./admin.js";
 import { getPageMetas, setPageMetas } from "./metas.js";
 import { getPermalinkConfig, pageUrlFor } from "./links.js";
 import { invalidateContentCaches, memoQuery, SIDEBAR_TTL } from "./cache.js";
+import { decodeCursor, encodeCursor } from "./cursor.js";
 
 export type PageView = Page & {
   url: string;
@@ -225,29 +226,54 @@ export async function getPublishedPageById(id: number): Promise<PageView | null>
 /** Admin page list — all statuses, newest-updated first, like the original. */
 export async function adminListPages(
   user: SessionUser | null,
-  f: { status?: string; limit?: number; offset?: number } = {},
-): Promise<{ items: (Page & { url: string })[]; total: number }> {
+  f: { status?: string; limit?: number; offset?: number; after?: string } = {},
+): Promise<{ items: (Page & { url: string })[]; total: number; nextCursor?: string }> {
   requireCap(user, "content:read");
   const limit = Math.min(f.limit ?? 50, 100);
   const offset = f.offset ?? 0;
-  const where = f.status ? eq(pagesTable.status, f.status as any) : undefined;
+  const conditions = [];
+  if (f.status) conditions.push(eq(pagesTable.status, f.status as any));
+  // Keyset on (updated_at, id), same shape as adminListPosts: the timestamp
+  // rides the cursor as the database's own text so microseconds survive.
+  const cur = decodeCursor(f.after);
+  const keyset = cur && cur.t != null;
+  if (keyset && cur) {
+    const boundary = sql`${cur.t}::timestamptz`;
+    conditions.push(
+      or(
+        lt(pagesTable.updatedAt, boundary),
+        and(eq(pagesTable.updatedAt, boundary), lt(pagesTable.id, cur.id)),
+      ),
+    );
+  }
+  const where = conditions.length ? and(...conditions) : undefined;
   // Rows, total count and permalink config are mutually independent - one
   // wave instead of rows -> (count + config).
+  const rowsQ = db
+    .select({
+      page: pagesTable,
+      updatedAtText: sql<string>`${pagesTable.updatedAt}::text`,
+    })
+    .from(pagesTable)
+    .where(where)
+    .orderBy(desc(pagesTable.updatedAt), desc(pagesTable.id))
+    .limit(limit);
+  const rowsP = keyset ? rowsQ : rowsQ.offset(offset);
   const [rows, totalRows, cfg] = await Promise.all([
-    db
-      .select()
-      .from(pagesTable)
-      .where(where)
-      .orderBy(desc(pagesTable.updatedAt))
-      .limit(limit)
-      .offset(offset),
+    rowsP,
     db.select({ n: sql<number>`count(*)` }).from(pagesTable).where(where),
     getPermalinkConfig(),
   ]);
-  return {
-    items: rows.map((r) => ({ ...r, url: pageUrlFor(cfg, r) })),
+  const items = rows.map((r) => ({ ...r.page, url: pageUrlFor(cfg, r.page) }));
+  const out: { items: typeof items; total: number; nextCursor?: string } = {
+    items,
     total: Number(totalRows[0]?.n ?? 0),
   };
+  if (rows.length === limit) {
+    const last = rows[rows.length - 1];
+    out.nextCursor = encodeCursor({ t: last.updatedAtText, id: last.page.id });
+  }
+  return out;
 }
 
 /** Editor read: any status, custom fields as an editable {key,value} array. */

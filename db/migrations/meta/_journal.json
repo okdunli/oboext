@@ -141,6 +141,13 @@
       "when": 1790672800000,
       "tag": "0019_require_author_url",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790760000000,
+      "tag": "0020_list_updated_indexes",
+      "breakpoints": true
     }
   ]
 }

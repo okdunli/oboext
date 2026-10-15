@@ -1,5 +1,5 @@
 // Admin service layer + Web API helpers — ported from the original app (lib/services/{posts,comments,taxonomies,settings,users,dashboard}.ts).
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
 import { invalidateContentCaches } from "./cache.js";
 import {
@@ -32,6 +32,7 @@ import { hashPassword } from "./auth.js";
 import { HOOKS, applyAsyncFilters, doAction } from "./hooks.js";
 import { createLogger } from "./logger.js";
 import { passwordError } from "./password-policy.js";
+import { decodeCursor, encodeCursor } from "./cursor.js";
 import { v, parseOrThrow } from "./validate.js";
 const log = createLogger("admin");
 
@@ -279,6 +280,7 @@ export type PostListFilter = {
   search?: string;
   limit?: number;
   offset?: number;
+  after?: string;
 };
 
 /** Admin post list — all statuses, joined author + taxonomy names. */
@@ -295,23 +297,45 @@ export async function adminListPosts(user: SessionUser, f: PostListFilter = {}) 
     conditions.push(
       sql`(${posts.title} ILIKE ${"%" + f.search + "%"} OR ${posts.excerpt} ILIKE ${"%" + f.search + "%"})`,
     );
+  // Keyset window on (updated_at, id). The timestamp rides the cursor as the
+  // database's own text form: timestamptz is microsecond precision and a JS
+  // Date (milliseconds) would silently skip rows that share a millisecond.
+  // When a cursor is present it replaces OFFSET entirely - mixing the two
+  // would page from the wrong origin.
+  const cur = decodeCursor(f.after);
+  const keyset = cur && cur.t != null;
+  if (keyset && cur) {
+    const boundary = sql`${cur.t}::timestamptz`;
+    conditions.push(
+      or(
+        lt(posts.updatedAt, boundary),
+        and(eq(posts.updatedAt, boundary), lt(posts.id, cur.id)),
+      ),
+    );
+  }
   const where = conditions.length ? and(...conditions) : undefined;
 
   // One wave: the row window, the total count and the taxonomy lookup tables
   // are mutually independent. Only attachTaxonomyIds needs the row ids, so it
   // forms the single dependent second step (the old shape chained four serial
   // awaits: rows -> count -> taxIds -> cat/tag/config).
-  const rowsP = db
+  //
+  // id DESC is the sort tiebreaker: updated_at is not unique, and a total
+  // order is what makes the offset walk and the keyset walk return the same
+  // sequence. The index in migration 0020 carries both columns so the planner
+  // can still serve this order without a Sort node.
+  const rowsQ = db
     .select({
       post: posts,
       authorName: users.name,
+      updatedAtText: sql<string>`${posts.updatedAt}::text`,
     })
     .from(posts)
     .leftJoin(users, eq(posts.authorId, users.id))
     .where(where)
-    .orderBy(desc(posts.updatedAt))
-    .limit(limit)
-    .offset(offset);
+    .orderBy(desc(posts.updatedAt), desc(posts.id))
+    .limit(limit);
+  const rowsP = keyset ? rowsQ : rowsQ.offset(offset);
   const totalP = db
     .select({ n: sql<number>`count(*)` })
     .from(posts)
@@ -339,7 +363,18 @@ export async function adminListPosts(user: SessionUser, f: PostListFilter = {}) 
     categories: (tax.cats[r.post.id] ?? []).map((id) => catName.get(id)).filter(Boolean),
     tags: (tax.tags[r.post.id] ?? []).map((id) => tagName.get(id)).filter(Boolean),
   }));
-  return { items, total: Number(totalRows?.n ?? 0) };
+  const out: { items: typeof items; total: number; nextCursor?: string } = {
+    items,
+    total: Number(totalRows?.n ?? 0),
+  };
+  // A full page means there may be more rows; the cursor points at the last
+  // row's own (updated_at, id), which is the exact resume point. A short page
+  // is the end of the list and carries no cursor.
+  if (rows.length === limit) {
+    const last = rows[rows.length - 1];
+    out.nextCursor = encodeCursor({ t: last.updatedAtText, id: last.post.id });
+  }
+  return out;
 }
 
 export async function adminGetPost(user: SessionUser, id: number) {
@@ -654,22 +689,27 @@ async function bumpCommentCount(postType: string, postId: number, delta: number)
 
 export async function adminListComments(
   user: SessionUser,
-  f: { status?: string; limit?: number; offset?: number } = {},
+  f: { status?: string; limit?: number; offset?: number; after?: string } = {},
 ) {
   requireCap(user, "content:read");
   const limit = Math.min(f.limit ?? 50, 200);
   const offset = f.offset ?? 0;
   const conditions = [];
   if (f.status) conditions.push(eq(comments.status, f.status as any));
+  // Keyset on id: the primary key already provides the order, so the cursor
+  // is a bare id with no timestamp to round-trip.
+  const cur = decodeCursor(f.after);
+  const keyset = !!cur;
+  if (cur) conditions.push(lt(comments.id, cur.id));
   const where = conditions.length ? and(...conditions) : undefined;
 
-  const rows = await db
+  const rowsQ = db
     .select()
     .from(comments)
     .where(where)
     .orderBy(desc(comments.id))
-    .limit(limit)
-    .offset(offset);
+    .limit(limit);
+  const rows = keyset ? await rowsQ : await rowsQ.offset(offset);
   const [totalRows] = await db
     .select({ n: sql<number>`count(*)` })
     .from(comments)
@@ -692,7 +732,14 @@ export async function adminListComments(
     for (const r of gRows) titles.set(r.id, r.title);
   }
   const items = rows.map((c) => ({ ...c, postTitle: titles.get(c.postId) ?? "（已删除）" }));
-  return { items, total: Number(totalRows?.n ?? 0) };
+  const out: { items: typeof items; total: number; nextCursor?: string } = {
+    items,
+    total: Number(totalRows?.n ?? 0),
+  };
+  if (rows.length === limit) {
+    out.nextCursor = encodeCursor({ id: rows[rows.length - 1].id });
+  }
+  return out;
 }
 
 /**

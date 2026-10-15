@@ -14,7 +14,8 @@
   import { makeT, headerLocale } from "@server/i18n";
 
   export async function POST(request) {
-    const t = makeT(headerLocale(request));
+    const locale = headerLocale(request);
+    const t = makeT(locale);
     return apiGate(async () => {
       const body = await readBody(request);
       const account = String(body.account || "").trim();
@@ -38,6 +39,7 @@
           target: user.email,
           purpose: "reset",
           ip,
+          locale,
         });
         await recordLoginEvent({
           eventType: LOGIN_EVENTS.RESET_REQUEST,

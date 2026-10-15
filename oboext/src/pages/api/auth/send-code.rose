@@ -11,7 +11,8 @@
   import { makeT, headerLocale } from "@server/i18n";
 
   export async function POST(request) {
-    const t = makeT(headerLocale(request));
+    const locale = headerLocale(request);
+    const t = makeT(locale);
     return apiGate(async () => {
       const body = await readBody(request);
       const channel = body.channel === "sms" ? "sms" : "email";
@@ -40,7 +41,7 @@
             409,
           );
         }
-        const out = await sendVerificationCode({ channel, target, purpose: "bind", ip });
+        const out = await sendVerificationCode({ channel, target, purpose: "bind", ip, locale });
         return { sent: true, resendAfter: out.resendAfter };
       }
 
@@ -58,6 +59,7 @@
           target,
           purpose: "register",
           ip,
+          locale,
         });
         return { sent: true, resendAfter: out.resendAfter };
       }
@@ -78,6 +80,7 @@
         target,
         purpose: "login",
         ip,
+        locale,
       });
       return { sent: true, resendAfter: out.resendAfter };
     }, t);

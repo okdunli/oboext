@@ -162,6 +162,10 @@ export type PostPageParts = {
 
   postBottom?: string;
 
+  /** 上一篇/下一篇 navigation card (adjacent.ts adjacentHtml). Rendered after
+   *  the comments block by every theme; empty string collapses the slot. */
+  adjacentHtml?: string;
+
   sidebarWidgets?: string;
 
   canonical?: string;
@@ -672,7 +676,7 @@ const skyscraperChrome: ThemeChrome = {
       extra: parts.extra,
     }),
   postPage: (parts) =>
-    R.postPage(parts.post, parts.related, parts.commentsHtml, parts.metaItems ?? [], parts.bodyHtml, parts.blogIndex),
+    R.postPage(parts.post, parts.related, parts.commentsHtml + (parts.adjacentHtml || ""), parts.metaItems ?? [], parts.bodyHtml, parts.blogIndex),
   pagePage: (parts) =>
     R.pagePage(parts.page, parts.recent, parts.commentsHtml, parts.bodyHtml),
 };
@@ -1362,6 +1366,7 @@ function defaultPostPage(parts: PostPageParts): string {
     defaultRelatedSection(parts.relatedTaxonomy || []) +
     (parts.postBottom || "") +
     parts.commentsHtml +
+    (parts.adjacentHtml || "") +
     `</article>` +
     `<div class="space-y-6">` +
 
@@ -1680,6 +1685,7 @@ function pseudoPostPage(parts: PostPageParts): string {
     toc +
     related +
     comments +
+    (parts.adjacentHtml || "") +
     `<aside style="margin-top:48px">${parts.widgets || ""}</aside>` +
     `</div></div>`;
 }
@@ -1994,6 +2000,7 @@ function cmPostPage(parts: PostPageParts): string {
     toc +
     related +
     cmSection("log replies", `// ${p.commentsCount} response(s)`, "", parts.commentsHtml) +
+    (parts.adjacentHtml || "") +
     cmWidgets(parts.widgets || "", false) +
     `</article>`;
 }
@@ -2808,6 +2815,7 @@ function bmixPostPage(parts: PostPageParts): string {
         parts.commentsHtml +
         `</div></div>`
       : "") +
+    (parts.adjacentHtml || "") +
     `</div></div></div></div>`;
 }
 

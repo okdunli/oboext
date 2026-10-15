@@ -147,6 +147,7 @@ export function invalidateContentCaches(): void {
   invalidatePrefix("sred:");
   invalidatePrefix("rel:");
   invalidatePrefix("reltax:");
+  invalidatePrefix("adj:");
   invalidatePrefix("rand:");
   invalidatePrefix("cmts:");
   invalidatePrefix("widget:");

@@ -35,6 +35,7 @@ import {
   tagUrlFor,
 } from "./links.js";
 import { attachPostMetas, getPostMetas } from "./metas.js";
+import { buildAdjacent, type AdjacentPair, type AdjacentRow } from "./adjacent.js";
 import { uploadExists } from "./storage.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ServiceError } from "./errors.js";
@@ -685,6 +686,63 @@ export async function relatedPosts(postId: number, n = 4): Promise<PostView[]> {
       limit: n,
     });
     return items;
+  });
+}
+
+/**
+ * The two neighbours of a post for 上一篇/下一篇 navigation.
+ *
+ * One statement, one round trip: two LIMIT 1 selects UNION ALL'd, each
+ * direction-tagged, so a cold post view pays a single Neon RTT for the pair.
+ * Ordering key is `coalesce(published_at, created_at)` — the same total
+ * order the visibility gate implies, so posts with a null publishedAt (never
+ * scheduled) still have a position instead of vanishing from the sequence.
+ * The `posts_status_published_idx` (status, published_at) index serves the
+ * range scan; `id` is only a tiebreaker inside the same key value.
+ *
+ * Memoized per (post, key): the pair changes only when a neighbour is
+ * published/unpublished/re-dated, and invalidateContentCaches drops the entry
+ * on every content write. The key rides the memo key so re-dating the current
+ * post itself cannot serve a stale pair.
+ */
+export async function getAdjacentPosts(postId: number, key: Date): Promise<AdjacentPair> {
+  // The key rides as an ISO string cast with ::timestamptz — binding a raw JS
+  // Date makes the driver compare against a non-timestamp (the R25 cursor
+  // lesson: `${text}::timestamptz`, never a bare Date object).
+  const keyIso = key.toISOString();
+  return memoQuery(`adj:${postId}:${keyIso}`, SIDEBAR_TTL, async () => {
+    const [rows, cfg] = await Promise.all([
+      db.execute(sql`
+        select * from (
+          (select 'newer' as "dir", "id", "title", "slug", "published_at", "created_at"
+             from ${posts}
+            where "status" = 'published'
+              and ("published_at" is null or "published_at" <= now())
+              and "id" <> ${postId}
+              and coalesce("published_at", "created_at") > ${keyIso}::timestamptz
+            order by coalesce("published_at", "created_at") asc, "id" asc
+            limit 1)
+          union all
+          (select 'older' as "dir", "id", "title", "slug", "published_at", "created_at"
+             from ${posts}
+            where "status" = 'published'
+              and ("published_at" is null or "published_at" <= now())
+              and "id" <> ${postId}
+              and coalesce("published_at", "created_at") < ${keyIso}::timestamptz
+            order by coalesce("published_at", "created_at") desc, "id" desc
+            limit 1)
+        ) t
+      `),
+      getPermalinkConfig(),
+    ]);
+    const list = (Array.isArray(rows) ? rows : ((rows as any).rows ?? [])) as AdjacentRow[];
+    return buildAdjacent(list, (r) =>
+      postUrlFor(cfg, {
+        id: Number(r.id),
+        slug: String(r.slug ?? ""),
+        publishedAt: r.publishedAt == null ? null : new Date(r.publishedAt as string),
+      }),
+    );
   });
 }
 

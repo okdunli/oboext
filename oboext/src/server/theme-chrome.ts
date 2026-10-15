@@ -291,6 +291,8 @@ const GLOBALS_BODY_UTILITIES = `.min-h-screen{min-height:100vh}
 #rv-toc-toggle{position:fixed;right:16px;bottom:22px;width:46px;height:46px;border-radius:50%;border:1px solid var(--border,#e5e7eb);background:var(--surface,#fff);color:var(--accent,#e91e63);font-size:20px;line-height:1;cursor:pointer;z-index:9998;box-shadow:0 6px 18px rgba(0,0,0,.14);display:none;align-items:center;justify-content:center}
 #rv-toc-toggle.show{display:flex}
 @media (max-width:768px){#rv-toc{right:10px;left:10px;max-width:none;transform:none;top:auto;bottom:80px}}
+img{height:auto}
+.prose-cms img,.post-content img,.bmx-blocks img,.cm-content img{max-width:100%;height:auto}
 `;
 
 

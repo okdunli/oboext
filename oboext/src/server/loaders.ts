@@ -398,6 +398,17 @@ async function sideWidgetsFor(themeSlug: string): Promise<string> {
   return R.widgetAreaHtml(await getAreaWidgets(themeSlug, "sidebar"), wrap);
 }
 
+// Sync twin of sideWidgetsFor: identical markup, but over an area that was
+// already read, so a post view does not issue the sidebar query twice.
+function sideWidgetsHtml(
+  themeSlug: string,
+  items: Awaited<ReturnType<typeof getAreaWidgets>>,
+): string {
+  if (themeSlug !== "codeman" && themeSlug !== "pseudolinear") return "";
+  const wrap = themeSlug === "pseudolinear" ? "pl-side-stack" : "sk-widget-area";
+  return R.widgetAreaHtml(items, wrap);
+}
+
 async function bmixDrawerPosts(themeSlug: string): Promise<PostView[] | undefined> {
   if (themeSlug !== "bluemix") return undefined;
   // Sidebar reads run on every page: memoize 60s (new posts surface on the
@@ -1073,6 +1084,14 @@ async function postDetail(
   // reads neither. Computing the date-based set unconditionally ran ~6
   // pointless queries per post view on every per-cookie render-cache miss.
   const usesRelated = themeSlug === "bluemix" || themeSlug === "pseudolinear" || themeSlug === "codeman";
+  const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
+  const isDefault = themeSlug === "default";
+  const isBluemix = themeSlug === "bluemix";
+  // Bluemix renders both areas too (PostPage.tsx: sidebar after PostSidebar).
+  // Every theme but skyscraper renders a sidebar area, so the sidebar read is
+  // not gated on widgetAreas - codeman/pseudolinear paint it through `widgets`.
+  const widgetAreas = isDefault || isBluemix;
+  const wantsSidebar = themeSlug !== "skyscraper";
   // The view-count write used to be awaited AFTER the reads block — a whole
   // extra serial round trip on Neon (~550ms) tacked onto every render-cache
   // miss. It reads nothing the reads produce, so it rides the same wave and
@@ -1086,10 +1105,58 @@ async function postDetail(
       }
     }
   })();
-  // The wave: hydration of the raw row rides WITH the comments/related reads
-  // instead of ahead of them - one Neon round trip fewer on a cold view.
-  const [post, related, settings, items, popular, random, cfg, relatedTaxonomy] = await Promise.all([
-    hydrate(row),
+  // One hydration, three consumers. The body render and the plugin head chain
+  // off it, so body rendering (pure CPU without DB-backed shortcodes, one
+  // round trip with them) overlaps the reads wave instead of running after it,
+  // and the head follows the post instead of re-reading anything.
+  const hydratedP = safe(hydrate(row));
+  const bodyHtmlP = hydratedP.then((p) => R.buildPostBody(p, "post", highlight));
+  const pluginHeadP = Promise.all([hydratedP, settingsP])
+    .then(([post, settings]) => ({
+      kind: "post" as const,
+      siteTitle: settings.siteTitle ?? "",
+      siteUrl: ctx.origin,
+      title: post.seoTitle || post.title,
+      description: post.seoDescription || post.excerpt || settings.siteDescription || "",
+      image: post.featuredImage || undefined,
+      publishedAt: post.publishedAt ? new Date(post.publishedAt).toISOString() : null,
+      updatedAt: post.updatedAt ? new Date(post.updatedAt).toISOString() : null,
+      author: post.author?.name,
+      url: `${ctx.origin}${post.url}`,
+      breadcrumbs: [
+        { label: "首页", href: "/" },
+        { label: post.title, href: post.url },
+      ],
+    }))
+    .then((headContext) => pluginHeadHtml(headContext));
+  // The default theme's sidebar bundle is five more queries on a cold 60s
+  // window, and it needs the theme settings only to read `useCustomIcons`.
+  // Pre-issuing it here folds the old second wave into the opening one.
+  const tsP = isDefault ? safe(getActiveThemeSettings()) : null;
+  const sideDataP = tsP
+    ? tsP.then((t) => defaultSidebarData(true, t?.useCustomIcons === true))
+    : null;
+  // The wave: everything that needs no other read's result issues together -
+  // hydration, the comments/related reads, the body render, the plugin head
+  // and both widget areas. One Neon round trip on a cold view.
+  const [
+    post,
+    bodyHtml,
+    pluginHead,
+    related,
+    settings,
+    items,
+    popular,
+    random,
+    cfg,
+    relatedTaxonomy,
+    bottomItems,
+    sideItems,
+    sidebarData,
+  ] = await Promise.all([
+    hydratedP,
+    bodyHtmlP,
+    pluginHeadP,
     usesRelated ? relatedPosts(postId, relatedN) : Promise.resolve([] as PostView[]),
     settingsP,
     listPostCommentsCached(postId, "post"),
@@ -1097,6 +1164,13 @@ async function postDetail(
     randomP,
     cfgP,
     themeSlug === "default" ? relatedByTaxonomy(postId, 4) : Promise.resolve(undefined),
+    widgetAreas
+      ? getAreaWidgets(themeSlug, "post-bottom")
+      : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),
+    wantsSidebar
+      ? getAreaWidgets(themeSlug, "sidebar")
+      : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),
+    sideDataP ?? Promise.resolve(undefined),
     viewsWrite,
   ]);
   const config = resolveCommentConfig(settings);
@@ -1124,26 +1198,8 @@ async function postDetail(
     post: { ...post, plainText: R.blocksToPlainText(post.content) },
     items: [],
   });
-  const headContext: HeadContext = {
-    kind: "post",
-    siteTitle: settings.siteTitle ?? "",
-    siteUrl: ctx.origin,
-    title: post.seoTitle || post.title,
-    description: post.seoDescription || post.excerpt || settings.siteDescription || "",
-    image: post.featuredImage || undefined,
-    publishedAt: post.publishedAt ? new Date(post.publishedAt).toISOString() : null,
-    updatedAt: post.updatedAt ? new Date(post.updatedAt).toISOString() : null,
-    author: post.author?.name,
-    url: `${ctx.origin}${post.url}`,
-    breadcrumbs: [
-      { label: "首页", href: "/" },
-      { label: post.title, href: post.url },
-    ],
-  };
   const tc = getThemeChrome(themeSlug);
 
-  const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
-  const bodyHtml = await R.buildPostBody(post, "post", highlight);
   // Reading time from the rendered body: CJK counts per character (~400/min),
   // everything else per word (~200/min). Floor of 1 so short posts still read
   // as "about a minute". Rides the postMeta payload so every theme's meta row
@@ -1170,26 +1226,9 @@ async function postDetail(
     ? `<div class="mt-8 flex flex-wrap gap-2 border-t border-[var(--border)] pt-6">${(post.tags || []).map((t) => `<a href="${R.esc(t.url || tagUrlFor(cfg, t))}" class="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]">#${R.esc(t.name)}</a>`).join("")}</div>`
     : "";
 
-  const isDefault = themeSlug === "default";
-  const isBluemix = themeSlug === "bluemix";
-  // Bluemix renders both areas too (PostPage.tsx: sidebar after PostSidebar. All reads are independent — one batch instead of serial awaits).
-  const widgetAreas = isDefault || isBluemix;
-  // The default theme's sidebar bundle is five more queries on a cold 60s window, and it needs the theme settings only to read `useCustomIcons`.
-  const tsP = isDefault ? safe(getActiveThemeSettings()) : null;
-  const sideDataP = tsP
-    ? tsP.then((t) => defaultSidebarData(true, t?.useCustomIcons === true))
-    : null;
-  const [widgets, bottomItems, sideItems, pluginHead, sidebarData] = await Promise.all([
-    sideWidgetsFor(themeSlug),
-    widgetAreas
-      ? getAreaWidgets(themeSlug, "post-bottom")
-      : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),
-    widgetAreas
-      ? getAreaWidgets(themeSlug, "sidebar")
-      : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),
-    pluginHeadHtml(headContext),
-    sideDataP ?? Promise.resolve(undefined),
-  ]);
+  // Sidebar widgets for codeman/pseudolinear paint the area read in the
+  // opening wave; the other themes return "" and use sidebarWidgets below.
+  const widgets = sideWidgetsHtml(themeSlug, sideItems);
   const postBottom = widgetAreas
     ? R.widgetAreaHtml(bottomItems, isBluemix ? "model-wrapper bmx-ad-area" : "space-y-6")
     : "";
@@ -1252,14 +1291,41 @@ async function pageDetail(
   const row = payload.preloaded ?? (await getPublishedPageRow(payload.slug));
   if (!row) return { notFound: true };
 
-  const [page, settings, recent, items, themeSlug] = await Promise.all([
-    hydratePage(row),
-    settingsP,
-    themeSlugP
-      .then((s) => listPosts({ status: "published", limit: s === "bluemix" ? 4 : 5 })),
-    listPostCommentsCached(row.id, "page"),
-    themeSlugP,
-  ]);
+  // One hydration, three consumers: the page, its rendered body and the plugin
+  // head all chain off it, so body rendering (pure CPU without DB-backed
+  // shortcodes, one round trip with them) overlaps the reads wave instead of
+  // running after it, and the sidebar widgets need only the theme slug.
+  const hydratedPageP = safe(hydratePage(row));
+  const [page, bodyHtml, pluginHead, widgets, settings, recent, items, themeSlug] =
+    await Promise.all([
+      hydratedPageP,
+      Promise.all([hydratedPageP, themeSlugP]).then(([p, s]) =>
+        R.buildPostBody(p, "page", s === "skyscraper" || s === "bluemix"),
+      ),
+      Promise.all([hydratedPageP, settingsP])
+        .then(([p, settings]) => ({
+          kind: "page" as const,
+          siteTitle: settings.siteTitle ?? "",
+          siteUrl: ctx.origin,
+          title: p.seoTitle || p.title,
+          description: p.seoDescription || p.excerpt || settings.siteDescription || "",
+          image: p.featuredImage || undefined,
+          publishedAt: p.publishedAt ? new Date(p.publishedAt).toISOString() : null,
+          updatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString() : null,
+          url: `${ctx.origin}${p.url}`,
+          breadcrumbs: [
+            { label: "首页", href: "/" },
+            { label: p.title, href: p.url },
+          ],
+        }))
+        .then((headContext) => pluginHeadHtml(headContext)),
+      themeSlugP.then(sideWidgetsFor),
+      settingsP,
+      themeSlugP
+        .then((s) => listPosts({ status: "published", limit: s === "bluemix" ? 4 : 5 })),
+      listPostCommentsCached(row.id, "page"),
+      themeSlugP,
+    ]);
   const config = resolveCommentConfig(settings);
   const u = ctx.user as { id?: number; name?: string; email?: string } | undefined;
   const me = u && u.id ? { id: u.id, name: u.name ?? "", email: u.email ?? "" } : null;
@@ -1280,29 +1346,8 @@ async function pageDetail(
     avatar: config.avatar,
     config: { ...config },
   });
-  const headContext: HeadContext = {
-    kind: "page",
-    siteTitle: settings.siteTitle ?? "",
-    siteUrl: ctx.origin,
-    title: page.seoTitle || page.title,
-    description: page.seoDescription || page.excerpt || settings.siteDescription || "",
-    image: page.featuredImage || undefined,
-    publishedAt: page.publishedAt ? new Date(page.publishedAt).toISOString() : null,
-    updatedAt: page.updatedAt ? new Date(page.updatedAt).toISOString() : null,
-    url: `${ctx.origin}${page.url}`,
-    breadcrumbs: [
-      { label: "首页", href: "/" },
-      { label: page.title, href: page.url },
-    ],
-  };
   const tc = getThemeChrome(themeSlug);
 
-  const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
-  const [bodyHtml, widgets, pluginHead] = await Promise.all([
-    R.buildPostBody(page, "page", highlight),
-    sideWidgetsFor(themeSlug),
-    pluginHeadHtml(headContext),
-  ]);
   return {
     main: tc.pagePage({
       page,

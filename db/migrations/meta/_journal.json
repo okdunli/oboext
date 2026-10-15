@@ -148,6 +148,13 @@
       "when": 1790760000000,
       "tag": "0020_list_updated_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790846400000,
+      "tag": "0021_content_revisions",
+      "breakpoints": true
     }
   ]
 }

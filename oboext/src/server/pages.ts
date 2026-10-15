@@ -8,6 +8,7 @@ import { blocksToPlainText } from "./admin.js";
 import { getPageMetas, setPageMetas } from "./metas.js";
 import { getPermalinkConfig, pageUrlFor } from "./links.js";
 import { invalidateContentCaches, memoQuery, SIDEBAR_TTL } from "./cache.js";
+import { snapshotRevision } from "./revisions.js";
 import { decodeCursor, encodeCursor } from "./cursor.js";
 
 export type PageView = Page & {
@@ -330,6 +331,7 @@ export async function createPage(user: SessionUser | null, raw: Partial<PageInpu
     })
     .returning();
   if (input.metas) await setPageMetas(row.id, input.metas);
+  await snapshotRevision("page", row.id, null, row);
   invalidateContentCaches();
   return adminGetPage(user, row.id);
 }
@@ -356,6 +358,7 @@ export async function updatePage(user: SessionUser | null, id: number, raw: Part
     .limit(1);
   const existing = existingRow[0];
   if (!existing) throw new ServiceError("页面不存在", 404);
+  await snapshotRevision("page", id, null, existing);
 
   let slug = existing.slug;
   if (input.slug && input.slug !== existing.slug) {

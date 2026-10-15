@@ -216,16 +216,23 @@ function fontPreloadLinks(slug: string): string {
   }
 }
 
+const themeHrefCache = new Map<string, string>();
 function themeCssHref(slug: string): string {
   // Skyscraper's stylesheet is the build-time generated /public/theme.css (tools/gen.mjs inlines its fonts), so it never rides /theme-style/<slug>.
   if (slug === "skyscraper") return publicAssetHref("theme.css");
   const main = readThemeCss(slug, slug + ".css");
-  let v = String(Math.round(main.mtime));
-  try {
-    const extra = readThemeCss(slug, slug + "-extra.css");
-    if (extra.mtime) v += "-" + String(Math.round(extra.mtime));
-  } catch { /* no extra */ }
-  return `/theme-style/${slug}?v=${v}`;
+  const extra = readThemeCss(slug, slug + "-extra.css");
+  const key = slug + ":" + main.mtime + ":" + extra.mtime;
+  const hit = themeHrefCache.get(key);
+  if (hit !== undefined) return hit;
+  // The route answers `public, max-age=31536000, immutable`, so the stamp must
+  // change whenever the bytes do. mtime cannot: Vercel normalizes deployed
+  // file mtimes to one fixed epoch, so an mtime stamp is identical across
+  // deploys and an edited stylesheet keeps its old URL for up to a year.
+  const href =
+    "/theme-style/" + slug + "?v=" + fnv1a32(Buffer.from(themeCssContent(slug), "utf8"));
+  themeHrefCache.set(key, href);
+  return href;
 }
 
 /**
@@ -465,7 +472,14 @@ const SHARED_FORM_BASELINE = `
 // a regex that gets any of those wrong breaks a theme silently in production.
 // The bytes it would win are already free once the document is compressed.
 function stripCssComments(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, "");
+  return css
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    // CSS has no `//` line comment, but these sheets are authored with them.
+    // Left in, the minifier folds the newline away and the parser then reads
+    // the comment as part of the following rule's selector, silently dropping
+    // that rule. Only whole-line `//` is stripped: a `//` inside a value is a
+    // URL scheme (url(https://...)) and must survive.
+    .replace(/^[ \t]*\/\/.*$/gm, "");
 }
 
 // The assembled sheet is byte-identical for every request until a theme file

@@ -12,14 +12,16 @@
   function publicPath() {
     return !adminPath();
   }
-  function isSkyscraper() {
-    return chrome().themeSlug === "skyscraper";
+  // The public chrome layout dialect, declared by the theme's manifest
+  // ("layout"). The program switches on the DIALECT, never on a theme name.
+  function chromeLayout() {
+    return chrome().layout || "default";
   }
-  function isBluemix() {
-    return chrome().themeSlug === "bluemix";
+  function isSkyscraper() {
+    return chromeLayout() === "skyscraper";
   }
   function isNotSkyscraper() {
-    return chrome().themeSlug !== "skyscraper";
+    return chromeLayout() !== "skyscraper";
   }
   // Locale-dependent document attributes are read through this pure closure
   // instead of the chrome signal: rosefd's signal map is process-global with

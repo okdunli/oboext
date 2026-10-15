@@ -283,6 +283,7 @@ async function chromeData(pathname: string) {
     (themeSlug === "skyscraper" ? `<script src="${publicAssetHref("theme.js")}" defer></script>` : "") +
     (themeSlug !== "skyscraper" ? `<script src="${publicAssetHref("theme-pjax.js")}" defer></script>` : "") +
     (themeSlug === "bluemix" ? `<script src="${publicAssetHref("theme-bluemix.js")}" defer></script>` : "") +
+    `<script src="${publicAssetHref("reading-mode.js")}" defer></script>` +
     `<script src="${publicAssetHref("comments.js")}" defer></script>`;
   const headerItems: MenuItem[] = (headerMenu?.items ?? []) as MenuItem[];
 

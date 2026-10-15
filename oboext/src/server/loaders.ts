@@ -164,6 +164,7 @@ function chromeHeadContext(
   siteTitle: string,
   origin: string,
   blogIndex: string,
+  t: Translate,
 ): HeadContext {
   if (pathname === "/") return { kind: "home", siteTitle, siteUrl: origin };
   if (pathname === blogIndex || pathname === blogIndex + "/")
@@ -171,14 +172,14 @@ function chromeHeadContext(
       kind: "archive",
       siteTitle,
       siteUrl: origin,
-      title: "所有文章",
+      title: t("head.all_posts"),
       breadcrumbs: [
-        { label: "首页", href: "/" },
-        { label: "文章", href: blogIndex },
+        { label: t("crumb.home"), href: "/" },
+        { label: t("crumb.posts"), href: blogIndex },
       ],
     };
   if (pathname.indexOf("/search") === 0)
-    return { kind: "search", siteTitle, siteUrl: origin, title: "搜索" };
+    return { kind: "search", siteTitle, siteUrl: origin, title: t("search.title") };
   return { kind: "archive", siteTitle, siteUrl: origin };
 }
 
@@ -384,7 +385,7 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
     isAdmin ? "" : pluginFooterHtml(chromePageKind(pathname, cfg)),
     isAdmin || chromeSkipsHead(pathname, cfg)
       ? ""
-      : pluginHeadHtml(chromeHeadContext(pathname, d.siteTitle, origin, blogIndex)),
+      : pluginHeadHtml(chromeHeadContext(pathname, d.siteTitle, origin, blogIndex, t)),
   ]);
   const pluginFooter = isAdmin ? "" : pluginFooterRaw + d.siteBodyEnd;
   if (statsOn) {
@@ -773,7 +774,7 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
   const tc = getThemeChrome(themeSlug);
 
   const siteTitle = settings.siteTitle ?? "";
-  const seoTitle = `文章 - ${siteTitle}`;
+  const seoTitle = t("list.seo_title", { site: siteTitle });
   const blogUrl = `${ctx?.origin ?? ""}${blogIndex}`;
   return {
     headTitle: seoTitle,
@@ -1493,17 +1494,24 @@ const EYE_SVG =
   `<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"></path>` +
   `<circle cx="12" cy="12" r="3"></circle></svg>`;
 
-const POST_FORMAT_LABELS: Record<string, string> = {
-  standard: "标准",
-  aside: "日志",
-  quote: "引语",
-  link: "链接",
-  image: "图片",
-  gallery: "相册",
-  video: "视频",
-  audio: "音频",
-  status: "状态",
-};
+/** Known post formats. An unknown format renders no badge, as before. */
+const POST_FORMATS = [
+  "standard",
+  "aside",
+  "quote",
+  "link",
+  "image",
+  "gallery",
+  "video",
+  "audio",
+  "status",
+];
+
+/** The post-format badge label, translated. Unknown formats return null. */
+function postFormatLabel(format: string | undefined, t: Translate): string | null {
+  const key = format || "standard";
+  return POST_FORMATS.includes(key) ? t(`format.${key}`) : null;
+}
 
 async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
   const t = makeT(localeOf(ctx));
@@ -1549,16 +1557,23 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
   const buckets = new Map<string, typeof items>();
   for (const e of items) {
     const d = e.publishedAt ? new Date(e.publishedAt) : null;
-    const key = d ? `${d.getFullYear()}-${d.getMonth() + 1}` : "未发布";
+    // Sentinel key: a real bucket key is always "YYYY-M", so this can never
+    // collide with one.
+    const key = d ? `${d.getFullYear()}-${d.getMonth() + 1}` : "__unpublished__";
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key)!.push(e);
   }
+
+  const sectionLabel = (key: string): string =>
+    key === "__unpublished__"
+      ? t("archives.unpublished")
+      : t("archives.ym", { y: key.slice(0, 4), m: Number(key.slice(5)) });
 
   const sections = [...buckets.entries()]
     .map(([key, list]) => {
       const lis = list
         .map((p) => {
-          const fmt = POST_FORMAT_LABELS[p.format ?? "standard"];
+          const fmt = postFormatLabel(p.format, t);
           const badge =
             fmt && p.format !== "standard"
               ? `<span class="shrink-0 rounded px-1.5 py-0.5 text-[10px]" style="background:var(--accent-soft);color:var(--accent)">${esc(fmt)}</span>`
@@ -1572,18 +1587,19 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
           );
         })
         .join("");
-      const label = key === "未发布" ? key : key.replace("-", " 年 ") + " 月";
+      const label = sectionLabel(key);
       return (
         `<section><h2 class="mb-3 border-b pb-1.5 text-sm font-semibold" style="border-color:var(--border);color:var(--muted)">` +
-        `${esc(label)}<span class="ml-2 text-xs opacity-60">${list.length} 篇</span></h2>` +
+        `${esc(label)}<span class="ml-2 text-xs opacity-60">${esc(t("archives.n_posts", { n: list.length }))}</span></h2>` +
         `<ul class="space-y-1">${lis}</ul></section>`
       );
     })
     .join("");
 
   const filterHint = filtered
-    ? ` · 当前筛选 ${year ?? "全部"} 年${month ? ` ${month} 月` : ""}` +
-      ` · <a href="/archives" class="underline" style="color:var(--link)">清除</a>`
+    ? ` · ${t("archives.filter")} ${year ? t("archives.y", { y: year }) : t("archives.all")}` +
+      `${month ? ` ${t("archives.month", { m: month })}` : ""}` +
+      ` · <a href="/archives" class="underline" style="color:var(--link)">${t("archives.clear")}</a>`
     : "";
 
   const aside =
@@ -1596,7 +1612,7 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
             const mColor = year === y.year && month === m.month ? "var(--accent)" : "var(--muted)";
             return (
               `<li><a href="/archives?year=${y.year}&month=${m.month}" class="flex items-center justify-between text-xs transition hover:underline" style="color:${mColor}">` +
-              `${m.month} 月<span class="opacity-60">${m.count}</span></a></li>`
+              `${esc(t("archives.month", { m: m.month }))}<span class="opacity-60">${m.count}</span></a></li>`
             );
           })
           .join("");

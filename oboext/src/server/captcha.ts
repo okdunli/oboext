@@ -1,8 +1,7 @@
-
-
 import crypto from "node:crypto";
 import { getSecret } from "./auth.js";
 import type { AdminSecurity } from "./security.js";
+import { type Translate } from "./i18n.js";
 
 export const CAPTCHA_COOKIE = "oboe_captcha";
 
@@ -175,11 +174,12 @@ function parseToken(token: string | undefined | null): TokenPayload | null {
 function verifyBuiltin(
   answer: string | undefined,
   cookieToken: string | undefined,
+  t: Translate,
 ): string | null {
   const payload = parseToken(cookieToken);
-  if (!payload || used.has(payload.j)) return "验证码不正确或已过期";
-  if (!answer || !answer.trim()) return "请输入验证码";
-  if (normalizeAnswer(answer) !== payload.c) return "验证码不正确或已过期";
+  if (!payload || used.has(payload.j)) return t("api.captcha_wrong");
+  if (!answer || !answer.trim()) return t("api.captcha_required");
+  if (normalizeAnswer(answer) !== payload.c) return t("api.captcha_wrong");
   used.set(payload.j, payload.e);
   sweepUsed(Date.now());
   return null;
@@ -209,7 +209,11 @@ function pickPath(obj: unknown, path: string): unknown {
   }, obj);
 }
 
-async function verifyRemote(sec: AdminSecurity, answer: string): Promise<string | null> {
+async function verifyRemote(
+  sec: AdminSecurity,
+  answer: string,
+  t: Translate,
+): Promise<string | null> {
   const token = answer.trim();
   const url = sec.captchaVerifyUrl.replace(/\{\{\s*token\s*\}\}/g, encodeURIComponent(token));
   const method = sec.captchaVerifyMethod;
@@ -235,7 +239,7 @@ async function verifyRemote(sec: AdminSecurity, answer: string): Promise<string 
       data = text;
     }
   } catch {
-    return "验证码校验服务暂不可用，请稍后再试";
+    return t("api.captcha_unavailable");
   }
 
   const rule = sec.captchaVerifySuccess.trim();
@@ -246,25 +250,26 @@ async function verifyRemote(sec: AdminSecurity, answer: string): Promise<string 
       typeof data === "object" &&
       ((data as Record<string, unknown>).ok === true ||
         (data as Record<string, unknown>).success === true);
-    return okFlag ? null : "验证码不正确或已过期";
+    return okFlag ? null : t("api.captcha_wrong");
   }
   const eq = rule.indexOf("=");
   const path = rule.slice(0, eq).trim();
   const expected = rule.slice(eq + 1).trim();
   const actual = path === "status" ? res.status : pickPath(data, path);
-  return String(actual) === expected ? null : "验证码不正确或已过期";
+  return String(actual) === expected ? null : t("api.captcha_wrong");
 }
 
 export async function verifyLoginCaptcha(
   sec: AdminSecurity,
   answer: string | undefined,
   cookieToken: string | undefined,
+  t: Translate,
 ): Promise<string | null> {
   if (!sec.captchaEnabled) return null;
-  if (!answer || !answer.trim()) return "请输入验证码";
+  if (!answer || !answer.trim()) return t("api.captcha_required");
   return sec.captchaMode === "custom"
-    ? verifyRemote(sec, answer)
-    : verifyBuiltin(answer, cookieToken);
+    ? verifyRemote(sec, answer, t)
+    : verifyBuiltin(answer, cookieToken, t);
 }
 
 export async function verifyCaptchaFor(
@@ -272,10 +277,11 @@ export async function verifyCaptchaFor(
   enabled: boolean,
   answer: string | undefined,
   cookieToken: string | undefined,
+  t: Translate,
 ): Promise<string | null> {
   if (!enabled) return null;
-  if (!answer || !answer.trim()) return "请输入验证码";
+  if (!answer || !answer.trim()) return t("api.captcha_required");
   return sec.captchaMode === "custom"
-    ? verifyRemote(sec, answer)
-    : verifyBuiltin(answer, cookieToken);
+    ? verifyRemote(sec, answer, t)
+    : verifyBuiltin(answer, cookieToken, t);
 }

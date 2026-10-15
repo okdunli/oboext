@@ -182,22 +182,22 @@ export type RegisterInput = {
 export async function registerMember(input: RegisterInput): Promise<SessionUser> {
   await ensureMigrations();
   const member = await getMemberSettings();
-  if (!member.registerEnabled) throw new ServiceError("注册已关闭", 404);
+  if (!member.registerEnabled) throw new ServiceError("注册已关闭", 404, "api.register_closed");
 
   if (member.inviteOnly) {
     const code = (input.inviteCode ?? "").trim();
-    if (!code) throw new ServiceError("请填写邀请码", 422);
+    if (!code) throw new ServiceError("请填写邀请码", 422, "api.invite_required");
     const hit = member.inviteCodes.some((c) => c.toLowerCase() === code.toLowerCase());
-    if (!hit) throw new ServiceError("邀请码无效", 422);
+    if (!hit) throw new ServiceError("邀请码无效", 422, "api.invite_wrong");
   }
 
   let name = input.name?.trim() ?? "";
   if (name) {
     if (!NAME_RE.test(name)) {
-      throw new ServiceError("昵称需为 2~32 个字符，且不能包含空格或 @", 422);
+      throw new ServiceError("昵称需为 2~32 个字符，且不能包含空格或 @", 422, "api.name_invalid");
     }
   } else if (member.nameRequired) {
-    throw new ServiceError("请填写昵称", 422);
+    throw new ServiceError("请填写昵称", 422, "api.name_required");
   } else {
     name = await generateUniqueName();
   }
@@ -209,23 +209,23 @@ export async function registerMember(input: RegisterInput): Promise<SessionUser>
     if (pwErr) throw pwErr;
     passwordHash = await hashPassword(passwordRaw);
   } else if (member.passwordRequired) {
-    throw new ServiceError("请填写密码", 422);
+    throw new ServiceError("请填写密码", 422, "api.password_required");
   } else {
     passwordHash = await hashPassword(crypto.randomBytes(24).toString("hex"));
   }
 
   const emailRaw = input.email?.trim() || "";
   if (!emailRaw) {
-    if (member.emailRequired) throw new ServiceError("请填写邮箱", 422);
+    if (member.emailRequired) throw new ServiceError("请填写邮箱", 422, "api.email_required");
   } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw) || emailRaw.length > 120) {
-    throw new ServiceError("邮箱格式不正确", 422);
+    throw new ServiceError("邮箱格式不正确", 422, "api.email_invalid");
   }
 
   const phoneRaw = normalizePhone(input.phone ?? "");
   if (!phoneRaw) {
-    if (member.phoneRequired) throw new ServiceError("请填写手机号", 422);
+    if (member.phoneRequired) throw new ServiceError("请填写手机号", 422, "api.phone_required");
   } else if (!PHONE_LOCAL_RE.test(phoneRaw) && !PHONE_INTL_RE.test(phoneRaw)) {
-    throw new ServiceError("手机号格式不正确", 422);
+    throw new ServiceError("手机号格式不正确", 422, "api.phone_invalid");
   }
 
   const notify = await getNotifySettings();
@@ -253,21 +253,21 @@ export async function registerMember(input: RegisterInput): Promise<SessionUser>
       .select({ id: users.id })
       .from(users)
       .where(sql`lower(${users.name}) = lower(${name})`);
-    if (nameTaken) throw new ServiceError("昵称已被占用", 422);
+    if (nameTaken) throw new ServiceError("昵称已被占用", 422, "api.name_taken");
   }
   if (emailRaw) {
     const [emailTaken] = await db
       .select({ id: users.id })
       .from(users)
       .where(sql`lower(${users.email}) = lower(${emailRaw})`);
-    if (emailTaken) throw new ServiceError("邮箱已被注册", 422);
+    if (emailTaken) throw new ServiceError("邮箱已被注册", 422, "api.email_taken");
   }
   if (phoneRaw) {
     const [phoneTaken] = await db
       .select({ id: users.id })
       .from(users)
       .where(sql`${users.phone} = ${phoneRaw}`);
-    if (phoneTaken) throw new ServiceError("手机号已被注册", 422);
+    if (phoneTaken) throw new ServiceError("手机号已被注册", 422, "api.phone_taken");
   }
 
   const [row] = await db

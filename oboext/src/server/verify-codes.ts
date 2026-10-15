@@ -1,5 +1,3 @@
-
-
 import crypto from "node:crypto";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "./db.js";
@@ -43,7 +41,7 @@ export async function issueCode(input: IssueCodeInput): Promise<string> {
     .orderBy(desc(verifyCodes.id))
     .limit(1);
   if (live && now.getTime() - live.createdAt.getTime() < RESEND_MS) {
-    throw new ServiceError("发送太频繁，请 1 分钟后再试");
+    throw new ServiceError("发送太频繁，请 1 分钟后再试", 400, "api.send_too_often");
   }
 
   if (input.ip) {
@@ -57,7 +55,7 @@ export async function issueCode(input: IssueCodeInput): Promise<string> {
         ),
       );
     if ((row?.n ?? 0) >= IP_HOUR_CAP) {
-      throw new ServiceError("请求过于频繁，请稍后再试");
+      throw new ServiceError("请求过于频繁，请稍后再试", 400, "api.send_rate_limited");
     }
   }
 
@@ -117,7 +115,7 @@ export interface VerifyCodeInput {
 export async function verifyCode(input: VerifyCodeInput): Promise<true> {
   const value = input.code.trim();
   if (!/^\d{4,8}$/.test(value)) {
-    throw new ServiceError("验证码错误或已过期");
+    throw new ServiceError("验证码错误或已过期", 400, "api.code_wrong");
   }
   const [row] = await db
     .select()
@@ -134,10 +132,10 @@ export async function verifyCode(input: VerifyCodeInput): Promise<true> {
     .limit(1);
 
   if (!row || row.expiresAt.getTime() < Date.now()) {
-    throw new ServiceError("验证码错误或已过期");
+    throw new ServiceError("验证码错误或已过期", 400, "api.code_wrong");
   }
   if (row.attempts >= MAX_ATTEMPTS) {
-    throw new ServiceError("验证码错误次数过多，请重新获取");
+    throw new ServiceError("验证码错误次数过多，请重新获取", 400, "api.code_attempts");
   }
 
   if (row.codeHash !== hashCode(value)) {
@@ -145,7 +143,7 @@ export async function verifyCode(input: VerifyCodeInput): Promise<true> {
       .update(verifyCodes)
       .set({ attempts: sql`${verifyCodes.attempts} + 1` })
       .where(eq(verifyCodes.id, row.id));
-    throw new ServiceError("验证码错误或已过期");
+    throw new ServiceError("验证码错误或已过期", 400, "api.code_wrong");
   }
 
   await db

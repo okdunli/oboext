@@ -1,10 +1,5 @@
 <script>
-  // POST /api/auth/login-code { channel, target, code }
-  //
-  // Email/SMS code login. Same security chain as password login: throttle →
-  // one-time code (verify-codes, purpose=login, 5 attempts / 10 min) →
-  // second-factor plugin challenge ticket → session → security event +
-  // user.logged-in hook. The code itself replaces the password.
+  // POST /api/auth/login-code { channel, target, code } Email/SMS code login.
   import { jsonOk, jsonFail, readBody, apiGate } from "@server/admin";
   import {
     assertLoginAllowed,
@@ -23,20 +18,23 @@
   import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { verifyLoginCaptcha, readCaptchaCookie } from "@server/captcha";
   import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
+  import { makeT, headerLocale } from "@server/i18n";
 
   export async function POST(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const body = await readBody(request);
       const channel = body.channel === "sms" ? "sms" : "email";
       const code = String(body.code || "").trim();
-      if (!code) return jsonFail("请输入验证码", 422);
+      if (!code) return jsonFail(t("api.code_required"), 422);
 
       const sec = await getAdminSecurity();
-      if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);
+      if (!isEntryReferer(request, sec)) return jsonFail(t("api.no_entry"), 404);
       const captchaError = await verifyLoginCaptcha(
         sec,
         body.captcha,
         readCaptchaCookie(request),
+        t,
       );
       if (captchaError) return jsonFail(captchaError, 400);
 
@@ -49,7 +47,8 @@
         await assertLoginAllowed(account, ip);
       } catch (e) {
         await recordLoginEvent({ eventType: LOGIN_EVENTS.LOCKED, account, ip, userAgent: ua });
-        if (e instanceof LoginThrottledError) return jsonFail(e.message, 429);
+        if (e instanceof LoginThrottledError)
+          return jsonFail(t("api.throttled", { n: e.minutes }), 429);
         throw e;
       }
 
@@ -57,13 +56,13 @@
         await verifyCode({ channel, target, purpose: "login", code });
       } catch {
         await recordLoginEvent({ eventType: LOGIN_EVENTS.FAIL, account, ip, userAgent: ua });
-        return jsonFail("验证码不正确或已过期", 401);
+        return jsonFail(t("api.code_wrong"), 401);
       }
 
       const row = await findUserByContact(channel, target);
       if (!row || row.status !== "active") {
         await recordLoginEvent({ eventType: LOGIN_EVENTS.FAIL, account, ip, userAgent: ua });
-        return jsonFail("验证码不正确或已过期", 401);
+        return jsonFail(t("api.code_wrong"), 401);
       }
       const user = { id: row.id, email: row.email, name: row.name, role: row.role };
 
@@ -96,6 +95,6 @@
           "set-cookie": await sessionCookiePair(user),
         },
       });
-    });
+    }, t);
   }
 </script>

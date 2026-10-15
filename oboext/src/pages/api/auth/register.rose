@@ -6,14 +6,16 @@
   import { getMemberSettings, registerMember } from "@server/members";
   import { getAdminSecurity } from "@server/security";
   import { verifyCaptchaFor, readCaptchaCookie } from "@server/captcha";
+  import { makeT, headerLocale } from "@server/i18n";
 
   export async function POST(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const body = await readBody(request);
 
-      if (!(await hasAnyUser())) return jsonFail("接口不存在", 404);
+      if (!(await hasAnyUser())) return jsonFail(t("api.no_entry"), 404);
       const member = await getMemberSettings();
-      if (!member.registerEnabled) return jsonFail("接口不存在", 404);
+      if (!member.registerEnabled) return jsonFail(t("api.no_entry"), 404);
 
       const sec = await getAdminSecurity();
       const captchaError = await verifyCaptchaFor(
@@ -21,6 +23,7 @@
         member.captchaEnabled,
         body.captcha,
         readCaptchaCookie(request),
+        t,
       );
       if (captchaError) return jsonFail(captchaError, 400);
 
@@ -40,6 +43,6 @@
           "set-cookie": await sessionCookiePair(user),
         },
       });
-    });
+    }, t);
   }
 </script>

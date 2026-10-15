@@ -128,9 +128,18 @@ export function requireCap(user: SessionUser | null, cap: Capability): SessionUs
   return u;
 }
 
-/** Wrap an API handler: lazy migrations, ServiceError/status mapping. */
+/**
+ * Wrap an API handler: lazy migrations, ServiceError/status mapping.
+ *
+ * `t` is the request translator (routes on the bilingual public surface
+ * pass one). When present, a ServiceError carrying a catalog `key` is
+ * rendered in the request's language and the generic 500 message follows
+ * suit; without it every message stays Chinese, which is what the admin
+ * and member-center surfaces want.
+ */
 export async function apiGate(
   fn: () => Promise<Response | unknown>,
+  t?: (key: string, vars?: Record<string, string | number>) => string,
 ): Promise<Response> {
   try {
     await ensureMigrations();
@@ -138,11 +147,14 @@ export async function apiGate(
     if (out instanceof Response) return out;
     return jsonOk(out ?? null);
   } catch (e) {
-    if (e instanceof ServiceError) return jsonFail(e.message, e.status);
+    if (e instanceof ServiceError) {
+      const msg = t && e.key ? t(e.key, e.params) : e.message;
+      return jsonFail(msg, e.status);
+    }
     log.error("[admin api]", e);
     const detail =
       process.env.DEBUG_API_ERRORS === "true" && e instanceof Error ? `: ${e.message}` : "";
-    return jsonFail("服务器内部错误" + detail, 500);
+    return jsonFail((t ? t("api.err_internal") : "服务器内部错误") + detail, 500);
   }
 }
 
@@ -835,7 +847,7 @@ export async function createPublicComment(input: PublicCommentInput) {
     .select({ commentStatus: t.commentStatus, title: t.title })
     .from(t)
     .where(eq(t.id, input.postId));
-  if (!parent) throw new ServiceError("内容不存在", 404);
+  if (!parent) throw new ServiceError("内容不存在", 404, "api.comment_missing");
 
   const settings = await getSettings();
   let isStaff = false;
@@ -847,13 +859,13 @@ export async function createPublicComment(input: PublicCommentInput) {
     isStaff = Boolean(u && u.role !== "subscriber");
   }
   if (!settings.commentsEnabled && !isStaff)
-    throw new ServiceError("评论已关闭", 403);
+    throw new ServiceError("评论已关闭", 403, "api.comment_closed");
   if (parent.commentStatus === "closed" && !isStaff)
-    throw new ServiceError("本文评论已关闭", 403);
+    throw new ServiceError("本文评论已关闭", 403, "api.comment_post_closed");
 
   const content = (input.content || "").trim();
-  if (!content) throw new ServiceError("评论内容不能为空", 422);
-  if (content.length > 5000) throw new ServiceError("评论内容过长", 422);
+  if (!content) throw new ServiceError("评论内容不能为空", 422, "api.comment_empty");
+  if (content.length > 5000) throw new ServiceError("评论内容过长", 422, "api.comment_too_long");
 
   let authorName = input.authorName?.trim() || "匿名";
   let authorEmail = input.authorEmail ?? null;
@@ -873,12 +885,12 @@ export async function createPublicComment(input: PublicCommentInput) {
     }
   } else {
     if (settings.requireNameEmail && (!input.authorName?.trim() || !input.authorEmail?.trim()))
-      throw new ServiceError("请填写昵称和邮箱", 422);
+      throw new ServiceError("请填写昵称和邮箱", 422, "api.comment_name_email");
     // The link is required on its own switch, not as part of the name+email
     // pair. Enforced here rather than only in the browser: the field is a
     // placeholder hint client-side, and a POST that skips it must not slip past.
     if (settings.requireAuthorUrl && !input.authorUrl?.trim())
-      throw new ServiceError("请填写链接", 422);
+      throw new ServiceError("请填写链接", 422, "api.comment_url");
   }
 
   await assertNotImpersonation({ authorName, authorEmail, authorUrl, siteHost: input.siteHost });

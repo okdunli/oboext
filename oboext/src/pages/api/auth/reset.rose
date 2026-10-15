@@ -12,25 +12,27 @@
   import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { verifyCode } from "@server/verify-codes";
   import { passwordError } from "@server/password-policy";
+  import { makeT, headerLocale } from "@server/i18n";
 
   export async function POST(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const body = await readBody(request);
       const account = String(body.account || "").trim();
       const code = String(body.code || "").trim();
       const password = String(body.password || "");
-      if (!account || !code || !password) return jsonFail("请填写完整信息", 422);
+      if (!account || !code || !password) return jsonFail(t("api.reset_required"), 422);
       const pwErr = passwordError(password);
-      if (pwErr) return jsonFail(pwErr.message, pwErr.status);
+      if (pwErr) return jsonFail(t(pwErr.key || "api.pw_common", pwErr.params), pwErr.status);
 
       const sec = await getAdminSecurity();
-      if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);
+      if (!isEntryReferer(request, sec)) return jsonFail(t("api.no_entry"), 404);
 
       const ip = clientIp(request);
       const user = await findUserByAccount(account);
       if (!user?.email) {
 
-        return jsonFail("验证码错误或已过期", 401);
+        return jsonFail(t("api.reset_wrong"), 401);
       }
 
       try {
@@ -41,7 +43,7 @@
           code,
         });
       } catch {
-        return jsonFail("验证码错误或已过期", 401);
+        return jsonFail(t("api.reset_wrong"), 401);
       }
 
       await resetUserPassword(user.id, password);
@@ -53,6 +55,6 @@
         userAgent: clientUa(request),
       });
       return { reset: true };
-    });
+    }, t);
   }
 </script>

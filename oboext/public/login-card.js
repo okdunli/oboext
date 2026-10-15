@@ -72,7 +72,9 @@ function M(e,t){return(loc(e)==="en"?MSGS.en:MSGS.zh)[t]}
 function T(e,t,n){var s=M(e,t);return n===undefined?s:s.split("{n}").join(n)}
 function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
 function api(method,url,body,root){
-  return fetch(url,{method:method,headers:body!==undefined?{"Content-Type":"application/json"}:{},body:body!==undefined?JSON.stringify(body):undefined}).then(async function(r){
+  var h={"x-locale":loc(root)};
+  if(body!==undefined)h["Content-Type"]="application/json";
+  return fetch(url,{method:method,headers:h,body:body!==undefined?JSON.stringify(body):undefined}).then(async function(r){
     var j=null;try{j=await r.json()}catch{}
     if(!r.ok){var m=j&&j.error||T(root,"req_fail",r.status),e=new Error(m);throw e.status=r.status,e}
     return j

@@ -309,6 +309,7 @@ async function chromeData(pathname: string) {
   return {
     siteTitle: settings.siteTitle ?? "",
     siteDescription: settings.siteDescription ?? "",
+    logoUrl: settings.logoUrl ?? "",
     varsHtml,
     siteHead: verificationMetaHtml(settings.verifications),
     themeColorHtml: themeColorMetas(renderConfig.background),
@@ -373,6 +374,10 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
     siteUrl: origin,
     siteHead: isAdmin ? "" : d.siteHead,
     themeColorHtml: d.themeColorHtml,
+    // Site-level social card: the logo when one is set (absolute), the meta
+    // set built from it, and "" for both when it is not.
+    ogImage: d.logoUrl ? (d.logoUrl.startsWith("http") ? d.logoUrl : `${origin}${d.logoUrl}`) : "",
+    ogImageHtml: isAdmin ? "" : R.socialImageMetas(d.logoUrl, origin, d.siteTitle),
     themeHead: d.varsHtml + d.headExtra,
     themeSlug: d.themeSlug,
     cssHref: d.cssHref,

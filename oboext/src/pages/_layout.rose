@@ -50,7 +50,8 @@
   <meta property="og:type" content="website">
 
   <meta property="og:url" content={chrome().siteUrl}>
-  <meta name="twitter:card" content="summary_large_image">
+  {@html chrome().ogImageHtml}
+  <meta name="twitter:card" content={chrome().ogImage ? "summary_large_image" : "summary"}>
   <meta name="twitter:title" content={chrome().siteTitle}>
   <meta name="twitter:description" content={chrome().siteDescription}>
   <!-- The theme's stylesheet, inlined. A <link rel=stylesheet> is

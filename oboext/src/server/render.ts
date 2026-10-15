@@ -712,6 +712,36 @@ export function mediaImageTag(url: string | null | undefined, origin: string): s
   return `<media:content url="${esc(abs)}" medium="image" />`;
 }
 
+// og:image + og:image:width/height/alt + twitter:image for one social card.
+// An ABSOLUTE URL is mandatory in the OG spec - scrapers silently drop a
+// relative path - and intrinsic dimensions let Facebook render the card
+// without a second fetch. Dims come from the same memoized uploads reader the
+// content images use; alt text is the caller's title. No image -> "".
+export function socialImageMetas(
+  url: string | null | undefined,
+  origin: string,
+  alt: string,
+): string {
+  if (!url) return "";
+  const abs = url.startsWith("http") ? url : `${origin}${url}`;
+  const parts = [`<meta property="og:image" content="${esc(abs)}">`];
+  if (url.startsWith("/uploads/")) {
+    let dim = contentImgDimCache.get(url);
+    if (dim === undefined) {
+      const absPath = uploadsAbsPath(url);
+      dim = absPath ? readImageDims(absPath) : null;
+      contentImgDimCache.set(url, dim);
+    }
+    if (dim) {
+      parts.push(`<meta property="og:image:width" content="${dim[0]}">`);
+      parts.push(`<meta property="og:image:height" content="${dim[1]}">`);
+    }
+  }
+  if (alt) parts.push(`<meta property="og:image:alt" content="${esc(alt)}">`);
+  parts.push(`<meta name="twitter:image" content="${esc(abs)}">`);
+  return parts.join("");
+}
+
 export function postHead(
   p: PostView,
   siteTitle: string,
@@ -762,7 +792,7 @@ export function postHead(
     `<meta property="og:title" content="${esc(fullTitle)}">`,
     `<meta property="og:description" content="${esc(desc)}">`,
     `<meta property="og:url" content="${esc(url)}">`,
-    ogImage ? `<meta property="og:image" content="${esc(ogImage)}">` : "",
+    socialImageMetas(ogImage, origin, p.title),
     `<meta property="og:type" content="article">`,
     `<meta property="og:site_name" content="${esc(siteTitle)}">`,
     primaryCat ? `<meta property="article:section" content="${esc(primaryCat)}">` : "",
@@ -770,10 +800,9 @@ export function postHead(
     `<meta property="article:published_time" content="${iso(p.publishedAt)}">`,
     `<meta property="article:modified_time" content="${iso(p.updatedAt || p.publishedAt)}">`,
     author ? `<meta property="article:author" content="${esc(author)}">` : "",
-    `<meta name="twitter:card" content="summary_large_image">`,
+    `<meta name="twitter:card" content="${ogImage ? "summary_large_image" : "summary"}">`,
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
-    ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : "",
     jsonLd(posting),
     jsonLd({
       "@context": "https://schema.org",
@@ -1115,14 +1144,13 @@ export function pageHead(
     `<meta property="og:title" content="${esc(fullTitle)}">`,
     `<meta property="og:description" content="${esc(desc)}">`,
     `<meta property="og:url" content="${esc(url)}">`,
-    ogImage ? `<meta property="og:image" content="${esc(ogImage)}">` : "",
+    socialImageMetas(ogImage, origin, p.title),
     `<meta property="og:type" content="website">`,
     `<meta property="og:site_name" content="${esc(siteTitle)}">`,
 
-    `<meta name="twitter:card" content="summary_large_image">`,
+    `<meta name="twitter:card" content="${ogImage ? "summary_large_image" : "summary"}">`,
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
-    ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : "",
     jsonLd((() => {
       const wp: Record<string, unknown> = {
         "@context": "https://schema.org",

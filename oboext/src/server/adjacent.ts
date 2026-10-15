@@ -100,11 +100,19 @@ export function ymd(v: Date | null): string {
  * variables only (--border / --muted / --text / --accent), the same contract
  * the tags row uses, so every theme skins it for free. Empty string when the
  * post has no neighbor in a direction — the slot simply collapses.
+ *
+ * Labels default to Chinese so the function keeps working standalone; the
+ * loaders pass translated ones (i18n) under a non-default locale.
  */
-export function adjacentHtml(pair: AdjacentPair): string {
+export function adjacentHtml(
+  pair: AdjacentPair,
+  labels: { older?: string; newer?: string; aria?: string } = {},
+): string {
   const cell = (post: AdjacentPost, side: "older" | "newer"): string => {
     const isOlder = side === "older";
-    const label = isOlder ? "上一篇" : "下一篇";
+    const label = isOlder
+      ? labels.older ?? "上一篇"
+      : labels.newer ?? "下一篇";
     const arrow = isOlder ? "&lsaquo;" : "&rsaquo;";
     const date = ymd(post.publishedAt);
     return (
@@ -123,7 +131,7 @@ export function adjacentHtml(pair: AdjacentPair): string {
   if (!cells.length) return "";
   const cols = cells.length === 2 ? "grid-template-columns:1fr 1fr" : "grid-template-columns:1fr";
   return (
-    `<nav aria-label="文章导航" data-adjacent-nav ` +
+    `<nav aria-label="${labels.aria ?? "文章导航"}" data-adjacent-nav ` +
     `style="margin-top:32px;display:grid;${cols};gap:12px;border-top:1px solid var(--border);padding-top:24px">` +
     cells.join("") +
     `</nav>`

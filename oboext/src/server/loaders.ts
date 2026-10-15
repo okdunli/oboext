@@ -50,7 +50,25 @@ import { getAdminSecurity } from "./security.js";
 import { can } from "./admin.js";
 import { getThemeChrome, publicAssetHref, bluemixNotFoundPage, catIconName, type MenuItem } from "./theme-chrome.js";
 import { createLogger } from "./logger.js";
+import {
+  DEFAULT_LOCALE,
+  makeT,
+  htmlLangOf,
+  hreflangLinks,
+  localeHref,
+  otherLocale,
+  prefixLocaleUrls,
+  splitLocalePath,
+  type Locale,
+  type Translate,
+} from "./i18n.js";
 const log = createLogger("loaders");
+
+/** The request locale, defaulting when the middleware did not set one. */
+function localeOf(ctx?: Ctx): Locale {
+  const raw = ctx && ctx.locale;
+  return raw === "en" || raw === "zh-CN" ? raw : DEFAULT_LOCALE;
+}
 
 export type Ctx = {
   query: URLSearchParams;
@@ -59,6 +77,8 @@ export type Ctx = {
   ip: string;
   ua: string;
   user?: unknown;
+  /** Request locale, set by the middleware from the /en path prefix. */
+  locale?: string;
 };
 
 // ------------------------------------------------------------- plugin hooks
@@ -193,15 +213,15 @@ const pageNum = (v: unknown): number => Math.max(1, Number(v) || 1);
 // Built-in sidebar used until an admin defines a "sidebar" menu; mirrors
 // SKY_SIDEBAR_FALLBACK in themes/skyscraper/Layout.tsx, with the index URL
 // driven by the permalink config so a renamed prefix rewires it too.
-const sidebarFallback = (cfg: PermalinkConfig): R.SkyItem[] => [
-  { id: "s1", label: "首页", url: "/" },
-  { id: "s2", label: "所有文章", url: blogIndexUrlFor(cfg) },
+const sidebarFallback = (cfg: PermalinkConfig, t: Translate): R.SkyItem[] => [
+  { id: "s1", label: t("sidebar.home"), url: "/" },
+  { id: "s2", label: t("sidebar.all_posts"), url: blogIndexUrlFor(cfg) },
 ];
 
 // Plain trusted-string chrome pieces. chrome() hands them to the .rose
 // templates (emitted via {@html}); the 404 route rides the same chrome
 // through the framework's normal render pipeline.
-async function chromeData(pathname: string) {
+async function chromeData(pathname: string, t: Translate) {
   // The two widget-area reads gate on the theme slug; chaining them off a
   // pre-issued themeSlug promise folds the old second wave into the opening
   // one. They used to issue only after every read below had resolved - a
@@ -274,7 +294,7 @@ async function chromeData(pathname: string) {
           : "");
   const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
   const menuItems: R.SkyItem[] =
-    sideMenu && sideMenu.items.length ? (sideMenu.items as R.SkyItem[]) : sidebarFallback(cfg);
+    sideMenu && sideMenu.items.length ? (sideMenu.items as R.SkyItem[]) : sidebarFallback(cfg, t);
   const tc = getThemeChrome(themeSlug);
   // Theme JS, mtime-stamped. Built here (not as `{chrome().x}` attributes in
   // the .rose layout) because the template compiler only interpolates
@@ -292,6 +312,7 @@ async function chromeData(pathname: string) {
   const footerHtml = tc.footer(
     {
       ...settings,
+      t,
       footerContainerAlign: (themeSettings as Record<string, unknown>).footerContainerAlign,
       footerMenu: (footerMenu?.items ?? []) as MenuItem[],
     },
@@ -330,10 +351,10 @@ async function chromeData(pathname: string) {
     themeScripts,
     bodyFix: tc.bodyFix() + siteBodyOpen,
     headExtra: tc.headExtra(),
-    navHtml: tc.nav({ ...settings, __pathname: pathname }, headerItems),
-    bodyOpen: tc.bodyOpen({ ...settings, __pathname: pathname }, headerItems),
+    navHtml: tc.nav({ ...settings, __pathname: pathname, t }, headerItems),
+    bodyOpen: tc.bodyOpen({ ...settings, __pathname: pathname, t }, headerItems),
     bodyClose: tc.bodyClose(
-      { ...settings, analyticsCode: (themeSettings as Record<string, unknown>).analyticsCode },
+      { ...settings, t, analyticsCode: (themeSettings as Record<string, unknown>).analyticsCode },
       footerHtml,
     ),
     asideHtml: tc.aside({
@@ -350,10 +371,12 @@ async function chromeData(pathname: string) {
 async function chrome(_payload: unknown, ctx?: Ctx) {
   const pathname = (ctx && ctx.pathname) || "/";
   const origin = (ctx && ctx.origin) || "";
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
   const statsOn = process.env.OBOEXT_DB_STATS === "1";
   const t0 = statsOn ? Date.now() : 0;
   const before = statsOn ? dbStats() : null;
-  const [d, cfg] = await Promise.all([chromeData(pathname), getPermalinkConfig()]);
+  const [d, cfg] = await Promise.all([chromeData(pathname, t), getPermalinkConfig()]);
   const isAdmin = pathname.indexOf("/admin") === 0;
   const blogIndex = blogIndexUrlFor(cfg);
   // Independent reads: fetch them together instead of two serial awaits.
@@ -372,6 +395,21 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
         `dbTime=${s.total - (before?.total ?? 0)}ms wall=${ms}ms`,
     );
   }
+  // Under a non-default locale every root-relative link in the chrome keeps
+  // the visitor inside the locale. The default locale short-circuits, so the
+  // zh-CN output is byte-identical to before i18n existed.
+  const pre = (html: string) => prefixLocaleUrls(html, locale);
+  // The locale switcher. data-no-pjax forces a full document load: pjax only
+  // swaps #sk-main, so a soft navigation would leave the rest of the chrome
+  // (nav, footer) in the old language. theme-pjax.js keeps the href in sync
+  // with location.pathname on rv:nav, so the pill never goes stale.
+  const localeSwitch = isAdmin
+    ? ""
+    : `<a data-locale-switch data-no-pjax href="${R.esc(localeHref(pathname, otherLocale(locale)))}" ` +
+      `style="position:fixed;right:14px;bottom:14px;z-index:2147483000;display:inline-flex;align-items:center;` +
+      `gap:6px;padding:7px 13px;border-radius:999px;border:1px solid var(--border,#d4d4d8);` +
+      `background:var(--surface,#ffffff);color:var(--text,#18181b);font-size:13px;line-height:1;` +
+      `text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.14)">${t("locale.switch")}</a>`;
   return {
     siteTitle: d.siteTitle,
     siteDescription: d.siteDescription,
@@ -388,12 +426,14 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
     cssHref: d.cssHref,
     cssInline: d.cssInline,
     themeScripts: d.themeScripts,
-    bodyFix: d.bodyFix,
-    nav: d.navHtml,
-    bodyOpen: d.bodyOpen,
-    bodyClose: d.bodyClose,
-    aside: d.asideHtml,
-    footer: d.footerHtml,
+    bodyFix: d.bodyFix + localeSwitch,
+    nav: pre(d.navHtml),
+    bodyOpen: pre(d.bodyOpen),
+    bodyClose: pre(d.bodyClose),
+    aside: pre(d.asideHtml),
+    footer: pre(d.footerHtml),
+    htmlLang: htmlLangOf(locale),
+    locale,
     pluginFooter,
     pluginHead,
   };
@@ -510,6 +550,7 @@ type HomeBundle = {
 };
 
 async function home(ctx?: Ctx) {
+  const t = makeT(localeOf(ctx));
   // Everything home reads is independent of everything else it reads: the old
   // shape gated three waves behind each other (settings/themeSlug first, the
   // list queries second, the sidebar batch third), so a cold home paid ~3
@@ -597,7 +638,7 @@ async function home(ctx?: Ctx) {
         catCounts,
         total: all.total,
         widgets,
-        settings,
+        settings: { ...settings, t },
         themeSettings: ts,
       }),
     };
@@ -678,7 +719,7 @@ async function home(ctx?: Ctx) {
       liked: popular.items,
       random,
       cats,
-      settings,
+      settings: { ...settings, t },
       recent: recent.items as any[],
       sections: sections as any,
       rankings,
@@ -697,6 +738,7 @@ async function home(ctx?: Ctx) {
 // ------------------------------------------------------------- list routing
 
 async function blogList(payload: { page?: number }, ctx?: Ctx) {
+  const t = makeT(localeOf(ctx));
   // Sidebar batch pre-issues off the themeSlug/themeSettings reads below, so
   // its queries overlap the pager window's wave instead of following it.
   const themeSlugP = safe(getActiveThemeSlug());
@@ -750,8 +792,8 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
       (settings.logoUrl ? `<meta name="twitter:image" content="${R.esc(settings.logoUrl)}">` : ""),
     main: tc.listPage({
 
-      title: themeSlug === "bluemix" ? `最新文章 · ${total} 篇` : "全部文章",
-      sub: `共 ${total} 篇 · 第 ${page}/${totalPages} 页`,
+      title: themeSlug === "bluemix" ? t("list.latest_bm", { n: total }) : t("list.all"),
+      sub: t("list.sub", { n: total, page, total: totalPages }),
       items,
       page,
       totalPages,
@@ -774,6 +816,7 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
 }
 
 async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) {
+  const t = makeT(localeOf(ctx));
   const page = pageNum(payload.page);
   // Sidebar batch pre-issues off the themeSlug/themeSettings reads below
   // (same pattern as blogList).
@@ -814,7 +857,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     description: category.description || settings.siteDescription || "",
     url: `${ctx.origin}${catUrl}`,
     breadcrumbs: [
-      { label: "首页", href: "/" },
+      { label: t("crumb.home"), href: "/" },
       { label: category.name, href: catUrl },
     ],
   });
@@ -823,16 +866,16 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
   const tc = getThemeChrome(themeSlug);
 
   const sub = isSk
-    ? `${category.description ? `<span>${category.description} · </span>` : ""}共 ${total} 篇 · 第 ${page}/${totalPages} 页`
+    ? `${category.description ? `<span>${category.description} · </span>` : ""}${t("list.sub", { n: total, page, total: totalPages })}`
     : "";
   return {
-    headTitle: `分类：${category.name} - ${settings.siteTitle ?? ""}`,
+    headTitle: `${t("list.category_title", { name: category.name })} - ${settings.siteTitle ?? ""}`,
     pluginHead,
     main: tc.listPage({
       title:
         themeSlug === "bluemix" || themeSlug === "codeman" || themeSlug === "pseudolinear"
           ? category.name
-          : `分类：${category.name}`,
+          : t("list.category_title", { name: category.name }),
       sub,
       items,
       page,
@@ -860,6 +903,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
 }
 
 async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
+  const t = makeT(localeOf(ctx));
   const page = pageNum(payload.page);
   // Sidebar batch pre-issues off the themeSlug/themeSettings reads below
   // (same pattern as blogList/categoryList).
@@ -893,7 +937,7 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
     description: settings.siteDescription || "",
     url: `${ctx.origin}${tagUrl}`,
     breadcrumbs: [
-      { label: "首页", href: "/" },
+      { label: t("crumb.home"), href: "/" },
       { label: `#${tag.name}`, href: tagUrl },
     ],
   });
@@ -902,12 +946,12 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
 
   const contentTc = isSk ? tc : getThemeChrome("default");
   return {
-    headTitle: `标签：#${tag.name} - ${settings.siteTitle ?? ""}`,
+    headTitle: `${t("crumb.tag")}：#${tag.name} - ${settings.siteTitle ?? ""}`,
     pluginHead,
     main: contentTc.listPage({
-      title: `标签：#${tag.name}`,
+      title: `${t("crumb.tag")}：#${tag.name}`,
 
-      sub: isSk ? `共 ${total} 篇 · 第 ${page}/${totalPages} 页` : "",
+      sub: isSk ? t("list.sub", { n: total, page, total: totalPages }) : "",
       items,
       page,
       totalPages,
@@ -925,6 +969,7 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
 }
 
 async function search(payload: { q?: string; page?: number; all?: boolean }, ctx?: Ctx) {
+  const t = makeT(localeOf(ctx));
   const q = (payload.q ?? "").trim();
   const cleaned = q;
   const page = payload.page ?? 1;
@@ -968,9 +1013,9 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
     `/search?q=${encodeURIComponent(cleaned)}&page=${n}${payload.all ? "&all=1" : ""}`;
   const extra =
     cleaned && total > 1 && !payload.all
-      ? `<div class="sk-search-all">没有想找的内容？<a href="/search?q=${encodeURIComponent(
+      ? `<div class="sk-search-all">${t("search.all_lead")}<a href="/search?q=${encodeURIComponent(
           cleaned,
-        )}&all=1">查看全部结果</a></div>`
+        )}&all=1">${t("search.all_link")}</a></div>`
       : "";
   const [settings, ts] = await Promise.all([settingsP, tsP]);
   const [widgets, drawerPosts, sidebarData] = await sideP;
@@ -1001,22 +1046,25 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   const searchHead =
     `<meta property="og:url" content="${R.esc(ctx?.origin ?? "")}">` +
     `<meta property="og:site_name" content="${R.esc(searchSiteTitle)}">` +
-    `<meta property="og:locale" content="zh_CN">` +
     searchHighlight;
   return {
     head: searchHead,
     main: getThemeChrome(themeSlug || "skyscraper").listPage({
 
-      title: cleaned ? (isBm ? `搜索 “${cleaned}” · ${total} 篇` : `搜索：“${cleaned}”`) : "搜索",
+      title: cleaned
+        ? isBm
+          ? t("search.title_bm", { q: cleaned, n: total })
+          : t("search.title_q", { q: cleaned })
+        : t("search.title"),
 
       sub: isBm || themeSlug === "codeman" || themeSlug === "pseudolinear"
         ? ""
         : cleaned
           ? isSk
-            ? `共 ${total} 条结果 · 第 ${page}/${totalPages} 页`
-            : `找到 ${items.length} 篇结果`
+            ? t("search.sub_results", { n: total, page, total: totalPages })
+            : t("search.sub_found", { n: items.length })
           : isSk
-            ? "在顶部搜索框输入关键词"
+            ? t("search.sub_hint")
             : "",
       items,
       page,
@@ -1031,9 +1079,9 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
       drawerPosts,
 
       sidebarData,
-      settings,
+      settings: { ...settings, t },
       themeSettings: ts,
-      emptyHint: isBm && !cleaned ? "输入关键词，从右上角搜索框或导航搜索寻找内容。" : undefined,
+      emptyHint: isBm && !cleaned ? t("search.empty_hint") : undefined,
     }),
   };
 }
@@ -1104,6 +1152,8 @@ async function postDetail(
     }
   }
   if (!row) return { notFound: true };
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
   const themeSlug = await themeSlugP;
   const postId = row.post.id;
   // 上一篇/下一篇: one UNION ALL statement for both neighbours, issued inside
@@ -1157,7 +1207,7 @@ async function postDetail(
       author: post.author?.name,
       url: `${ctx.origin}${post.url}`,
       breadcrumbs: [
-        { label: "首页", href: "/" },
+        { label: t("crumb.home"), href: "/" },
         { label: post.title, href: post.url },
       ],
     }))
@@ -1245,7 +1295,10 @@ async function postDetail(
   const readWords = readPlain.replace(/[\u4e00-\u9fff\u3040-\u30ff]/g, " ").split(/\s+/).filter(Boolean).length;
   const readMinutes = Math.max(1, Math.round(readCjk / 400 + readWords / 200));
   const readWordCount = readCjk + readWords;
-  metaPayload.items.unshift({ label: "阅读时长", value: `约 ${readMinutes} 分钟` });
+  metaPayload.items.unshift({
+    label: t("post.read_time"),
+    value: t("post.read_minutes", { n: readMinutes }),
+  });
   const metaHtml = metaPayload.items.length
     ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--muted)">${metaPayload.items.map((m) => `<span>${R.esc(m.label)}：${R.esc(m.value)}</span>`).join("")}</div>`
     : "";
@@ -1295,14 +1348,21 @@ async function postDetail(
       tagsHtml,
       defTagsHtml,
       shareHtml,
-      adjacentHtml: adjacentHtml(adjacent),
+      adjacentHtml: prefixLocaleUrls(
+        adjacentHtml(adjacent, {
+          older: t("adjacent.older"),
+          newer: t("adjacent.newer"),
+          aria: t("adjacent.aria"),
+        }),
+        locale,
+      ),
       blogIndex: blogIndexUrlFor(cfg),
       widgets,
       postBottom,
       sidebarWidgets,
 
       sidebarData,
-      settings,
+      settings: { ...settings, t },
       canonical: `${ctx.origin}${post.url}`,
     }),
     head:
@@ -1329,6 +1389,7 @@ async function pageDetail(
   const settingsP = safe(getSettings());
   const row = payload.preloaded ?? (await getPublishedPageRow(payload.slug));
   if (!row) return { notFound: true };
+  const t = makeT(localeOf(ctx));
 
   // One hydration, three consumers: the page, its rendered body and the plugin
   // head all chain off it, so body rendering (pure CPU without DB-backed
@@ -1353,7 +1414,7 @@ async function pageDetail(
           updatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString() : null,
           url: `${ctx.origin}${p.url}`,
           breadcrumbs: [
-            { label: "首页", href: "/" },
+            { label: t("crumb.home"), href: "/" },
             { label: p.title, href: p.url },
           ],
         }))
@@ -1403,6 +1464,7 @@ async function pageDetail(
       commentsHtml,
 
       widgets,
+      settings: { ...settings, t },
     }),
     head:
       R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl, { wordCount: pgWordCount, minutes: pgMinutes }) +
@@ -1435,6 +1497,7 @@ const POST_FORMAT_LABELS: Record<string, string> = {
 };
 
 async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
+  const t = makeT(localeOf(ctx));
   const year = Number(payload.year) || 0;
   const month = Number(payload.month) || 0;
   const esc = R.esc;
@@ -1540,24 +1603,23 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
   const main =
     `<div class="grid gap-8 lg:grid-cols-[1fr_240px]"><div>` +
     `<header class="mb-8">` +
-    `<h1 class="flex items-center gap-2 text-3xl font-bold text-[var(--text)]">${CALENDAR_DAYS_SVG}文章归档</h1>` +
-    `<p class="mt-2 text-sm" style="color:var(--muted)">共 <span style="color:var(--accent)">${total}</span> 篇文章${filterHint}</p>` +
+    `<h1 class="flex items-center gap-2 text-3xl font-bold text-[var(--text)]">${CALENDAR_DAYS_SVG}${t("crumb.archive")}</h1>` +
+    `<p class="mt-2 text-sm" style="color:var(--muted)">${t("archives.count", { n: `<span style="color:var(--accent)">${total}</span>` })}${filterHint}</p>` +
     `</header>` +
     (items.length
       ? `<div class="space-y-8">${sections}</div>`
-      : `<p class="rounded-2xl border p-10 text-center text-sm" style="border-color:var(--border);background:var(--surface);color:var(--muted)">这个时间段还没有文章。</p>`) +
+      : `<p class="rounded-2xl border p-10 text-center text-sm" style="border-color:var(--border);background:var(--surface);color:var(--muted)">${t("archives.empty")}</p>`) +
     `</div>${aside}</div>`;
 
   const siteTitle = settings.siteTitle ?? "";
 
   const head =
-    `<meta name="description" content="${esc(siteTitle)} 的全部文章按时间归档">` +
+    `<meta name="description" content="${esc(t("archives.desc", { site: siteTitle }))}">` +
     `<meta property="og:url" content="${esc(ctx?.origin ?? "")}">` +
-    `<meta property="og:site_name" content="${esc(siteTitle)}">` +
-    `<meta property="og:locale" content="zh_CN">`;
+    `<meta property="og:site_name" content="${esc(siteTitle)}">`;
   return {
 
-    headTitle: `文章归档 - ${siteTitle}`,
+    headTitle: `${t("crumb.archive")} - ${siteTitle}`,
     head,
     main,
   };
@@ -1701,6 +1763,8 @@ async function notFound(_p: unknown, _ctx: Ctx) {
   // it only costs an extra query when showRecent is off (the result is simply
   // dropped), while awaiting it behind the settings reads cost one serial
   // round trip on every 404.
+  const locale = localeOf(_ctx);
+  const t = makeT(locale);
   const [settings, site, themeSlug, recentResult] = await Promise.all([
     getNotFoundSettings(),
     getSettings(),
@@ -1712,14 +1776,27 @@ async function notFound(_p: unknown, _ctx: Ctx) {
   if (settings.showRecent) {
     recent = (recentResult.items || [])
       .slice(0, themed ? 5 : 6)
-      .map((p: PostView) => ({ url: p.url, title: p.title }));
+      .map((p: PostView) => ({ url: localeHref(p.url, locale), title: p.title }));
   }
   return {
     settings,
     recent,
     siteTitle: site.siteTitle ?? "",
     themeSlug,
-    skin: themed ? bluemixNotFoundPage({ settings, recent }) : "",
+    skin: themed ? bluemixNotFoundPage({ settings, recent, t, homeHref: localeHref("/", locale) }) : "",
+    locale,
+    htmlLang: htmlLangOf(locale),
+    // 返回首页 keeps the visitor in the locale they asked for.
+    homeHref: localeHref("/", locale),
+    searchAction: localeHref("/search", locale),
+    strings: {
+      title: t("notfound.title"),
+      searchPlaceholder: t("notfound.search_placeholder"),
+      searchLabel: t("notfound.search_label"),
+      searchSubmit: t("notfound.search_submit"),
+      backHome: t("notfound.back_home"),
+      recent: t("notfound.recent"),
+    },
   };
 }
 
@@ -1859,7 +1936,25 @@ function maintenanceView(settings: MaintenanceSettings) {
  *  read below must agree, so it lives here rather than as two literals. */
 const PATH_MISS_TTL = 60_000;
 
-async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
+/**
+ * Catch-all exit post-processing, applied once so every view kind gets it:
+ * hreflang alternates in the head (canonical stays the bare default-locale
+ * path) and the locale prefix on root-relative links in the main HTML, which
+ * keeps navigation inside /en. The default locale is a no-op on both.
+ */
+function finalizeView(view: Record<string, any> | null, ctx: Ctx, locale: Locale) {
+  if (!view || typeof view !== "object") return view;
+  const path = (ctx && ctx.pathname) || "/";
+  const head = typeof view.head === "string" ? view.head : "";
+  const main = typeof view.main === "string" ? view.main : "";
+  return {
+    ...view,
+    head: head + hreflangLinks(ctx.origin || "", path),
+    main: prefixLocaleUrls(main, locale),
+  };
+}
+
+async function resolveInner(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
   if (process.env.OBOEXT_DEBUG_RESOLVE) {
     const sm = (globalThis as any).__rosezm_signalMap as Map<string, unknown> | undefined;
     log.debug("[resolve-debug] payload:", JSON.stringify(payload), "pathname:", ctx?.pathname,
@@ -1867,17 +1962,54 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
       "mapSize:", sm?.size);
   }
   const raw = (payload.segments ?? []).map((s) => String(s));
+  // Locale prefix: the router matches the raw URL, so "/en/blog" arrives with
+  // the prefix still in the segments. Strip it once here — ctx.pathname was
+  // already canonicalized by the middleware, and every lookup below must see
+  // the same canonical path. A page literally slugged "en" is shadowed by
+  // the locale (standard i18n-routing trade-off).
+  const segs = raw[0] === "en" ? raw.slice(1) : raw;
   // Bots probe unknown paths far more than humans follow broken links, and
   // they come back. A confirmed miss is remembered for 60s so a repeat hit
   // skips the per-type probes and the notFound render's reads entirely;
   // invalidateContentCaches() drops these on every content write, so a page
   // created at a previously-missed URL is reachable at once.
-  const missKey = `pathmiss:${raw.join("/")}`;
-  if (raw.length && peekMemo<boolean>(missKey, PATH_MISS_TTL) === true) return null;
-  const res = await resolveSitePath(raw);
+  const missKey = `pathmiss:${segs.join("/")}`;
+  if (segs.length && peekMemo<boolean>(missKey, PATH_MISS_TTL) === true) return null;
+  const res = await resolveSitePath(segs);
   if (!res) {
-    if (raw.length) await memoQuery(missKey, PATH_MISS_TTL, async () => true);
-    const decoded = raw
+    // /search and /archives are real .rose pages at the bare path; under the
+    // locale prefix the catch-all is what matches, so delegate to their
+    // loaders here. Same {head, headTitle, main} contract, query carried
+    // over from the request.
+    if (segs.length === 1 && segs[0] === "search") {
+      const q = ctx.query;
+      return {
+        kind: "search",
+        ...(await search(
+          {
+            q: q.get("q") || "",
+            page: Number(q.get("page") || 1),
+            all: q.get("all") === "1",
+          },
+          ctx,
+        )),
+      };
+    }
+    if (segs.length === 1 && segs[0] === "archives") {
+      const q = ctx.query;
+      return {
+        kind: "archives",
+        ...(await archives(
+          {
+            year: Number(q.get("year") || 0),
+            month: Number(q.get("month") || 0),
+          },
+          ctx,
+        )),
+      };
+    }
+    if (segs.length) await memoQuery(missKey, PATH_MISS_TTL, async () => true);
+    const decoded = segs
       .map((s) => {
         try {
           return decodeURIComponent(s);
@@ -1952,6 +2084,10 @@ async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx
   // here rebuilt the whole chrome a second time (~12-24 DB queries) for
   // values nothing consumed.
   return { kind: res.kind === "blogIndex" ? "blog" : res.kind, ...out };
+}
+
+async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
+  return finalizeView(await resolveInner(payload, ctx), ctx, localeOf(ctx));
 }
 
 // ----------------------------------------------------------------- registry
@@ -2061,6 +2197,10 @@ export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unk
       footer: "",
       pluginHead: "",
       pluginFooter: "",
+      // The layout reads these unconditionally; the admin never shows a
+      // locale switcher, so both are the default-locale constants.
+      htmlLang: htmlLangOf(DEFAULT_LOCALE),
+      locale: DEFAULT_LOCALE,
     };
   }
   const fn = (loaders as Record<string, (p: any, c: Ctx) => Promise<unknown>>)[key];

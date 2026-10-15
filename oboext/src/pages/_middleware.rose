@@ -2,6 +2,7 @@
   // Oboext request interceptor (runs once per request on the Node server).
   import { checkCsrf, needsCsrf, isSafeMethod, selfHealCsrfCookie } from "@server/csrf";
   import { createLogger } from "@server/logger";
+  import { splitLocalePath } from "@server/i18n";
   const log = createLogger("middleware");
 
   export async function handle(request) {
@@ -65,6 +66,24 @@
       (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
       (request.headers.get("x-real-ip") || "").trim();
 
+    // ------------------------------------------------ locale prefix (/en)
+    // The default locale (zh-CN) is prefix-free, so every existing URL keeps
+    // working; English lives under /en. The URL prefix is the ONLY signal:
+    // the client reproduces it from location.pathname, so SSR and hydration
+    // derive the same locale and no fetch round-trip can flip the chrome
+    // (Accept-Language is not sent by fetch(), so it cannot participate).
+    // This runs BEFORE the /api/data early return below because a data
+    // request carries the page URL in x-rv-url and must canonicalize exactly
+    // like a document request would. ctx.pathname is what every loader keys
+    // off (nav highlight, permalink matching, plugin head context), so
+    // loaders see the stripped path; the framework router still matches the
+    // raw URL, and the resolve loader strips the same segment from its
+    // segments payload. An unknown first segment is left alone - it may be a
+    // real page slug.
+    const loc = splitLocalePath(real.pathname);
+    ctx.locale = loc.locale;
+    if (loc.prefixed) ctx.pathname = loc.path;
+
     // /api/data renders for whatever page the browser is on: its loader
     // context must carry THAT pathname/query, not the endpoint's. The header
     // was already applied above; nothing else to do here.
@@ -94,7 +113,10 @@
 
     if (!reg) return;
 
-    const rp = real.pathname;
+    // Canonical (locale-stripped) path: every branch below must judge the
+    // route the loaders see, so /en/admin/login redirects to /admin/login
+    // instead of falling through to page routing.
+    const rp = ctx.pathname || real.pathname;
 
     // ------------------------------------------- first-run wall (whole site)
     // A fresh install has no user, so every public page renders an empty blog

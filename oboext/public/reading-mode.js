@@ -1,25 +1,32 @@
 /*
  * Reading mode — post-page reading comfort layer.
  * Zero dependencies, self-contained style injection (same pattern as autosave.js):
- * the pure core is exported via module.exports so node unit tests can require
- * this exact file; the browser install is guarded by `typeof document`.
+ * the pure core plus the locale message tables are exported via module.exports
+ * so node unit tests can require this exact file; the browser install is
+ * guarded by `typeof document`. UI strings resolve through M(el, key):
+ * the article's data-reading-locale attribute first, then <html lang>.
  *
  * Scope: only activates on pages carrying <article id="post-body"> (single post
- * view). State persists in localStorage; pjax navigations re-install via rv:nav.
+ * view). State persists in localStorage; pjax navigations re-install via rv:nav
+ * and rebuild the chrome when the locale changed (chromeLocale guard).
  */
 (function (root, factory) {
-  var core = factory();
-  if (typeof module === "object" && module.exports) module.exports = { core: core };
+  var api = factory();
+  var core = api.core;
+  if (typeof module === "object" && module.exports) module.exports = api;
   if (typeof document === "undefined") return;
   var ready = function (fn) {
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn);
     else fn();
   };
   ready(function () {
-    install(core);
+    install(core, api);
   });
 
-  function install(core) {
+  function install(core, api) {
+    var M = api.M;
+    var localeOf = api.localeOf;
+    var chromeLocale = "";
     var KEY = "oboext:reading-mode:v1";
     var FAB_ID = "reading-mode-fab";
     var BAR_ID = "reading-mode-progress";
@@ -132,19 +139,29 @@
     }
 
     function ensureChrome() {
-      if (fab) return;
+      var a = article();
+      if (fab) {
+        if (chromeLocale && chromeLocale !== localeOf(a)) {
+          fab.remove();
+          panel.remove();
+          bar.remove();
+          fab = panel = bar = null;
+        } else {
+          return;
+        }
+      }
       injectStyle();
       bar = document.createElement("div");
       bar.id = BAR_ID;
       bar.setAttribute("role", "progressbar");
-      bar.setAttribute("aria-label", "阅读进度");
+      bar.setAttribute("aria-label", M(a, "progress"));
       document.body.appendChild(bar);
 
       fab = document.createElement("button");
       fab.id = FAB_ID;
       fab.type = "button";
-      fab.title = "阅读模式 (Esc 退出)";
-      fab.setAttribute("aria-label", "阅读模式");
+      fab.title = M(a, "exit_hint");
+      fab.setAttribute("aria-label", M(a, "title"));
       fab.innerHTML =
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>';
       document.body.appendChild(fab);
@@ -152,26 +169,27 @@
       panel = document.createElement("div");
       panel.className = "rm-panel";
       panel.setAttribute("role", "dialog");
-      panel.setAttribute("aria-label", "阅读模式设置");
+      panel.setAttribute("aria-label", M(a, "settings"));
       panel.innerHTML =
-        '<h4>阅读模式</h4>' +
-        '<div class="rm-row"><label>栏宽</label><div class="rm-seg" data-rm-seg="width">' +
-        '<button type="button" data-rm-seg="width" data-rm-value="default">默认</button>' +
-        '<button type="button" data-rm-seg="width" data-rm-value="narrow">窄栏</button>' +
-        '<button type="button" data-rm-seg="width" data-rm-value="wide">宽栏</button></div></div>' +
-        '<div class="rm-row"><label>字体</label><div class="rm-seg" data-rm-seg="font">' +
-        '<button type="button" data-rm-seg="font" data-rm-value="sans">无衬线</button>' +
-        '<button type="button" data-rm-seg="font" data-rm-value="serif">衬线</button></div></div>' +
-        '<div class="rm-row"><label>字号与行距</label><div class="rm-stepper">' +
-        '<button type="button" data-rm-step="size" data-rm-dir="-1" aria-label="减小字号">A&#8722;</button>' +
+        '<h4>' + M(a, "title") + '</h4>' +
+        '<div class="rm-row"><label>' + M(a, "width") + '</label><div class="rm-seg" data-rm-seg="width">' +
+        '<button type="button" data-rm-seg="width" data-rm-value="default">' + M(a, "width_default") + '</button>' +
+        '<button type="button" data-rm-seg="width" data-rm-value="narrow">' + M(a, "width_narrow") + '</button>' +
+        '<button type="button" data-rm-seg="width" data-rm-value="wide">' + M(a, "width_wide") + '</button></div></div>' +
+        '<div class="rm-row"><label>' + M(a, "font") + '</label><div class="rm-seg" data-rm-seg="font">' +
+        '<button type="button" data-rm-seg="font" data-rm-value="sans">' + M(a, "font_sans") + '</button>' +
+        '<button type="button" data-rm-seg="font" data-rm-value="serif">' + M(a, "font_serif") + '</button></div></div>' +
+        '<div class="rm-row"><label>' + M(a, "size_lh") + '</label><div class="rm-stepper">' +
+        '<button type="button" data-rm-step="size" data-rm-dir="-1" aria-label="' + M(a, "size_dec") + '">A&#8722;</button>' +
         '<span class="rm-val"></span>' +
-        '<button type="button" data-rm-step="size" data-rm-dir="1" aria-label="增大字号">A+</button>' +
-        '<button type="button" data-rm-step="lh" data-rm-dir="-1" aria-label="减小行距">&#8212;</button>' +
-        '<button type="button" data-rm-step="lh" data-rm-dir="1" aria-label="增大行距">&#8222;</button></div></div>' +
+        '<button type="button" data-rm-step="size" data-rm-dir="1" aria-label="' + M(a, "size_inc") + '">A+</button>' +
+        '<button type="button" data-rm-step="lh" data-rm-dir="-1" aria-label="' + M(a, "lh_dec") + '">&#8212;</button>' +
+        '<button type="button" data-rm-step="lh" data-rm-dir="1" aria-label="' + M(a, "lh_inc") + '">&#8222;</button></div></div>' +
         '<div class="rm-actions">' +
         '<button type="button" class="rm-primary" data-rm-act="toggle"></button>' +
-        '<button type="button" data-rm-act="reset">恢复默认</button></div>';
+        '<button type="button" data-rm-act="reset">' + M(a, "reset") + '</button></div>';
       document.body.appendChild(panel);
+      chromeLocale = localeOf(a);
 
       fab.addEventListener("click", function () {
         panel.classList.toggle("rm-open");
@@ -208,27 +226,28 @@
       panel.addEventListener("keydown", function (e) {
         if (e.key === "Escape") panel.classList.remove("rm-open");
       });
-      document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape" && state.on && !panel.classList.contains("rm-open")) {
-          state.on = false;
-          apply();
-          syncToggleLabel();
-        }
-      });
-      document.addEventListener("click", function (e) {
-        if (!panel.classList.contains("rm-open")) return;
-        if (panel.contains(e.target) || (fab && fab.contains(e.target))) return;
-        panel.classList.remove("rm-open");
-      });
-      window.addEventListener("resize", scheduleProgress, { passive: true });
-      window.addEventListener("scroll", scheduleProgress, { passive: true });
       syncToggleLabel();
     }
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && state.on && panel && !panel.classList.contains("rm-open")) {
+        state.on = false;
+        apply();
+        syncToggleLabel();
+      }
+    });
+    document.addEventListener("click", function (e) {
+      if (!panel || !panel.classList.contains("rm-open")) return;
+      if (panel.contains(e.target) || (fab && fab.contains(e.target))) return;
+      panel.classList.remove("rm-open");
+    });
+    window.addEventListener("resize", scheduleProgress, { passive: true });
+    window.addEventListener("scroll", scheduleProgress, { passive: true });
 
     function syncToggleLabel() {
       if (!panel) return;
       var btn = panel.querySelector('[data-rm-act="toggle"]');
-      if (btn) btn.textContent = state.on ? "退出阅读模式" : "开启阅读模式";
+      if (btn) btn.textContent = state.on ? M(article(), "exit") : M(article(), "enter");
     }
 
     function paintProgress() {
@@ -269,6 +288,63 @@
     mount();
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  var MSGS = {
+    zh: {
+      progress: "阅读进度",
+      title: "阅读模式",
+      exit_hint: "阅读模式 (Esc 退出)",
+      settings: "阅读模式设置",
+      width: "栏宽",
+      width_default: "默认",
+      width_narrow: "窄栏",
+      width_wide: "宽栏",
+      font: "字体",
+      font_sans: "无衬线",
+      font_serif: "衬线",
+      size_lh: "字号与行距",
+      size_dec: "减小字号",
+      size_inc: "增大字号",
+      lh_dec: "减小行距",
+      lh_inc: "增大行距",
+      reset: "恢复默认",
+      enter: "开启阅读模式",
+      exit: "退出阅读模式",
+    },
+    en: {
+      progress: "Reading progress",
+      title: "Reading mode",
+      exit_hint: "Reading mode (Esc to exit)",
+      settings: "Reading mode settings",
+      width: "Column width",
+      width_default: "Default",
+      width_narrow: "Narrow",
+      width_wide: "Wide",
+      font: "Font",
+      font_sans: "Sans-serif",
+      font_serif: "Serif",
+      size_lh: "Size & line height",
+      size_dec: "Decrease font size",
+      size_inc: "Increase font size",
+      lh_dec: "Decrease line height",
+      lh_inc: "Increase line height",
+      reset: "Reset to defaults",
+      enter: "Enter reading mode",
+      exit: "Exit reading mode",
+    },
+  };
+  function localeOf(e) {
+    var a = e && e.getAttribute ? e.getAttribute("data-reading-locale") : "";
+    if (a !== "en" && a !== "zh-CN") {
+      var d = typeof document !== "undefined" && document.documentElement
+        ? document.documentElement.getAttribute("lang")
+        : "";
+      a = d === "en" ? "en" : "zh-CN";
+    }
+    return a;
+  }
+  function M(e, t) {
+    return (localeOf(e) === "en" ? MSGS.en : MSGS.zh)[t];
+  }
   var WIDTHS = ["default", "narrow", "wide"];
   var FONTS = ["sans", "serif"];
   function clampNumber(n, lo, hi) {
@@ -323,12 +399,17 @@
     return Math.min(100, Math.max(0, pct));
   }
   return {
-    clampNumber: clampNumber,
-    defaultState: defaultState,
-    readState: readState,
-    serializeState: serializeState,
-    progressPercent: progressPercent,
-    WIDTHS: WIDTHS,
-    FONTS: FONTS,
+    core: {
+      clampNumber: clampNumber,
+      defaultState: defaultState,
+      readState: readState,
+      serializeState: serializeState,
+      progressPercent: progressPercent,
+      WIDTHS: WIDTHS,
+      FONTS: FONTS,
+    },
+    MSGS: MSGS,
+    M: M,
+    localeOf: localeOf,
   };
 });

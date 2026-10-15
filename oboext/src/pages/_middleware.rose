@@ -2,7 +2,7 @@
   // Oboext request interceptor (runs once per request on the Node server).
   import { checkCsrf, needsCsrf, isSafeMethod, selfHealCsrfCookie } from "@server/csrf";
   import { createLogger } from "@server/logger";
-  import { splitLocalePath } from "@server/i18n";
+  import { splitLocalePath, localeFromCookieHeader, localeHref } from "@server/i18n";
   const log = createLogger("middleware");
 
   export async function handle(request) {
@@ -148,6 +148,47 @@
     ) {
       if (!(await reg.auth.hasAnyUser())) {
         return Response.redirect(new URL("/admin/setup", real.origin), 302);
+      }
+    }
+
+    // --------------------------------------------- remembered locale bounce
+    // A visitor who picked English via the switcher carries oboext_locale=en
+    // (the switcher writes it client-side before its full-document jump).
+    // A prefix-free URL would otherwise silently render the default locale,
+    // losing the choice on the next session; bounce it to the prefixed URL
+    // once instead. The URL prefix stays the ONLY render signal: this runs
+    // before any page renders, so SSR and hydration still agree without a
+    // round-trip, and <html lang> always matches the address bar.
+    //
+    // Only prefixed locales are worth bouncing - the default is already
+    // prefix-free, so remembering it changes nothing. Documents that are
+    // locale-independent (feeds, sitemap, robots, manifest) and every
+    // machine consumer (APIs, assets, admin, the search jump that answers
+    // with its own redirect) are exempt: a bounce would either duplicate
+    // work or, for the search jump, chain two redirects into one request.
+    if (!loc.prefixed && (request.method === "GET" || request.method === "HEAD")) {
+      const rpBouncable =
+        !rp.startsWith("/api/") &&
+        !rp.startsWith("/public/") &&
+        !rp.startsWith("/uploads/") &&
+        !rp.startsWith("/theme-assets/") &&
+        !rp.startsWith("/plugin-assets/") &&
+        !rp.startsWith("/theme-style/") &&
+        !rp.startsWith("/admin") &&
+        rp !== "/search" &&
+        rp !== "/favicon.ico" &&
+        rp !== "/manifest.webmanifest" &&
+        rp !== "/robots.txt" &&
+        rp !== "/sitemap.xml" &&
+        rp !== "/feed.xml" &&
+        rp !== "/rss.xml" &&
+        rp !== "/feed";
+      if (rpBouncable) {
+        const remembered = localeFromCookieHeader(request.headers.get("cookie"));
+        if (remembered && remembered !== loc.locale) {
+          const target = localeHref(real.pathname, remembered) + real.search;
+          return Response.redirect(new URL(target, real.origin), 302);
+        }
       }
     }
 

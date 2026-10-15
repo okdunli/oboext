@@ -278,6 +278,19 @@ const GLOBALS_BODY_UTILITIES = `.min-h-screen{min-height:100vh}
 @media (min-width:1024px){.lg\\:hidden{display:none}.lg\\:grid-cols-\\[1fr_300px\\]{grid-template-columns:1fr 300px}}
 @media (min-width:1280px){.xl\\:hidden{display:none}}
 .rv-ic{display:inline-block;vertical-align:-0.125em;flex-shrink:0;overflow:visible;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#rv-progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:9999;background:var(--accent,#e91e63);transition:width .08s linear;pointer-events:none}
+#rv-toc{position:fixed;top:50%;right:16px;transform:translateY(-50%);max-width:260px;max-height:72vh;overflow:auto;-webkit-overflow-scrolling:touch;background:var(--surface,#fff);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:12px 14px;box-shadow:0 10px 34px rgba(0,0,0,.14);font-size:13px;line-height:1.5;z-index:9998;display:none}
+#rv-toc.open{display:block}
+#rv-toc h4{margin:0 0 8px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted,#888)}
+#rv-toc ol{list-style:none;margin:0;padding:0}
+#rv-toc li{margin:1px 0}
+#rv-toc a{display:block;padding:3px 7px;border-radius:6px;color:var(--text,#222);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#rv-toc a:hover{background:color-mix(in srgb,var(--accent,#e91e63) 10%,transparent)}
+#rv-toc a.active{color:var(--accent,#e91e63);font-weight:600;background:color-mix(in srgb,var(--accent,#e91e63) 12%,transparent)}
+#rv-toc li.h3 a{padding-left:18px;font-size:12px;color:var(--muted,#666)}
+#rv-toc-toggle{position:fixed;right:16px;bottom:22px;width:46px;height:46px;border-radius:50%;border:1px solid var(--border,#e5e7eb);background:var(--surface,#fff);color:var(--accent,#e91e63);font-size:20px;line-height:1;cursor:pointer;z-index:9998;box-shadow:0 6px 18px rgba(0,0,0,.14);display:none;align-items:center;justify-content:center}
+#rv-toc-toggle.show{display:flex}
+@media (max-width:768px){#rv-toc{right:10px;left:10px;max-width:none;transform:none;top:auto;bottom:80px}}
 `;
 
 

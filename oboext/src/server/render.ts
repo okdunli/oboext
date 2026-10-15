@@ -516,6 +516,34 @@ export function optimizeContentImages(html: string): string {
   });
 }
 
+// Perf attributes for hero/cover/featured images (the above-the-fold LCP candidates
+// that must stay eager): off-main-thread decode, optional high fetch-priority, plus
+// intrinsic width/height (CLS guard) and a responsive srcset when variants exist.
+export function imgPerfAttrs(
+  url: string,
+  opts: { lazy?: boolean; high?: boolean; srcset?: boolean } = {},
+): string {
+  if (!url) return "";
+  let a = "";
+  if (opts.lazy) a += ` loading="lazy"`;
+  a += ` decoding="async"`;
+  if (opts.high) a += ` fetchpriority="high"`;
+  if (url.startsWith("/uploads/")) {
+    if (opts.srcset !== false) {
+      const vs = imgVariantAttrs(url);
+      if (vs) a += vs;
+    }
+    let dim = contentImgDimCache.get(url);
+    if (dim === undefined) {
+      const abs = uploadsAbsPath(url);
+      dim = abs ? readImageDims(abs) : null;
+      contentImgDimCache.set(url, dim);
+    }
+    if (dim) a += ` width="${dim[0]}" height="${dim[1]}"`;
+  }
+  return a;
+}
+
 export async function buildPostBody(
   p: { content?: Block[] | null; slug: string; title?: string | null },
   kind: "post" | "page" = "post",
@@ -598,7 +626,7 @@ export function awardBadge(n: number): string {
 
 export function postCard(p: PostView, award = 0): string {
   const img = p.featuredImage
-    ? `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"><img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)} crossorigin="anonymous"></a>`
+    ? `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"><img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)}${imgPerfAttrs(p.featuredImage, { srcset: false })} crossorigin="anonymous"></a>`
     : `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"></a>`;
   const subtitle = extractSubtitle(p.title);
   return (
@@ -617,7 +645,7 @@ export function postCard(p: PostView, award = 0): string {
 
 export function nestedCard(p: PostView): string {
   const img = p.featuredImage
-    ? `<img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)} crossorigin="anonymous">`
+    ? `<img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)}${imgPerfAttrs(p.featuredImage, { srcset: false })} crossorigin="anonymous">`
     : "";
   const subtitle = extractSubtitle(p.title);
   return (

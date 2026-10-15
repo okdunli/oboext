@@ -5,6 +5,21 @@
   import { getAdminSecurity } from "@server/security";
   import { sessionCookiePair } from "@server/csrf";
   import { ServiceError } from "@server/errors";
+  import { resolveLocale, makeT } from "@server/i18n";
+
+  // The callback is a plain browser navigation, so there is no client-stamped
+  // x-locale header. The visitor's language therefore comes from the same
+  // signals the middleware uses to land the follow-up page:
+  // URL prefix > locale cookie > Accept-Language > default.
+  function visitorT(request) {
+    return makeT(
+      resolveLocale({
+        url: request.url,
+        cookie: request.headers.get("cookie"),
+        accept: request.headers.get("accept-language"),
+      }),
+    );
+  }
 
   function pathProvider(request) {
     return decodeURIComponent(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
@@ -35,6 +50,7 @@
   export async function GET(request) {
     const url = new URL(request.url);
     const origin = url.origin;
+    const t = visitorT(request);
     try {
       const key = pathProvider(request);
       const code = url.searchParams.get("code") ?? "";
@@ -43,7 +59,7 @@
       const user = getContext().user;
 
       if (!code || !state) {
-        return await redirectWithError(origin, "授权回调缺少必要参数");
+        return await redirectWithError(origin, t("api.oauth_bad_callback"));
       }
 
       const result = await handleOAuthCallback({
@@ -74,8 +90,13 @@
       });
     } catch (e) {
 
+      // A ServiceError carries a catalog key on the public paths; the Chinese
+      // `message` (provider diagnostics) is the log-side detail and the admin
+      // fallback. Anything unrecognised gets the generic visitor message.
       const friendly =
-        e instanceof ServiceError ? e.message : "第三方登录失败，请重试";
+        e instanceof ServiceError
+          ? t(e.key ?? "api.oauth_provider_failed", e.params)
+          : t("api.oauth_provider_failed");
       return await redirectWithError(origin, friendly);
     }
   }

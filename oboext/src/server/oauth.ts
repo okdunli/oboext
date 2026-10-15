@@ -1,5 +1,3 @@
-
-
 import crypto from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { and, eq, sql } from "drizzle-orm";
@@ -92,6 +90,10 @@ type HttpFn = (
     body?: string;
   },
 ) => Promise<{ status: number; body: string; json: () => unknown }>;
+
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 
 interface Preset {
   kind: PresetKind;
@@ -540,6 +542,10 @@ const PRESETS: Record<PresetKind, Preset> = {
   },
 };
 
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+
 function defaultConfig(): ProviderConfig {
   return {
     enabled: false,
@@ -583,7 +589,7 @@ async function resolveProvider(
   if (isCustomKey(key)) {
     const slug = key.slice("custom:".length);
     if (!CUSTOM_SLUG_RE.test(slug) || !settings.providers[key]) {
-      throw new ServiceError("登录方式不存在", 404);
+      throw new ServiceError("登录方式不存在", 404, "api.oauth_unavailable");
     }
     return {
       preset: null,
@@ -592,7 +598,7 @@ async function resolveProvider(
       color: "#6366F1",
     };
   }
-  throw new ServiceError("登录方式不存在", 404);
+  throw new ServiceError("登录方式不存在", 404, "api.oauth_unavailable");
 }
 
 export async function listAdminProviders(): Promise<AdminProvider[]> {
@@ -809,6 +815,10 @@ export async function removeCustomProvider(key: string): Promise<void> {
   await writeSettings(settings);
 }
 
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+
 interface StateClaims {
   provider: string;
   nonce: string;
@@ -839,7 +849,11 @@ export async function verifyOAuthState(token: string): Promise<StateClaims> {
       redir: typeof payload.redir === "string" ? payload.redir : undefined,
     };
   } catch {
-    throw new ServiceError("登录状态已过期，请重新发起授权", 400);
+    throw new ServiceError(
+      "登录状态已过期，请重新发起授权",
+      400,
+      "api.oauth_session_expired",
+    );
   }
 }
 
@@ -847,6 +861,10 @@ function safeRedirect(redir: string | undefined): string {
   if (redir && redir.startsWith("/") && !redir.startsWith("//")) return redir;
   return "/";
 }
+
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 
 export interface StartResult {
   authorizeUrl: string;
@@ -861,9 +879,11 @@ export async function startOAuth(params: {
 }): Promise<StartResult> {
   await ensureMigrations();
   const { preset, config } = await resolveProvider(params.key);
-  if (!config.enabled) throw new ServiceError("该登录方式未开启", 404);
+  if (!config.enabled) {
+    throw new ServiceError("该登录方式未开启", 404, "api.oauth_unavailable");
+  }
   if (!config.clientId || !config.clientSecret) {
-    throw new ServiceError("该登录方式配置不完整", 422);
+    throw new ServiceError("该登录方式配置不完整", 422, "api.oauth_misconfigured");
   }
   const state = await signOAuthState({
     provider: params.key,
@@ -966,6 +986,10 @@ async function exchangeCustom(
   };
 }
 
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+
 export type OAuthResultMode = "login" | "merged" | "registered" | "bound";
 
 export interface OAuthResult {
@@ -1052,27 +1076,57 @@ export async function handleOAuthCallback(params: {
   await ensureMigrations();
   const claims = await verifyOAuthState(params.state);
   if (!params.stateCookie || params.stateCookie !== params.state) {
-    throw new ServiceError("授权校验失败：state 与浏览器状态不一致", 400);
+    throw new ServiceError(
+      "授权校验失败：state 与浏览器状态不一致",
+      400,
+      "api.oauth_state_mismatch",
+    );
   }
   if (claims.provider !== params.key) {
-    throw new ServiceError("授权提供商与回调不一致", 400);
+    throw new ServiceError(
+      "授权提供商与回调不一致",
+      400,
+      "api.oauth_provider_mismatch",
+    );
   }
   const { preset, config, label } = await resolveProvider(params.key);
-  if (!config.enabled) throw new ServiceError("该登录方式未开启", 404);
+  if (!config.enabled) {
+    throw new ServiceError("该登录方式未开启", 404, "api.oauth_unavailable");
+  }
 
   const redirectUri = `${params.origin}/api/oauth/${encodeURIComponent(params.key)}/callback`;
   const http = makeHttp();
   const ctx: ExchangeContext = { config, code: params.code, redirectUri, http };
-  const profile = preset ? await preset.exchange(ctx) : await exchangeCustom(ctx);
-  if (!profile.openId) {
-    throw new ServiceError(`${label} 未返回账号标识`, 502);
+  // ONE chokepoint for every provider-side failure below. The Chinese
+  // diagnostic stays on `message` (logs, the admin surface, the raw JSON the
+  // operator debugs with); the catalog key plus the provider label are what
+  // the visitor's login page renders.
+  const providerFailed = (e: unknown): never => {
+    if (e instanceof ServiceError && !e.key) {
+      e.key = "api.oauth_provider_label_failed";
+      e.params = { p: label };
+    }
+    throw e;
+  };
+  let profile: NormalizedProfile;
+  try {
+    profile = preset ? await preset.exchange(ctx) : await exchangeCustom(ctx);
+    if (!profile.openId) {
+      throw new ServiceError(`${label} 未返回账号标识`, 502);
+    }
+  } catch (e) {
+    return providerFailed(e);
   }
 
   const redirectTo = safeRedirect(claims.redir);
 
   if (claims.bind) {
     if (!params.currentUserId || params.currentUserId !== claims.bind) {
-      throw new ServiceError("绑定会话已失效，请重新登录后再试", 403);
+      throw new ServiceError(
+        "绑定会话已失效，请重新登录后再试",
+        403,
+        "api.oauth_bind_expired",
+      );
     }
     const [existing] = await db
       .select()
@@ -1092,12 +1146,16 @@ export async function handleOAuthCallback(params: {
           redirectTo: "/admin/account",
         };
       }
-      throw new ServiceError("该第三方账号已被其他用户绑定", 409);
+      throw new ServiceError(
+        "该第三方账号已被其他用户绑定",
+        409,
+        "api.oauth_account_taken",
+      );
     }
 
     await attachIdentity(claims.bind, params.key, profile);
     const row = await loadUser(claims.bind);
-    if (!row) throw new ServiceError("用户不存在", 404);
+    if (!row) throw new ServiceError("用户不存在", 404, "api.oauth_user_missing");
     return {
       mode: "bound",
       user: toSessionUser(row),
@@ -1119,7 +1177,11 @@ export async function handleOAuthCallback(params: {
   if (identity) {
     const row = await loadUser(identity.userId);
     if (!row || row.status !== "active") {
-      throw new ServiceError("账号已被停用，无法登录", 403);
+      throw new ServiceError(
+        "账号已被停用，无法登录",
+        403,
+        "api.oauth_account_disabled",
+      );
     }
     await touchIdentity(identity.id, profile);
     await touchUser(row.id);
@@ -1138,7 +1200,11 @@ export async function handleOAuthCallback(params: {
       .where(sql`lower(${users.email}) = lower(${profile.email})`);
     if (byEmail) {
       if (byEmail.status !== "active") {
-        throw new ServiceError("账号已被停用，无法登录", 403);
+        throw new ServiceError(
+          "账号已被停用，无法登录",
+          403,
+          "api.oauth_account_disabled",
+        );
       }
       await attachIdentity(byEmail.id, params.key, profile);
       await touchUser(byEmail.id);
@@ -1155,6 +1221,7 @@ export async function handleOAuthCallback(params: {
     throw new ServiceError(
       "该第三方账号尚未关联本站用户，请先登录后在账号设置中绑定",
       403,
+      "api.oauth_not_linked",
     );
   }
 
@@ -1206,6 +1273,10 @@ async function loadUser(id: number) {
     .where(eq(users.id, id));
   return row ?? null;
 }
+
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 
 export interface UserIdentityView {
   id: number;

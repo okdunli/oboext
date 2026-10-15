@@ -29,6 +29,7 @@ import { dbStats } from "./db.js";
 import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, resolveSitePath, paginate, type PermalinkConfig } from "./links.js";
 import { resolveVirtualRoute, type VirtualSiteRoute } from "./virtual-routes.js";
 import { resolveCommentConfig } from "./comments-config.js";
+import { registerView } from "./register-view.js";
 import { getPublishedPageRow, hydrate as hydratePage, listPublishedPages } from "./pages.js";
 import * as R from "./render.js";
 import { adjacentHtml, adjacentKeyOf, adjacentRelLinks } from "./adjacent.js";
@@ -1849,84 +1850,6 @@ function virtualRouteView(route: VirtualSiteRoute, ctx: Ctx) {
   return { head, main };
 }
 
-function registerView(config: {
-  path: string;
-  nameRequired: boolean;
-  passwordRequired: boolean;
-  emailRequired: boolean;
-  phoneRequired: boolean;
-  emailVerify: boolean;
-  phoneVerify: boolean;
-  inviteOnly: boolean;
-  captcha: { enabled: boolean; mode: "builtin" | "custom" | null };
-}) {
-  const head =
-    `<title>注册账号</title>` +
-    `<meta name="robots" content="noindex, nofollow">`;
-  const field = (name: string, label: string, extra: string, required: boolean) =>
-    `<div class="oboe-reg-fld">` +
-    `<label>${R.esc(label)}${required ? "" : "（可选）"}</label>` +
-    `<input class="oboe-reg-input" name="${name}" ${extra}${required ? " required" : ""}>` +
-    `</div>`;
-  const codeField = (name: string, sendAttr: string, label: string) =>
-    `<div class="oboe-reg-fld">` +
-    `<label>${R.esc(label)}</label>` +
-    `<div class="oboe-reg-code">` +
-    `<input class="oboe-reg-input" name="${name}" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="6 位验证码" required>` +
-    `<button type="button" class="oboe-reg-send" ${sendAttr}>发送验证码</button>` +
-    `</div></div>`;
-  const captchaBlock = !config.captcha.enabled
-    ? ""
-    : config.captcha.mode === "custom"
-      ? `<div class="oboe-reg-fld"><label>验证码</label>` +
-        `<input class="oboe-reg-input" name="captchaToken" maxlength="200" autocomplete="off" placeholder="第三方验证码凭证" required></div>`
-      : `<div class="oboe-reg-fld"><label>验证码</label>` +
-        `<div class="oboe-reg-code">` +
-        `<input class="oboe-reg-input" name="captcha" maxlength="4" autocomplete="off" spellcheck="false" placeholder="4 位字符" required style="max-width:120px;text-transform:uppercase;letter-spacing:.18em;">` +
-        `<img data-oboe-reg-captcha-img src="/api/captcha/image" alt="验证码" title="看不清？点击刷新" style="height:38px;width:120px;cursor:pointer;border:1px solid var(--border-color,#d4d4d8);border-radius:8px;background:#eef2f7;">` +
-        `</div></div>`;
-  const main =
-    `<style>` +
-    `.oboe-reg{display:flex;flex-direction:column;gap:16px}` +
-    `.oboe-reg-fld{display:flex;flex-direction:column;gap:6px}` +
-    `.oboe-reg-fld label{font-size:13px;color:var(--text-color-2,#52525b)}` +
-    `.oboe-reg-input{width:100%;box-sizing:border-box;padding:9px 12px;font-size:14px;color:var(--text-color,#18181b);background:var(--background-2,#fff);border:1px solid var(--border-color,#d4d4d8);border-radius:8px;outline:none}` +
-    `.oboe-reg-input:focus{border-color:var(--primary-color,#4f46e5)}` +
-    `.oboe-reg-code{display:flex;align-items:center;gap:8px}` +
-    `.oboe-reg-send{flex-shrink:0;white-space:nowrap;padding:9px 12px;font-size:12.5px;color:var(--primary-color,#4f46e5);background:transparent;border:1px solid var(--border-color,#d4d4d8);border-radius:8px;cursor:pointer}` +
-    `.oboe-reg-send:disabled{opacity:.5;cursor:not-allowed}` +
-    `.oboe-reg-msg{min-height:18px;margin:0;font-size:13px;color:#dc2626}` +
-    `.oboe-reg-submit{padding:11px;font-size:14px;font-weight:600;color:#fff;background:var(--primary-color,#4f46e5);border:none;border-radius:8px;cursor:pointer}` +
-    `.oboe-reg-submit:disabled{opacity:.6;cursor:not-allowed}` +
-    `.oboe-reg-note{margin:0;text-align:center;font-size:12px;color:var(--text-color-3,#a1a1aa)}` +
-    `</style>` +
-    `<div class="container-np" style="padding:40px 16px 64px;max-width:520px;margin-inline:auto">` +
-    `<h1 style="font-size:26px;font-weight:700;margin-bottom:20px;color:var(--text-color,var(--foreground,#18181b))">注册账号</h1>` +
-    `<form class="oboe-reg" data-oboe-reg` +
-    ` data-name-required="${config.nameRequired ? "1" : "0"}"` +
-    ` data-password-required="${config.passwordRequired ? "1" : "0"}"` +
-    ` data-email-required="${config.emailRequired ? "1" : "0"}"` +
-    ` data-phone-required="${config.phoneRequired ? "1" : "0"}"` +
-    ` data-invite-only="${config.inviteOnly ? "1" : "0"}">` +
-    field("name", "昵称", 'type="text" maxlength="32" autocomplete="username" placeholder="2~32 个字符，注册后用于登录"', config.nameRequired) +
-    field("email", "邮箱", 'type="email" maxlength="120" autocomplete="email"', config.emailRequired) +
-    (config.emailVerify ? codeField("emailCode", 'data-oboe-reg-send="email"', "邮箱验证码") : "") +
-    field("phone", "手机号", 'type="tel" maxlength="20" autocomplete="tel" placeholder="中国大陆手机号或 + 开头的国际号码"', config.phoneRequired) +
-    (config.phoneVerify ? codeField("phoneCode", 'data-oboe-reg-send="sms"', "手机验证码") : "") +
-    (config.inviteOnly
-      ? field("inviteCode", "邀请码", 'type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="请输入管理员发放的邀请码"', true)
-      : "") +
-    field("password", "密码", `type="password" maxlength="200" autocomplete="new-password" placeholder="${config.passwordRequired ? "至少 8 位" : "留空可免密注册，事后可补设"}"`, config.passwordRequired) +
-    captchaBlock +
-    `<p class="oboe-reg-msg" data-oboe-reg-msg></p>` +
-    `<button type="submit" class="oboe-reg-submit" data-oboe-reg-submit>注 册</button>` +
-    `<p class="oboe-reg-note">注册即代表同意站点规则 · <a href="/" style="color:var(--primary-color,#4f46e5)">返回首页</a></p>` +
-    `</form>` +
-    `</div>` +
-    `<script src="${publicAssetHref("register.js")}" defer></script>`;
-  return { head, main };
-}
-
 function userCenterView(route: VirtualSiteRoute, ctx: Ctx) {
   const title = route.seoTitle || route.title;
   const canonical = `${ctx.origin ?? ""}${route.path}`;
@@ -2033,7 +1956,6 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
         )),
       };
     }
-    if (segs.length) await memoQuery(missKey, PATH_MISS_TTL, async () => true);
     const decoded = segs
       .map((s) => {
         try {
@@ -2059,7 +1981,8 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
       registerCfg.enabled &&
       registerCfg.path === "/" + decoded.join("/")
     ) {
-      return { kind: "register", ...registerView(registerCfg) };
+      const locale = localeOf(ctx);
+      return { kind: "register", ...registerView(registerCfg, makeT(locale), locale) };
     }
     if (decoded.length === 1 && decoded[0] === "me") {
       const me = ctx.user as any;
@@ -2069,7 +1992,15 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
       return { kind: "usercenter", ...userCenterView(route, ctx) };
     }
     const virtual = await resolveVirtualRoute(decoded);
-    if (!virtual) return null;
+    if (!virtual) {
+      // Only a CONFIRMED miss is memoized. This write used to sit above the
+      // fallback views, so a SUCCESSFUL register / secret-entry / user-center
+      // / virtual-route render still planted the negative flag — and the flag
+      // is keyed by the locale-stripped path, so the same page in the other
+      // locale (/user rendered, then /en/user) 404'd for the next 60s.
+      if (segs.length) await memoQuery(missKey, PATH_MISS_TTL, async () => true);
+      return null;
+    }
     return { kind: "virtual", ...virtualRouteView(virtual, ctx) };
   }
   const maintenance = await maintenanceGate((ctx.user as any) ?? null);

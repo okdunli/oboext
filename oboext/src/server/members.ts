@@ -7,6 +7,7 @@ import { hashPassword } from "./auth.js";
 import type { SessionUser } from "./auth.js";
 import { normalizeContactTarget } from "./auth.js";
 import { getOption, setOption } from "./options.js";
+import { invalidateContentCaches } from "./cache.js";
 import { getNotifySettings } from "./notify.js";
 import { verifyCode } from "./verify-codes.js";
 import { getPermalinkConfig } from "./links.js";
@@ -90,6 +91,11 @@ export async function saveMemberSettings(
     throw new ServiceError("注册路径不能与伪装登录入口相同，请更换", 422);
   }
   await setOption(OPTION_KEY, next);
+  // The register path is a catch-all fallback view: a URL that 404'd a minute
+  // ago is memoized as a miss for 60s, so enabling registration (or moving
+  // its path) must drop those flags or the new page stays unreachable until
+  // the TTL expires. Same contract the content write paths already honour.
+  invalidateContentCaches();
   return next;
 }
 

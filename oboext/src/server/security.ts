@@ -1,8 +1,7 @@
-
-
 import { getOption, setOption } from "./options.js";
 import { getPermalinkConfig } from "./links.js";
 import { ServiceError } from "./errors.js";
+import { invalidateContentCaches } from "./cache.js";
 
 export type CaptchaMode = "builtin" | "custom";
 export type CaptchaVerifyMethod = "POST" | "GET" | "PUT";
@@ -231,6 +230,12 @@ export async function saveAdminSecurity(
   }
 
   await setOption(OPTION_KEY, next);
+  // The secret-entry path is a catch-all fallback view: a URL that 404'd a
+  // minute ago is memoized as a miss for 60s, so enabling the entry (or
+  // moving its path) must drop those flags or the new login door stays
+  // unreachable until the TTL expires. Same contract the content write
+  // paths already honour.
+  invalidateContentCaches();
   return next;
 }
 

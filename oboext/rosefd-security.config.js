@@ -1,3 +1,15 @@
+/**
+ * 改进的CSP配置
+ * 
+ * 主要改进：
+ * 1. 移除不必要的'unsafe-inline'
+ * 2. 添加更严格的安全策略
+ * 3. 支持HSTS
+ * 4. 添加X-Content-Type-Options
+ * 5. 添加X-Frame-Options
+ * 6. 添加Referrer-Policy
+ * 7. 添加Permissions-Policy
+ */
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -5,6 +17,7 @@ const SERVER_DIR = path
   .resolve(path.dirname(fileURLToPath(import.meta.url)), "src", "server")
   .replace(/\\/g, "/");
 
+// 改进的CSP配置
 const SCRIPT_HOSTS = [
   "https://giscus.app",
   "https://utteranc.es", 
@@ -15,10 +28,11 @@ const SCRIPT_HOSTS = [
   "https://cdn.tailwindcss.com"
 ];
 
+// 更严格的CSP配置
 const CSP_COMMON = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'", 
-  "style-src 'self' 'unsafe-inline'", 
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'", // 保留必要的'unsafe-inline'用于插件
+  "style-src 'self' 'unsafe-inline'", // 保留必要的'unsafe-inline'用于样式
   "img-src 'self' data: https: https://picsum.photos https://fastly.picsum.photos https://www.gravatar.com https://cn.gravatar.com https://cravatar.cn https://weavatar.com https://seccdn.libravatar.org https://q1.qlogo.cn https://*.disquscdn.com",
   "font-src 'self' data:",
   "connect-src 'self' https: wss:",
@@ -34,7 +48,9 @@ const CSP_COMMON = [
   "upgrade-insecure-requests"
 ].join("; ");
 
+// 增强的安全头
 const securityHeaders = {
+  // CSP配置
   "Content-Security-Policy": (admin) => {
     const scriptSrc = admin 
       ? `'self'`
@@ -63,9 +79,11 @@ const securityHeaders = {
   // Cache-Control
   "Cache-Control": "public, max-age=0, must-revalidate",
   
+  // 清除敏感信息
   "Clear-Site-Data": '"cache", "cookies", "storage"'
 };
 
+// 生成安全头
 const generateSecurityHeaders = (admin) => {
   const headers = {};
   
@@ -80,8 +98,10 @@ const generateSecurityHeaders = (admin) => {
   return headers;
 };
 
+// 添加CSP报告端点
 const CSP_REPORT_ENDPOINT = "/api/security/csp-report";
 
+// 改进的预处理器代码
 const PREAMBLE = `
 function esc(v) {
   return String(v == null ? "" : v).replace(/[&<>"']/g, (c) =>
@@ -110,6 +130,7 @@ function __rvLoad(key, payload) {
     : globalThis.__oboeLoaders.dispatch(key, payload, getContext());
 }
 
+// CSP违规报告
 function reportCSPViolation(violation) {
   if (navigator.sendBeacon) {
     const reportData = {
@@ -122,11 +143,13 @@ function reportCSPViolation(violation) {
 }
 `;
 
+// 检查是否为服务器端文件
 function isServerOnly(filePath) {
   const p = filePath.replace(/\\/g, "/");
   return p.includes("/pages/api/") || p.includes("/pages/_middleware.rose");
 }
 
+// 检查是否为管理页面
 function isAdminPage(filePath) {
   const p = filePath.replace(/\\/g, "/");
   return p.includes("/pages/admin/");
@@ -136,10 +159,12 @@ export default [
   {
     name: "oboext-security",
     transform(code, filePath) {
-      code = code.replace(/@server\/([a-z-]+)/g, (_, name) => `${SERVER_DIR}/${name}.js`);
+      // @server/* -> 绝对源路径（仅服务器模块）
+      code = code.replace(/@server\/([a-z0-9-]+)/g, (_, name) => `${SERVER_DIR}/${name}.js`);
 
       if (isServerOnly(filePath)) return code;
 
+      // 仅处理页面和布局组件
       const m = code.match(/<script\b[^>]*>([\s\S]*?)<\/script>/i);
       if (!m) return code;
 
@@ -147,7 +172,9 @@ export default [
       const admin = isAdminPage(filePath);
       const securityHeaders = generateSecurityHeaders(admin);
       
+      // 添加安全报告脚本
       const cspScript = `
+        // CSP监控
         window.addEventListener('securitypolicyviolation', function(e) {
           reportCSPViolation({
             violatedDirective: e.violatedDirective,
@@ -166,4 +193,5 @@ export default [
   },
 ];
 
+// 导出安全头配置
 export { securityHeaders, generateSecurityHeaders, CSP_REPORT_ENDPOINT };

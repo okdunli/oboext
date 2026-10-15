@@ -6,6 +6,7 @@ import type { PageView } from "./pages.js";
 import * as R from "./render.js";
 import { esc, fmtDate } from "./render.js";
 import { mimeFor, PUBLIC_DIR } from "./storage.js";
+import { DEFAULT_LOCALE, makeT, type Translate } from "./i18n.js";
 
 // -------------------------------------------------------------------- types
 
@@ -39,6 +40,23 @@ export type MenuItem = {
 
 function cssUrl(v: string): string {
   return `url(&quot;${String(v ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;")}&quot;)`;
+}
+
+/**
+ * A translated chrome string. Every renderer receives the loaders' settings
+ * bag, which carries the bound translator (settings.t) under a non-default
+ * locale; the Chinese default catalog is the fallback when a renderer is
+ * invoked without one. Untranslated keys fall back to Chinese by design
+ * (catalog merge), so partial coverage renders sanely.
+ */
+function tr(
+  settings: Record<string, any> | undefined,
+  key: string,
+  vars?: Record<string, string | number>,
+): string {
+  const t: Translate | undefined = settings && settings.t;
+  if (typeof t === "function") return t(key, vars);
+  return makeT(DEFAULT_LOCALE)(key, vars);
 }
 
 export type AsideParts = {
@@ -663,6 +681,7 @@ const skyscraperChrome: ThemeChrome = {
       liked: parts.liked,
       random: parts.random,
       cats: parts.cats,
+      t: (k, v) => tr(parts.settings, k, v),
     }),
   listPage: (parts) =>
     R.listPage({
@@ -674,11 +693,12 @@ const skyscraperChrome: ThemeChrome = {
       hrefFor: parts.hrefFor,
       showPager: parts.showPager,
       extra: parts.extra,
+      t: (k, v) => tr(parts.settings, k, v),
     }),
   postPage: (parts) =>
-    R.postPage(parts.post, parts.related, parts.commentsHtml + (parts.adjacentHtml || ""), parts.metaItems ?? [], parts.bodyHtml, parts.blogIndex),
+    R.postPage(parts.post, parts.related, parts.commentsHtml + (parts.adjacentHtml || ""), parts.metaItems ?? [], parts.bodyHtml, parts.blogIndex, (k, v) => tr(parts.settings, k, v)),
   pagePage: (parts) =>
-    R.pagePage(parts.page, parts.recent, parts.commentsHtml, parts.bodyHtml),
+    R.pagePage(parts.page, parts.recent, parts.commentsHtml, parts.bodyHtml, (k, v) => tr(parts.settings, k, v)),
 };
 
 // ================================================================ DEFAULT
@@ -784,11 +804,11 @@ function searchField(
 }
 
 /** The search field inside the mobile menu drawer. */
-function mobileSearchField(): string {
+function mobileSearchField(t: Translate): string {
   return searchField(
     "df-suggest-mobile",
-    "搜索文章…",
-    "搜索文章",
+    t("search.placeholder"),
+    t("search.aria"),
     "df-search-form df-search-form-mobile",
   );
 }
@@ -860,6 +880,7 @@ function defaultMenuUl(
 
 function defaultNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
+  const T: Translate = (k, v) => tr(settings, k, v);
   const headingClass = "text-zinc-100";
   const brandLink =
     settings.logoUrl
@@ -885,9 +906,9 @@ function defaultNav(settings: Record<string, any>, items: MenuItem[]): string {
   // two elements must never share a panel.
   const mobileMenu = hasMenu
     ? `<details class="dfm-menu md:hidden">` +
-      `<summary class="dfm-burger" aria-label="打开菜单">${lucideSvg("menu", 20)}</summary>` +
+      `<summary class="dfm-burger" aria-label="${T("nav.menu_open")}">${lucideSvg("menu", 20)}</summary>` +
       `<div class="dfm-panel">` +
-      mobileSearchField() +
+      mobileSearchField(T) +
       defaultMenuUl(items, "dfm-list", here) +
       `</div>` +
       `</details>`
@@ -906,7 +927,7 @@ function defaultNav(settings: Record<string, any>, items: MenuItem[]): string {
     // establish the containing block let the icon escape the field.
     // The <kbd> advertises the "/" shortcut that theme-default.js binds, so the
     // affordance is visible before the visitor presses anything.
-    searchField("df-suggest-header", "搜索…", "搜索文章", "df-search-form") +
+    searchField("df-suggest-header", T("search.placeholder_short"), T("search.aria"), "df-search-form") +
     mobileMenu +
     `</div></header>`;
 }
@@ -944,9 +965,13 @@ function defaultCatPill(c: { name: string; url?: string; icon?: string | null })
     : `<span class="${cls}">${ic}${label}</span>`;
 }
 
-function defaultPostCard(p: PostView, idx: number): string {
+function defaultPostCard(p: PostView, idx: number, t?: Translate): string {
   const cats = ((p.categories || []).slice(0, 2).map(defaultCatPill)).join("");
-  const author = esc(p.author?.name ?? "未知作者");
+  const author = esc(p.author?.name ?? (t ? t("post.author_unknown") : "未知作者"));
+  const comments =
+    p.commentsCount > 0
+      ? `<span class="df-meta-item">${lucideSvg("message-circle", 13)}${t ? t("post.comments", { n: p.commentsCount }) : `${p.commentsCount} 评论`}</span>`
+      : "";
   return `<article class="group flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] transition hover:-translate-y-0.5 hover:border-[var(--accent)]">` +
     (p.featuredImage
       ? `<a href="${esc(p.url)}" class="block aspect-[16/9] overflow-hidden"><img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105"${R.imgPerfAttrs(p.featuredImage, { lazy: true, srcset: true })}></a>`
@@ -958,7 +983,7 @@ function defaultPostCard(p: PostView, idx: number): string {
     `<div class="mt-4 flex flex-wrap items-center gap-3 text-xs text-[var(--muted)]">` +
     `<span class="df-meta-item">${lucideSvg("user", 13)}${author}</span>` +
     `<span class="df-meta-item">${lucideSvg("calendar", 13)}${fmtDate(p.publishedAt)}</span>` +
-    (p.commentsCount > 0 ? `<span class="df-meta-item">${lucideSvg("message-circle", 13)}${p.commentsCount} 评论</span>` : "") +
+    comments +
     `</div></div></article>`;
 }
 
@@ -972,10 +997,11 @@ function defaultHome(parts: HomeParts): string {
   const hero = `<section class="relative overflow-hidden rounded-3xl border border-[var(--border)] bg-gradient-to-br from-[var(--surface)] to-[var(--bg)] px-8 py-12 text-center">` +
     lucideSvg("sparkles", 28, "df-hero-ic") +
     `<h1 class="text-4xl font-bold tracking-tight text-[var(--text)]">${siteTitle}</h1>${tagline}${desc}</section>`;
+  const T: Translate = (k, v) => tr(parts.settings, k, v);
   const all = [...parts.hero, ...parts.latest];
   const featured = all[0];
   const rest = all.slice(1);
-  let featuredHtml = `<p class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center text-[var(--muted)]">还没有已发布的文章。</p>`;
+  let featuredHtml = `<p class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center text-[var(--muted)]">${T("empty.posts")}</p>`;
   if (featured) {
     const cats = ((featured.categories || []).slice(0, 3).map(defaultCatPill)).join("");
     featuredHtml = `<article class="group overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--surface)]">` +
@@ -984,11 +1010,11 @@ function defaultHome(parts: HomeParts): string {
         : "") +
       `<div class="p-6">${cats ? `<div class="mb-2 flex flex-wrap gap-2 text-xs">${cats}</div>` : ""}` +
       `<h2 class="text-2xl font-bold leading-snug text-[var(--text)]"><a href="${esc(featured.url)}" class="transition group-hover:text-[var(--accent)]">${esc(featured.title)}</a></h2>` +
-      `<span class="df-featured-tag">${lucideSvg("sparkles", 13)} 推荐阅读</span>` +
+      `<span class="df-featured-tag">${lucideSvg("sparkles", 13)} ${T("post.featured")}</span>` +
       (featured.excerpt ? `<p class="mt-3 line-clamp-3 text-sm text-[var(--muted)]">${esc(featured.excerpt)}</p>` : "") +
       `</div></article>`;
   }
-  const grid = rest.map((p, i) => defaultPostCard(p, i)).join("");
+  const grid = rest.map((p, i) => defaultPostCard(p, i, T)).join("");
 
   return `<div class="space-y-10">${hero}` +
     `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><div><div class="space-y-6">${featuredHtml}` +
@@ -997,6 +1023,7 @@ function defaultHome(parts: HomeParts): string {
 }
 
 function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settings: Record<string, unknown>, showCatIcons = false, catCounts?: Map<number, number>): string {
+  const T: Translate = (k, v) => tr(settings, k, v);
   // ---- Category tree -------------------------------------------------------
   // The DB carries a real hierarchy (parentId), and the flat list this used to
   // render threw it away: a parent row and its children looked like unrelated
@@ -1070,7 +1097,7 @@ function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settin
       const sub = kids.map((k) => `<li class="df-cat-li">${catRow(k, 1)}</li>`).join("");
       return `<li class="df-cat-li df-cat-li-group">` +
         `<details class="df-cat-group"${open ? " open" : ""}>` +
-        `<summary class="df-cat-summary" title="展开/收起 ${esc(r.name)}">` +
+        `<summary class="df-cat-summary" title="${T("cat.expand", { name: r.name })}">` +
         `<span class="df-cat-caret">${lucideSvg("chevron-down", 13)}</span>` +
         `<span class="df-cat-groupname">${esc(r.name)}</span>` +
         (total ? `<span class="df-cat-n">${total}</span>` : "") +
@@ -1079,7 +1106,7 @@ function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settin
         `</details>` +
         // The parent is also a destination: its own page lists whatever is
         // filed directly under it.
-        `<a href="${esc(r.url)}" class="df-cat df-cat-parent text-[var(--text)] hover:text-[var(--accent)]" aria-label="${esc(r.name)}分类页">` +
+        `<a href="${esc(r.url)}" class="df-cat df-cat-parent text-[var(--text)] hover:text-[var(--accent)]" aria-label="${T("cat.aria", { name: r.name })}">` +
         `<span class="df-cat-ic">${lucideSvg(catIconName(r), 14)}</span></a>` +
         `</li>`;
     })
@@ -1111,29 +1138,30 @@ function defaultAside(cats: TaxRef[], tags: TaxRef[], recent: PostView[], settin
     // the -block box modifier, so it is NOT routed through searchField() -
     // that helper exists for the two copies that share a shape.
     `<form action="/search" method="get" class="df-search-form df-search-form-block" role="search">` +
-    `<label class="df-sr-only" for="df-aside-q">搜索文章</label>` +
+    `<label class="df-sr-only" for="df-aside-q">${T("search.aria")}</label>` +
     `<span class="df-search-box df-search-box-block">` +
     lucideSvg("search", 16, dfSearchIcon()) +
-    `<input id="df-aside-q" name="q" placeholder="搜索文章…" class="df-search-input" autocomplete="off"` +
+    `<input id="df-aside-q" name="q" placeholder="${T("search.placeholder")}" class="df-search-input" autocomplete="off"` +
     ` role="combobox" aria-expanded="false" aria-autocomplete="list"` +
-    ` aria-controls="df-suggest-aside" aria-label="搜索文章">` +
+    ` aria-controls="df-suggest-aside" aria-label="${T("search.aria")}">` +
     `<kbd class="df-search-kbd">/</kbd>` +
     // Its own panel id: all three fields are on the same page and each drives
     // the list it points at.
     `<div class="df-suggest" id="df-suggest-aside" hidden></div>` +
     `</span></form>` +
     card(
-      cardHead("folder", "分类") +
-      `<ul class="df-cat-tree">${catTree || `<li class="df-empty">暂无分类</li>`}</ul>`,
+      cardHead("folder", T("sidebar.categories")) +
+      `<ul class="df-cat-tree">${catTree || `<li class="df-empty">${T("sidebar.no_categories")}</li>`}</ul>`,
       "df-card-tree",
     ) +
-    card(cardHead("tags", "标签") + `<div class="df-tags">${tagPills || `<span class="df-empty">暂无标签</span>`}</div>`) +
-    card(cardHead("clock", "最新文章") + `<ul class="df-recent-list">${recentLis || `<li class="df-empty">暂无文章</li>`}</ul>`) +
+    card(cardHead("tags", T("sidebar.tags")) + `<div class="df-tags">${tagPills || `<span class="df-empty">${T("sidebar.no_tags")}</span>`}</div>`) +
+    card(cardHead("clock", T("sidebar.recent")) + `<ul class="df-recent-list">${recentLis || `<li class="df-empty">${T("sidebar.no_posts")}</li>`}</ul>`) +
     `</aside>`;
 }
 
 
-function defaultPager(page: number, totalPages: number, hrefFor: (p: number) => string): string {
+function defaultPager(page: number, totalPages: number, hrefFor: (p: number) => string, t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   if (totalPages <= 1) return "";
   const windowSize = 5;
   let start = Math.max(1, page - Math.floor(windowSize / 2));
@@ -1149,8 +1177,8 @@ function defaultPager(page: number, totalPages: number, hrefFor: (p: number) => 
   };
   const edge = (label: string, icon: string, p: number) =>
     `<a href="${esc(hrefFor(p))}" class="df-page-edge">${icon}${label}</a>`;
-  let out = `<nav class="mt-10 flex items-center justify-center gap-1.5" aria-label="分页">`;
-  if (page > 1) out += edge("上一页", lucideSvg("chevron-left", 15), page - 1);
+  let out = `<nav class="mt-10 flex items-center justify-center gap-1.5" aria-label="${L("pager.aria")}">`;
+  if (page > 1) out += edge(L("pager.prev"), lucideSvg("chevron-left", 15), page - 1);
   if (start > 1) {
     out += cell(1);
     if (start > 2) out += `<span class="px-1 text-zinc-500">…</span>`;
@@ -1160,12 +1188,12 @@ function defaultPager(page: number, totalPages: number, hrefFor: (p: number) => 
     if (end < totalPages - 1) out += `<span class="px-1 text-zinc-500">…</span>`;
     out += cell(totalPages);
   }
-  if (page < totalPages) out += edge("下一页", lucideSvg("chevron-right", 15), page + 1);
+  if (page < totalPages) out += edge(L("pager.next"), lucideSvg("chevron-right", 15), page + 1);
   return out + `</nav>`;
 }
 
 /** mirror components/shared/Breadcrumb.tsx。 */
-function defaultBreadcrumb(items: { label: string; href?: string }[]): string {
+function defaultBreadcrumb(items: { label: string; href?: string }[], t?: Translate): string {
   if (!items.length) return "";
   const spans = items
     .map((c, i) => {
@@ -1176,12 +1204,14 @@ function defaultBreadcrumb(items: { label: string; href?: string }[]): string {
       return `<span class="df-meta-item">${inner}${last ? "" : lucideSvg("chevron-right", 12, "text-zinc-600")}</span>`;
     })
     .join("");
-  return `<nav aria-label="面包屑" class="flex flex-wrap items-center gap-1 text-xs text-zinc-500">${spans}</nav>`;
+  const aria = t ? t("crumb.aria") : "面包屑";
+  return `<nav aria-label="${aria}" class="flex flex-wrap items-center gap-1 text-xs text-zinc-500">${spans}</nav>`;
 }
 
 function defaultListPage(parts: ListParts): string {
-  const cards = parts.items.map((p, i) => defaultPostCard(p, i)).join("");
-  const pager = parts.showPager !== false ? defaultPager(parts.page, parts.totalPages, parts.hrefFor) : "";
+  const T: Translate = (k, v) => tr(parts.settings, k, v);
+  const cards = parts.items.map((p, i) => defaultPostCard(p, i, T)).join("");
+  const pager = parts.showPager !== false ? defaultPager(parts.page, parts.totalPages, parts.hrefFor, T) : "";
   
   
   const isBlog = parts.variant === "blog";
@@ -1191,11 +1221,11 @@ function defaultListPage(parts: ListParts): string {
   const isTerm = !isBlog && !isCategory && !isSearch;
   const iconHtml = parts.titleIcon ? lucideSvg(parts.titleIcon, parts.variant === "search" ? 26 : 22, dfIconAccent()) : "";
 
-  const crumbItems: { label: string; href?: string }[] = [{ label: "首页", href: "/" }];
-  if (isCategory) crumbItems.push({ label: "分类" });
-  else if (isSearch) crumbItems.push({ label: "搜索" });
-  else if (isTerm) crumbItems.push({ label: "标签" });
-  else if (!isBlog) crumbItems.push({ label: "页面" });
+  const crumbItems: { label: string; href?: string }[] = [{ label: T("crumb.home"), href: "/" }];
+  if (isCategory) crumbItems.push({ label: T("crumb.category") });
+  else if (isSearch) crumbItems.push({ label: T("crumb.search") });
+  else if (isTerm) crumbItems.push({ label: T("crumb.tag") });
+  else if (!isBlog) crumbItems.push({ label: T("crumb.page") });
   if (isSearch && (parts.query ?? "").trim()) {
     crumbItems.push({ label: (parts.query ?? "").trim() });
   } else {
@@ -1203,7 +1233,7 @@ function defaultListPage(parts: ListParts): string {
   }
   const backLink =
     `<div class="mb-6">` +
-    defaultBreadcrumb(crumbItems) +
+    defaultBreadcrumb(crumbItems, T) +
     `<h1 class="mt-2${isTerm ? "" : " flex items-center gap-2"} text-3xl font-bold text-zinc-100">` +
     (isTerm ? "" : iconHtml) +
     esc(parts.title) +
@@ -1215,7 +1245,7 @@ function defaultListPage(parts: ListParts): string {
         : "") +
     `</div>`;
   const headHtml = isBlog
-    ? defaultBreadcrumb([{ label: "首页", href: "/" }, { label: "文章" }]) +
+    ? defaultBreadcrumb([{ label: T("crumb.home"), href: "/" }, { label: T("crumb.posts") }], T) +
       `<header class="mb-6 mt-3">` +
       `<h1 class="text-3xl font-bold text-zinc-100">${esc(parts.title)}</h1>` +
       (parts.sub ? `<p class="mt-1 text-sm text-[var(--muted)]">${esc(parts.sub)}</p>` : "") +
@@ -1227,12 +1257,12 @@ function defaultListPage(parts: ListParts): string {
   
   
   const emptyText = isCategory
-    ? "该分类下还没有文章。"
+    ? T("empty.category")
     : isSearch
-      ? "没有匹配的文章。"
+      ? T("empty.search")
       : isTerm
-        ? "该标签下还没有文章。"
-        : "还没有已发布的文章。";
+        ? T("empty.tag")
+        : T("empty.posts");
   const listHtml = cards
     ? `<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">${cards}</div>`
     : isSearch && !(parts.query ?? "").trim()
@@ -1262,7 +1292,8 @@ function defaultListPage(parts: ListParts): string {
  * `<head>` and therefore survives every swap. That file already documents this
  * class of bug; this entry is the second consumer of the same rule.
  */
-function defaultShareButtons(title: string, url: string): string {
+function defaultShareButtons(title: string, url: string, t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   // https, not http: on an HTTPS site an http:// share link is mixed content,
   // so the browser either blocks it or first loads it over plaintext, leaking
   // the visited URL and getting the visitor flagged by Weibo's own gateway.
@@ -1276,14 +1307,14 @@ function defaultShareButtons(title: string, url: string): string {
   // server-rendered absolute URL is the page as of render time, and pjax has
   // no way to rewrite an attribute on the markup it swaps in.
   return `<div class="df-share">` +
-    `<span class="df-share-label">${lucideSvg("share-2", 15)}分享</span>` +
-    `<button type="button" data-share-copy title="复制文章链接" class="${btn}">` +
-    `${lucideSvg("link", 13)}<span data-share-label>复制链接</span></button>` +
-    `<a href="${esc(wb)}" target="_blank" rel="noopener noreferrer" class="${btn}">微博</a>` +
+    `<span class="df-share-label">${lucideSvg("share-2", 15)}${L("post.share")}</span>` +
+    `<button type="button" data-share-copy title="${L("post.copy_link")}" class="${btn}">` +
+    `${lucideSvg("link", 13)}<span data-share-label>${L("post.copy_label")}</span></button>` +
+    `<a href="${esc(wb)}" target="_blank" rel="noopener noreferrer" class="${btn}">${L("post.weibo")}</a>` +
     // Plain text: lucide's `x` is the close glyph, and a brand logo is not
     // worth shipping an icon file for.
-    `<a href="${esc(x)}" target="_blank" rel="noopener noreferrer" class="${btn}" aria-label="分享到 X">X</a>` +
-    `<a href="${esc(mail)}" class="${btn}">${lucideSvg("mail", 13)}邮件</a>` +
+    `<a href="${esc(x)}" target="_blank" rel="noopener noreferrer" class="${btn}" aria-label="${L("post.x_aria")}">X</a>` +
+    `<a href="${esc(mail)}" class="${btn}">${lucideSvg("mail", 13)}${L("post.email")}</a>` +
     `</div>`;
 }
 
@@ -1299,7 +1330,8 @@ function defaultShareButtons(title: string, url: string): string {
  * why the count stayed at the cached value after a client-side navigation.
  */
 
-function defaultRelatedSection(posts: PostView[]): string {
+function defaultRelatedSection(posts: PostView[], t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   if (!posts.length) return "";
   const cards = posts.map((p) =>
     `<a href="${esc(p.url)}" class="group rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 transition hover:border-[var(--accent)]">` +
@@ -1307,23 +1339,24 @@ function defaultRelatedSection(posts: PostView[]): string {
     (p.publishedAt ? `<p class="mt-2 text-xs text-[var(--muted)]">${fmtDate(p.publishedAt)}</p>` : "") +
     `</a>`).join("");
   return `<section class="mt-10">` +
-    `<h2 class="mb-4 flex items-center gap-2 text-lg font-bold text-zinc-100">${lucideSvg("folder-open", 18, dfIconAccent())}相关文章</h2>` +
+    `<h2 class="mb-4 flex items-center gap-2 text-lg font-bold text-zinc-100">${lucideSvg("folder-open", 18, dfIconAccent())}${L("post.related")}</h2>` +
     `<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">${cards}</div></section>`;
 }
 
 function defaultPostPage(parts: PostPageParts): string {
+  const T: Translate = (k, v) => tr(parts.settings, k, v);
   const p = parts.post;
   const cats = (p.categories || []).map(defaultCatPill).join("");
-  const author = esc(p.author?.name ?? "未知作者");
+  const author = esc(p.author?.name ?? T("post.author_unknown"));
   const meta = parts.defMetaHtml || "";
   const tags = parts.defTagsHtml || "";
   const firstCat = (p.categories || [])[0];
   const crumb = defaultBreadcrumb([
-    { label: "首页", href: "/" },
-    { label: "文章", href: parts.blogIndex || "/blog" },
+    { label: T("crumb.home"), href: "/" },
+    { label: T("crumb.posts"), href: parts.blogIndex || "/blog" },
     ...(firstCat ? [{ label: firstCat.name, href: firstCat.url }] : []),
     { label: p.title },
-  ]);
+  ], T);
   // Table of contents from the body's own h2/h3 anchors (addHeadingIds stamps
   // id="<slug>-h<n>" at render). Native <details>: no JS, collapsed by default
   // so short-ish posts with one or two headings stay uncluttered. Hidden
@@ -1334,7 +1367,7 @@ function defaultPostPage(parts: PostPageParts): string {
   const tocHtml =
     tocItems.length >= 2
       ? `<details class="df-toc mb-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-5 py-4">` +
-        `<summary class="cursor-pointer text-sm font-semibold text-[var(--text)]">目录</summary>` +
+        `<summary class="cursor-pointer text-sm font-semibold text-[var(--text)]">${T("post.toc")}</summary>` +
         `<ul class="mt-3 space-y-1.5 text-sm">` +
         tocItems
           .map(
@@ -1355,15 +1388,15 @@ function defaultPostPage(parts: PostPageParts): string {
     `<div class="mt-3 flex flex-wrap items-center gap-4 text-sm text-[var(--muted)]">` +
     `<span class="df-meta-item">${lucideSvg("user", 14)}${author}</span>` +
     `<span class="df-meta-item">${lucideSvg("calendar", 14)}${fmtDate(p.publishedAt)}</span>` +
-    `<span class="df-meta-item" data-views-post="${p.id}">${lucideSvg("eye", 14)}<span data-views-count>${p.views}</span> 阅读</span>` +
-    (p.commentsCount > 0 ? `<span class="df-meta-item">${lucideSvg("message-circle", 14)}${p.commentsCount} 评论</span>` : "") +
+    `<span class="df-meta-item" data-views-post="${p.id}">${lucideSvg("eye", 14)}<span data-views-count>${p.views}</span> ${T("post.reads", { n: p.views })}</span>` +
+    (p.commentsCount > 0 ? `<span class="df-meta-item">${lucideSvg("message-circle", 14)}${T("post.comments", { n: p.commentsCount })}</span>` : "") +
     `</div>${meta}</header>` +
     (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="mb-6 w-full rounded-2xl border border-[var(--border)] object-cover"${R.imgPerfAttrs(p.featuredImage, { high: true, srcset: true })}>` : "") +
     tocHtml +
     `<div class="prose-cms">${parts.bodyHtml}</div>` +
     (tags || "") +
-    defaultShareButtons(p.title, parts.canonical || p.url) +
-    defaultRelatedSection(parts.relatedTaxonomy || []) +
+    defaultShareButtons(p.title, parts.canonical || p.url, T) +
+    defaultRelatedSection(parts.relatedTaxonomy || [], T) +
     (parts.postBottom || "") +
     parts.commentsHtml +
     (parts.adjacentHtml || "") +
@@ -1429,10 +1462,14 @@ const plPad = (n: number, w = 3) => String(n).padStart(w, "0");
 
 function pseudoNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
+  const T: Translate = (k, v) => tr(settings, k, v);
 
   const list: MenuItem[] = items.length
     ? items
-    : [{ id: "__index", label: "首页", url: "/" }, { id: "__archive", label: "全部文章", url: "/blog" }];
+    : [
+        { id: "__index", label: T("sidebar.home"), url: "/" },
+        { id: "__archive", label: T("sidebar.all_posts"), url: "/blog" },
+      ];
   const path = String(settings.__pathname ?? "/");
   const isActive = (url: string) => {
     if (!url) return false;
@@ -1445,7 +1482,7 @@ function pseudoNav(settings: Record<string, any>, items: MenuItem[]): string {
   return `<nav class="pl-nav"><div class="pl-nav-inner">` +
     `<a href="/" class="pl-brand"><span class="pl-brand-mark" aria-hidden="true"></span><span>${title}</span></a>` +
     `<ul class="pl-menu">${links}</ul>` +
-    `<form action="/search" method="get" class="pl-search"><span class="pl-prompt">⌕</span><input name="q" placeholder="搜索文章、标签…" aria-label="search"></form>` +
+    `<form action="/search" method="get" class="pl-search"><span class="pl-prompt">⌕</span><input name="q" placeholder="${T("search.placeholder")}" aria-label="${T("search.aria")}"></form>` +
     `<div class="pl-nav-status" aria-hidden="true"><span class="pl-dot"></span><span>live</span></div>` +
     `</div></nav>`;
 }
@@ -1462,7 +1499,7 @@ function pseudoFooter(settings: Record<string, any>): string {
     `</div></footer>`;
 }
 
-function pseudoPostCard(p: PostView, idx: number, total: number): string {
+function pseudoPostCard(p: PostView, idx: number, total: number, t?: Translate): string {
   const cover = (p as any).coverImage;
   const thumb = cover ? `<div class="pl-thumb" style="background-image:url(${esc(cover)})"></div>` : "";
   const cat = (p.categories || [])[0];
@@ -1474,11 +1511,11 @@ function pseudoPostCard(p: PostView, idx: number, total: number): string {
     `<span style="color:var(--pl-ink-3);opacity:0.5">·</span><span>${plYmd(p.publishedAt)}</span>${catHtml}</div>` +
     `<h3><a href="${esc(p.url)}">${esc(p.title)}</a></h3>` +
     (p.excerpt ? `<p>${esc(p.excerpt)}</p>` : "") +
-    `<a href="${esc(p.url)}" class="pl-read">阅读全文</a>` +
+    `<a href="${esc(p.url)}" class="pl-read">${t ? t("post.read_more") : "阅读全文"}</a>` +
     `</article>`;
 }
 
-function pseudoHomeCard(p: PostView, idx: number, total: number): string {
+function pseudoHomeCard(p: PostView, idx: number, total: number, t?: Translate): string {
   const cover = (p as any).coverImage || p.featuredImage;
   const thumb = cover ? `<div class="pl-thumb" style="background-image:url(${esc(cover)})"></div>` : "";
   const cat = (p.categories || [])[0];
@@ -1490,7 +1527,7 @@ function pseudoHomeCard(p: PostView, idx: number, total: number): string {
     `<span style="color:var(--pl-ink-3);opacity:0.5">·</span><span>${plYmd(p.publishedAt)}</span>${catHtml}</div>` +
     `<h3><a href="${esc(p.url)}">${esc(p.title)}</a></h3>` +
     (p.excerpt ? `<p>${esc(p.excerpt)}</p>` : "") +
-    `<a href="${esc(p.url)}" class="pl-read">阅读全文</a>` +
+    `<a href="${esc(p.url)}" class="pl-read">${t ? t("post.read_more") : "阅读全文"}</a>` +
     `</article>`;
 }
 
@@ -1522,7 +1559,7 @@ function plSection(eyebrow: string, small: string, count: string, inner: string,
     `</div>${inner}</section>`;
 }
 
-function plPager(page: number, totalPages: number, hrefFor: (p: number) => string): string {
+function plPager(page: number, totalPages: number, hrefFor: (p: number) => string, _t?: Translate): string {
   if (totalPages <= 1) return "";
   const nums: string[] = [];
   for (let i = 1; i <= totalPages; i++) {
@@ -1536,6 +1573,7 @@ function plPager(page: number, totalPages: number, hrefFor: (p: number) => strin
 }
 
 function pseudoHome(parts: HomeParts): string {
+  const T: Translate = (k, v) => tr(parts.settings, k, v);
   const settings = parts.settings as Record<string, any>;
   const ts = (parts.themeSettings ?? {}) as Record<string, any>;
   const items = [...parts.hero, ...parts.latest];
@@ -1558,8 +1596,8 @@ function pseudoHome(parts: HomeParts): string {
       `<h1 class="pl-title">${pseudoRenderTitle(heroTitle)}</h1>` +
       `<p class="pl-sub">${esc(heroSub)}</p>` +
       `<div class="pl-hero-actions">` +
-      `<a href="/blog" class="pl-btn pl-btn-primary">探索文章<span class="pl-btn-arrow">→</span></a>` +
-      `<a href="#index" class="pl-btn pl-btn-ghost">最近更新</a>` +
+      `<a href="/blog" class="pl-btn pl-btn-primary">${T("pseudo.explore")}<span class="pl-btn-arrow">→</span></a>` +
+      `<a href="#index" class="pl-btn pl-btn-ghost">${T("pseudo.recent_updates")}</a>` +
       `</div>` +
       `<div class="pl-hero-meta">` +
       `<div class="pl-stat">total entries<b>${plPad(totalPublished)}</b></div>` +
@@ -1568,50 +1606,51 @@ function pseudoHome(parts: HomeParts): string {
       `</div></div></section>`
     : "";
   const indexSection = `<section class="pl-section" id="index"><div class="pl-section-head">` +
-    `<h2><span class="pl-section-mark"></span>最新发布 <small>recent entries</small></h2>` +
+    `<h2><span class="pl-section-mark"></span>${T("pseudo.latest")} <small>recent entries</small></h2>` +
     `<span class="pl-count">count = ${items.length}</span></div>` +
     (items.length === 0
-      ? `<div class="pl-empty">还没有文章。先去 admin 发布一篇吧。</div>`
-      : `<div class="pl-grid">${items.map((p, i) => pseudoHomeCard(p, i, items.length)).join("")}</div>`) +
+      ? `<div class="pl-empty">${T("pseudo.empty_home")}</div>`
+      : `<div class="pl-grid">${items.map((p, i) => pseudoHomeCard(p, i, items.length, T)).join("")}</div>`) +
     (totalPublished > items.length
-      ? `<div style="margin-top:36px;text-align:center"><a href="/blog" class="pl-btn pl-btn-ghost">查看更多文章<span class="pl-btn-arrow">→</span></a></div>`
+      ? `<div style="margin-top:36px;text-align:center"><a href="/blog" class="pl-btn pl-btn-ghost">${T("pseudo.more")}<span class="pl-btn-arrow">→</span></a></div>`
       : "") +
     `</section>`;
   const widgetsSection = `<section class="pl-section" style="padding-top:0"><div class="pl-section-head">` +
-    `<h2><span class="pl-section-mark"></span>侧栏 <small>widgets</small></h2></div>` +
+    `<h2><span class="pl-section-mark"></span>${T("pseudo.widgets")} <small>widgets</small></h2></div>` +
     `<div class="pl-side-stack">${widgets}</div></section>`;
   return `<div>${hero}${indexSection}${widgetsSection}</div>`;
 }
 
 function pseudoListPage(parts: ListParts): string {
+  const T: Translate = (k, v) => tr(parts.settings, k, v);
   const isBlog = parts.variant === "blog";
   const isCategory = parts.variant === "category";
   const isSearch = parts.variant === "search";
   const cards = parts.items.length
-    ? `<div class="pl-grid">${parts.items.map((p, i) => pseudoPostCard(p, i, parts.items.length)).join("")}</div>`
-    : `<div class="pl-empty">// 暂无内容 //</div>`;
-  const pager = parts.showPager !== false ? plPager(parts.page, parts.totalPages, parts.hrefFor) : "";
+    ? `<div class="pl-grid">${parts.items.map((p, i) => pseudoPostCard(p, i, parts.items.length, T)).join("")}</div>`
+    : `<div class="pl-empty">// ${T("empty.posts")} //</div>`;
+  const pager = parts.showPager !== false ? plPager(parts.page, parts.totalPages, parts.hrefFor, T) : "";
 
   let eyebrow: string;
   let small: string;
   let count: string;
   let body: string;
   if (isBlog) {
-    eyebrow = "全部文章";
+    eyebrow = T("list.all");
     small = "archive";
     count = `page ${parts.page}/${parts.totalPages} · total = ${parts.total ?? parts.items.length}`;
     body = cards + pager;
   } else if (isCategory) {
-    eyebrow = "分类";
+    eyebrow = T("crumb.category");
     small = esc(parts.title);
     count = `${parts.items.length} entries`;
     body = cards;
   } else if (isSearch) {
     const cleaned = (parts.query ?? "").trim();
-    eyebrow = "搜索";
+    eyebrow = T("crumb.search");
     small = cleaned ? `"${esc(cleaned)}"` : "—";
     count = cleaned ? `${parts.items.length} results` : "—";
-    body = cleaned ? cards : `<div class="pl-empty">// 在顶部搜索框输入关键词 //</div>`;
+    body = cleaned ? cards : `<div class="pl-empty">// ${T("search.sub_hint")} //</div>`;
   } else {
     eyebrow = esc(parts.title);
     small = "";
@@ -1621,7 +1660,7 @@ function pseudoListPage(parts: ListParts): string {
 
   const widgetsSection = isBlog
     ? `<section class="pl-section" style="padding-top:0"><div class="pl-section-head">` +
-      `<h2><span class="pl-section-mark"></span>侧栏 <small>widgets</small></h2></div>` +
+      `<h2><span class="pl-section-mark"></span>${T("pseudo.widgets")} <small>widgets</small></h2></div>` +
       `<div class="pl-side-stack">${parts.widgets || ""}</div></section>`
     : "";
   return `<div>` +
@@ -1632,6 +1671,7 @@ function pseudoListPage(parts: ListParts): string {
 }
 
 function pseudoPostPage(parts: PostPageParts): string {
+  const T: Translate = (k, v) => tr(parts.settings, k, v);
   const p = parts.post;
   const firstCat = (p.categories || [])[0];
 
@@ -1646,7 +1686,7 @@ function pseudoPostPage(parts: PostPageParts): string {
     ? `<div class="pl-tags">${p.tags.map((t) => `<a href="${esc(t.url || "#")}" class="pl-tag"># ${esc(t.name)}</a>`).join("")}</div>`
     : "";
   const toc = headings.length
-    ? plSection("目录", "contents", `${headings.length} anchors`,
+    ? plSection(T("post.toc"), "contents", `${headings.length} anchors`,
         `<ol class="pl-list">${headings.map((h, i) =>
           `<li class="pl-row" style="grid-template-columns:60px 1fr">` +
           `<span class="pl-num">N°${plPad(i + 1, 2)}</span>` +
@@ -1654,7 +1694,7 @@ function pseudoPostPage(parts: PostPageParts): string {
         "padding-top:0;margin-top:48px")
     : "";
   const related = parts.related.length
-    ? plSection("相关文章", "related entries", `count = ${parts.related.length}`,
+    ? plSection(T("post.related"), "related entries", `count = ${parts.related.length}`,
         `<div class="pl-grid" style="grid-template-columns:repeat(auto-fill, minmax(220px, 1fr))">${parts.related.map((r, i) =>
           `<a href="${esc(r.url)}" class="pl-card" style="text-decoration:none;min-height:0">` +
           `<div class="pl-card-meta"><span class="pl-num">N°${plPad(i + 1, 2)}</span>` +
@@ -1663,7 +1703,7 @@ function pseudoPostPage(parts: PostPageParts): string {
         "padding-top:0;margin-top:32px")
     : "";
   const comments = `<section class="pl-section" style="padding-top:0;margin-top:32px"><div class="pl-section-head">` +
-    `<h2><span class="pl-section-mark"></span>评论 <small>response · ${p.commentsCount} reply</small></h2></div>` +
+    `<h2><span class="pl-section-mark"></span>${T("comments.title")} <small>response · ${p.commentsCount} reply</small></h2></div>` +
     `${parts.commentsHtml}</section>`;
   return `<div class="pl-article-wrap"><div class="pl-article-card">` +
     `<a href="${esc(parts.blogIndex || "/blog")}" class="pl-back"><span>←</span><span>back to index</span></a>` +
@@ -1693,7 +1733,7 @@ function pseudoPostPage(parts: PostPageParts): string {
 function pseudoPagePage(parts: PagePageParts): string {
   const p = parts.page;
   const recent = parts.recent.length
-    ? plSection("最新发布", "recent entries", `count = ${parts.recent.length}`,
+    ? plSection(T("pseudo.latest"), "recent entries", `count = ${parts.recent.length}`,
         `<div class="pl-grid" style="grid-template-columns:repeat(auto-fill, minmax(220px, 1fr))">${parts.recent.map((r, i) =>
           `<a href="${esc(r.url)}" class="pl-card" style="text-decoration:none;min-height:0">` +
           `<div class="pl-card-meta"><span class="pl-num">N°${plPad(i + 1, 2)}</span>` +
@@ -1703,7 +1743,7 @@ function pseudoPagePage(parts: PagePageParts): string {
     : "";
   const comments = p.commentStatus === "open"
     ? `<section class="pl-section" style="padding-top:0;margin-top:32px"><div class="pl-section-head">` +
-      `<h2><span class="pl-section-mark"></span>评论 <small>response</small></h2></div>` +
+      `<h2><span class="pl-section-mark"></span>${T("comments.title")} <small>response</small></h2></div>` +
       `${parts.commentsHtml}</section>`
     : "";
   return `<div class="pl-article-wrap"><div class="pl-article-card">` +
@@ -2587,13 +2627,14 @@ function bmixSection(title: string, to: string, icon: string | null, posts: Post
 }
 
 function bmixHome(parts: HomeParts): string {
+  const T: Translate = (k, v) => tr(parts.settings, k, v);
   const ts = parts.themeSettings || {};
   const showHero = parts.showHero !== false;
   const bannerMax = parts.bannerMax || 5;
   const recentCount = parts.recentCount || 8;
   const recent = parts.recent && parts.recent.length ? parts.recent : [...parts.hero, ...parts.latest];
   const inner = recent.length === 0
-    ? `<p class="text-primary-gray" style="padding:24px">还没有已发布的文章。去后台发布一篇，或先导入示例内容吧。</p>`
+    ? `<p class="text-primary-gray" style="padding:24px">${T("empty.posts_admin")}</p>`
     : `<div class="bmx-reveal"><div class="recent-articles">${recent.slice(0, recentCount).map((p, i) => bmixPostCard(p, i)).join("")}</div></div>`;
   
   const catTitle = `<div class="cat-title flex items-center large"><div class="icon flex default mr-5 ml-2"></div><div class="content text-primary-gray text-bulge-primary-gray">近期文章</div>` +
@@ -2835,6 +2876,7 @@ function bmixPageSideRow(p: PostView): string {
 
 
 function bmixPagePage(parts: PagePageParts): string {
+  const L: Translate = (k, v) => tr(parts.settings, k, v);
   const p = parts.page;
   const { title1, title2 } = bmixSplitTitle(p.title);
   const t = bmixCardTone(p.slug || p.url, 2, 0.8);
@@ -2865,21 +2907,21 @@ function bmixPagePage(parts: PagePageParts): string {
     `</div></div></div>`;
   const recentRows = parts.recent.map(bmixPageSideRow).join("");
   const sidebar = `<div class="panel"><div class="wrapper"><aside class="bmx-blocks">` +
-    `<div class="widget-title"><div class="title">最新文章</div></div>` +
+    `<div class="widget-title"><div class="title">${L("sidebar.recent")}</div></div>` +
     `<div class="widget-articles mb-20">` +
     (parts.recent.length === 0
-      ? `<div class="article mb-10 flex items-center g-8"><span class="info"><span class="title block text-primary-gray">暂无文章</span></span></div>`
+      ? `<div class="article mb-10 flex items-center g-8"><span class="info"><span class="title block text-primary-gray">${L("sidebar.no_posts")}</span></span></div>`
       : recentRows) +
     `</div></aside></div></div>`;
   const postview = !viewsInMeta
     ? `<div class="single-postview text-right" style="display:flex;gap:16px;justify-content:flex-end;margin:4px 6px 26px;font-size:13px;color:var(--text-color-3)">` +
-      `<span class="meta">${bmixIc("eye", 13, 4)} ${p.views ?? 0} 阅读</span>` +
-      `<span class="meta">${bmixIc("comments", 13, 4)} ${p.commentsCount ?? 0} 回应</span>` +
+      `<span class="meta">${bmixIc("eye", 13, 4)} ${L("post.reads", { n: p.views ?? 0 })}</span>` +
+      `<span class="meta">${bmixIc("comments", 13, 4)} ${L("post.replies", { n: p.commentsCount ?? 0 })}</span>` +
       `</div>`
     : "";
   const comments = p.commentStatus === "open" && parts.commentsHtml
     ? `<div class="model-wrapper"><div class="model">` +
-      `<div class="cat-title flex items-center large"><div class="content text-primary-gray text-bulge-primary-gray">回应</div></div>` +
+      `<div class="cat-title flex items-center large"><div class="content text-primary-gray text-bulge-primary-gray">${L("comments.replies")}</div></div>` +
       parts.commentsHtml +
       `</div></div>`
     : "";
@@ -2900,8 +2942,11 @@ function bmixPagePage(parts: PagePageParts): string {
 export function bluemixNotFoundPage(parts: {
   settings: { title: string; message: string; showSearch: boolean; showRecent: boolean };
   recent: { url: string; title: string }[];
+  t?: Translate;
+  homeHref?: string;
 }): string {
   const { settings, recent } = parts;
+  const L = (k: string) => (parts.t ? parts.t(k) : makeT(DEFAULT_LOCALE)(k));
   const lines = String(settings.message || "")
     .split(/\n+/)
     .map((s) => s.trim())
@@ -2911,11 +2956,11 @@ export function bluemixNotFoundPage(parts: {
     : "";
   const search = settings.showSearch
     ? `<form class="bmx-404-search" role="search" action="/search" method="get">` +
-      `<input type="search" name="q" placeholder="搜索文章…" aria-label="搜索文章">` +
-      `<button type="submit">${lucideSvg("search", 15)}搜索</button></form>`
+      `<input type="search" name="q" placeholder="${L("search.placeholder")}" aria-label="${L("search.aria")}">` +
+      `<button type="submit">${lucideSvg("search", 15)}${L("search.submit")}</button></form>`
     : "";
   const recentHtml = recent.length
-    ? `<div class="bmx-404-recent"><h2 class="bmx-404-recent-title">最近文章</h2><ul>` +
+    ? `<div class="bmx-404-recent"><h2 class="bmx-404-recent-title">${L("notfound.recent")}</h2><ul>` +
       recent.map((p) => `<li><a href="${esc(p.url)}">${esc(p.title)}</a></li>`).join("") +
       `</ul></div>`
     : "";
@@ -2923,9 +2968,9 @@ export function bluemixNotFoundPage(parts: {
     `<div class="bmx-404-num" aria-hidden="true">404</div>` +
     `<h1 class="bmx-404-title">${esc(settings.title)}</h1>` +
     msg +
-    `<div class="bmx-404-actions"><a href="/" class="bmx-404-home">` +
+    `<div class="bmx-404-actions"><a href="${parts.homeHref || "/"}" class="bmx-404-home">` +
     `<span class="bmx-404-home-icon">${lucideSvg("arrow-left", 15)}</span>` +
-    `<span class="bmx-404-home-text">带我回家</span></a></div>` +
+    `<span class="bmx-404-home-text">${L("notfound.take_me_home")}</span></a></div>` +
     search +
     recentHtml +
     `</div></div></div>`;

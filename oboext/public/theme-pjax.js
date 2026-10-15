@@ -26,3 +26,21 @@ if(!inited){inited=true;window.addEventListener("scroll",onScroll,{passive:true}
 if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",build);}else{build();}
 document.addEventListener("rv:nav",build);
 })();
+(function(){"use strict";
+// Locale switcher sync. The pill is server-rendered for the full-load path
+// and carries data-no-pjax (a locale switch must reload the document, pjax
+// only swaps #sk-main). This keeps its href pointed at the CURRENT path after
+// a client-side navigation, so it never sends the visitor back to the page
+// they left. Label follows the locale the URL is in.
+function syncLocaleSwitch(){
+  var a=document.querySelector("[data-locale-switch]");
+  if(!a)return;
+  var p=location.pathname||"/";
+  var en=/^\/en(?=\/|$)/.test(p);
+  var target=en?(p.replace(/^\/en(?=\/|$)/,"")||"/"):(p==="/"?"/en/":"/en"+p);
+  a.setAttribute("href",target);
+  a.textContent=en?"\u4E2D\u6587":"English";
+}
+if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",syncLocaleSwitch);}else{syncLocaleSwitch();}
+document.addEventListener("rv:nav",syncLocaleSwitch);
+})();

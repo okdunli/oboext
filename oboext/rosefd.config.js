@@ -97,7 +97,7 @@ export default [
     name: "oboext",
     transform(code, filePath) {
       // 3. @server/* -> absolute source path (server-only modules)
-      code = code.replace(/@server\/([a-z-]+)/g, (_, name) => `${SERVER_DIR}/${name}.js`);
+      code = code.replace(/@server\/([a-z0-9-]+)/g, (_, name) => `${SERVER_DIR}/${name}.js`);
 
       if (isServerOnly(filePath)) return code;
 

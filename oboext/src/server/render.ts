@@ -14,6 +14,7 @@ import { uploadsAbsPath } from "./storage.js";
 import { sanitizeHtml } from "./sanitize.js";
 import fsMod from "node:fs";
 import pathMod from "node:path";
+import { DEFAULT_LOCALE, makeT, type Translate } from "./i18n.js";
 
 export function extractSubtitle(title: string): string {
   // Match pattern: "prefix 123 · subtitle · subsubtitle"
@@ -625,7 +626,8 @@ export function awardBadge(n: number): string {
   );
 }
 
-export function postCard(p: PostView, award = 0): string {
+export function postCard(p: PostView, award = 0, t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   const img = p.featuredImage
     ? `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"><img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)}${imgPerfAttrs(p.featuredImage, { srcset: false })} crossorigin="anonymous"></a>`
     : `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"></a>`;
@@ -637,14 +639,15 @@ export function postCard(p: PostView, award = 0): string {
     img +
     `<div class="metas"><time class="time">${fmtDate(p.publishedAt)}</time>` +
     `<div class="info">` +
-    `<span class="reads" data-toggle="tooltip" title="已读"><i class="skyscraper-icons-book-reader"></i>${p.views ?? 0}</span>` +
-    `<span class="likes" data-toggle="tooltip" title="点赞"><i class="skyscraper-icons-heart"></i>${p.likes ?? 0}</span>` +
-    `<span class="comments" data-toggle="tooltip" title="评论"><i class="skyscraper-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
-    `</div><a class="read-more" href="${esc(p.url)}">阅读全文</a></div></div></div>`
+    `<span class="reads" data-toggle="tooltip" title="${L("post.reads_tip")}"><i class="skyscraper-icons-book-reader"></i>${p.views ?? 0}</span>` +
+    `<span class="likes" data-toggle="tooltip" title="${L("post.likes_tip")}"><i class="skyscraper-icons-heart"></i>${p.likes ?? 0}</span>` +
+    `<span class="comments" data-toggle="tooltip" title="${L("comments.title")}"><i class="skyscraper-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
+    `</div><a class="read-more" href="${esc(p.url)}">${L("post.read_more")}</a></div></div></div>`
   );
 }
 
-export function nestedCard(p: PostView): string {
+export function nestedCard(p: PostView, t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   const img = p.featuredImage
     ? `<img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)}${imgPerfAttrs(p.featuredImage, { srcset: false })} crossorigin="anonymous">`
     : "";
@@ -655,20 +658,20 @@ export function nestedCard(p: PostView): string {
     `<a class="post-thumbnail-wrapper" href="${esc(p.url)}">${img}</a>` +
     `<div class="metas"><time class="time">${fmtDate(p.publishedAt)}</time>` +
     `<div class="info">` +
-    `<span class="reads" data-toggle="tooltip" title="已读"><i class="skyscraper-icons-book-reader"></i>${p.views ?? 0}</span>` +
-    `<span class="likes" data-toggle="tooltip" title="点赞"><i class="skyscraper-icons-heart"></i>${p.likes ?? 0}</span>` +
-    `<span class="comments" data-toggle="tooltip" title="评论"><i class="skyscraper-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
-    `</div><a class="read-more" href="${esc(p.url)}">阅读全文</a></div></div></div>`
+    `<span class="reads" data-toggle="tooltip" title="${L("post.reads_tip")}"><i class="skyscraper-icons-book-reader"></i>${p.views ?? 0}</span>` +
+    `<span class="likes" data-toggle="tooltip" title="${L("post.likes_tip")}"><i class="skyscraper-icons-heart"></i>${p.likes ?? 0}</span>` +
+    `<span class="comments" data-toggle="tooltip" title="${L("comments.title")}"><i class="skyscraper-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
+    `</div><a class="read-more" href="${esc(p.url)}">${L("post.read_more")}</a></div></div></div>`
   );
 }
 
 export const section = (title: string, inner: string): string =>
   `<div class="clearfix"><div class="pf-modal-title"><span class="title-text">${title}</span></div>${inner}</div>`;
 
-export const cardRow = (items: PostView[], awards = false): string =>
+export const cardRow = (items: PostView[], awards = false, t?: Translate): string =>
   items.length === 0
-    ? '<div class="sk-empty">暂无内容</div>'
-    : `<div class="row post-card-row">${items.map((p, i) => postCard(p, awards ? i + 1 : 0)).join("")}</div>`;
+    ? `<div class="sk-empty">${t ? t("empty.posts") : "暂无内容"}</div>`
+    : `<div class="row post-card-row">${items.map((p, i) => postCard(p, awards ? i + 1 : 0, t)).join("")}</div>`;
 
 // --------------------------------------------------------------- post pages
 
@@ -1031,20 +1034,22 @@ export function postPage(
   pluginMeta: MetaItem[] = [],
   bodyHtml: string,
   blogIndex = "/blog",
+  t?: Translate,
 ): string {
+  const L = (k: string, v?: Record<string, string | number>) => (t ? t(k, v) : makeT(DEFAULT_LOCALE)(k, v));
   const cat = p.categories[0] ?? null;
   const meta =
     '<div class="meta">' +
     (cat ? `<span>${esc(cat.name)}</span>` : "") +
     `<span> · ${fmtDate(p.publishedAt)}</span>` +
-    `<span> · ${p.views ?? 0} 阅读</span>` +
-    `<span> · ${p.commentsCount ?? 0} 评论</span>` +
+    `<span> · ${L("post.reads", { n: p.views ?? 0 })}</span>` +
+    `<span> · ${L("post.comments", { n: p.commentsCount ?? 0 })}</span>` +
     pluginMeta.map((m) => `<span> · ${esc(m.label)}：${esc(m.value)}</span>`).join("") +
     "</div>";
   const renderedBody = bodyHtml;
   const headings = extractHeadings(renderedBody);
   const toc = headings.length
-    ? '<div class="sk-toc"><div class="toc-title">目录</div><ul>' +
+    ? `<div class="sk-toc"><div class="toc-title">${L("post.toc")}</div><ul>` +
       headings
         .map(
           (h, i) =>
@@ -1072,14 +1077,14 @@ export function postPage(
       '<div class="info">' +
       (cat ? `<span>${esc(cat.name)}</span>` : "") +
       `<span>${fmtDate(p.publishedAt)}</span>` +
-      `<span>${p.views ?? 0} 阅读</span>` +
+      `<span>${L("post.reads", { n: p.views ?? 0 })}</span>` +
       "</div>" +
-      '<a class="play" href="#post-body"><i class="sk-i-play"></i>浏览相册</a>' +
+      `<a class="play" href="#post-body"><i class="sk-i-play"></i>${L("post.gallery")}</a>` +
       "</div>"
     : "";
   return (
     `<div class="sk-postpage${showBanner ? " is-gallery" : ""}">` +
-    `<div class="sk-crumbs"><a href="/">首页</a> / <a href="${esc(blogIndex)}">全部文章</a> / <span>${esc(p.title)}</span></div>` +
+    `<div class="sk-crumbs"><a href="/">${L("crumb.home")}</a> / <a href="${esc(blogIndex)}">${L("list.all")}</a> / <span>${esc(p.title)}</span></div>` +
     banner +
     '<article class="post-wrapper" id="post-body">' +
     (showBanner ? "" : meta) +
@@ -1089,14 +1094,14 @@ export function postPage(
     `<div class="post-content prose-cms">${renderedBody}</div>` +
     tags +
     shareBar(p) +
-    '<div class="post-nav"><a href="' + esc(blogIndex) + '">← 返回列表</a></div>' +
+    `<div class="post-nav"><a href="${esc(blogIndex)}">← ${L("post.back_list")}</a></div>` +
     "</article>" +
-    '<section class="sk-section"><h2 class="title_style_01">相关文章</h2>' +
-    cardRow(related, false) +
+    `<section class="sk-section"><h2 class="title_style_01">${L("post.related")}</h2>` +
+    cardRow(related, false, t) +
     "</section>" +
 
-    '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
-      (commentsHtml || '<div class="sf-comment-close">评论已关闭。</div>') +
+    `<section class="sk-section sk-comments"><h2 class="title_style_01">${L("comments.title")}</h2>` +
+      (commentsHtml || `<div class="sf-comment-close">${L("comments.closed")}</div>`) +
     "</section>" +
     "</div>"
   );
@@ -1184,7 +1189,9 @@ export function pagePage(
   recent: PostView[],
   commentsHtml = "",
   bodyHtml: string,
+  t?: Translate,
 ): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   const renderedBody = bodyHtml;
   const lis = recent
     .map(
@@ -1197,23 +1204,23 @@ export function pagePage(
     )
     .join("");
   const recentSection = recent.length
-    ? '<section class="sk-section"><h2 class="title_style_01">最新文章</h2>' +
+    ? `<section class="sk-section"><h2 class="title_style_01">${L("sidebar.recent")}</h2>` +
       `<ul style="list-style:none;margin:0;padding:0">${lis}</ul></section>`
     : "";
   return (
     '<div class="sk-postpage">' +
-    `<div class="sk-crumbs"><a href="/">首页</a> / <span>${esc(p.title)}</span></div>` +
+    `<div class="sk-crumbs"><a href="/">${L("crumb.home")}</a> / <span>${esc(p.title)}</span></div>` +
     '<article class="post-wrapper">' +
-    '<span class="share-ribbon" aria-hidden="true"><span class="content">' +
-    '<i class="sk-i-share"></i>分享</span></span>' +
+    `<span class="share-ribbon" aria-hidden="true"><span class="content">` +
+    `<i class="sk-i-share"></i>${L("post.share")}</span></span>` +
     `<div class="meta"><span>${fmtDateSlash(p.publishedAt)}</span></div>` +
     `<h1>${esc(p.title)}</h1>` +
     `<div class="post-content prose-cms">${renderedBody}</div>` +
     "</article>" +
     recentSection +
 
-    '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
-      (commentsHtml || '<div class="sf-comment-close">评论已关闭。</div>') +
+    `<section class="sk-section sk-comments"><h2 class="title_style_01">${L("comments.title")}</h2>` +
+      (commentsHtml || `<div class="sf-comment-close">${L("comments.closed")}</div>`) +
     "</section>" +
     "</div>"
   );
@@ -1277,17 +1284,19 @@ export function homeHtml(parts: {
   liked: PostView[];
   random: PostView[];
   cats: TaxRef[];
+  t?: Translate;
 }): string {
+  const L = (k: string) => (parts.t ? parts.t(k) : makeT(DEFAULT_LOCALE)(k));
   // Trade-off: skyscraper theme-settings showCatsStrip assumed on; read the
   // themes table if an admin switch appears in B/C phase.
   return (
     '<div class="sk-home">' +
     cardFlip(parts.hero) +
     (parts.cats.length ? scrollCats(parts.cats) : "") +
-    section("最新文章", cardRow(parts.latest, false)) +
-    (parts.liked.length ? section("大家喜欢", cardRow(parts.liked, true)) : "") +
+    section(L("sidebar.recent"), cardRow(parts.latest, false, parts.t)) +
+    (parts.liked.length ? section(L("rank.most_likes"), cardRow(parts.liked, true, parts.t)) : "") +
     (parts.random.length
-      ? section("随机文章", `<div class="row post-card-nested-row">${parts.random.map(nestedCard).join("")}</div>`)
+      ? section(L("rank.random"), `<div class="row post-card-nested-row">${parts.random.map((c) => nestedCard(c, parts.t)).join("")}</div>`)
       : "") +
     "</div>"
   );
@@ -1295,14 +1304,15 @@ export function homeHtml(parts: {
 
 // --------------------------------------------------------------- list pages
 
-export function pager(page: number, totalPages: number, hrefFor: (p: number) => string): string {
+export function pager(page: number, totalPages: number, hrefFor: (p: number) => string, t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   if (totalPages <= 1) return "";
   let html = '<nav class="sk-pager">';
-  if (page > 1) html += `<a href="${esc(hrefFor(page - 1))}">‹ 上一页</a>`;
+  if (page > 1) html += `<a href="${esc(hrefFor(page - 1))}">‹ ${L("pager.prev")}</a>`;
   for (let p = 1; p <= totalPages; p++) {
     html += p === page ? `<em>${p}</em>` : `<a href="${esc(hrefFor(p))}">${p}</a>`;
   }
-  if (page < totalPages) html += `<a href="${esc(hrefFor(page + 1))}">下一页 ›</a>`;
+  if (page < totalPages) html += `<a href="${esc(hrefFor(page + 1))}">${L("pager.next")} ›</a>`;
   return html + "</nav>";
 }
 
@@ -1315,6 +1325,7 @@ export function listPage(parts: {
   hrefFor: (p: number) => string;
   showPager?: boolean;
   extra?: string;
+  t?: Translate;
 }): string {
   const showPager = parts.showPager ?? true;
   return (
@@ -1322,9 +1333,9 @@ export function listPage(parts: {
     `<h1 class="title_style_01">${parts.title}</h1>` +
     `<div class="sk-list-sub sk-muted">${parts.sub}</div>` +
     '<div class="clearfix">' +
-    cardRow(parts.items, false) +
+    cardRow(parts.items, false, parts.t) +
     "</div>" +
-    (showPager ? pager(parts.page, parts.totalPages, parts.hrefFor) : "") +
+    (showPager ? pager(parts.page, parts.totalPages, parts.hrefFor, parts.t) : "") +
     (parts.extra ?? "") +
     "</section>"
   );

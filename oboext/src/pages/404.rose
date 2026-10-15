@@ -7,6 +7,7 @@
   function recent() { return d().recent || []; }
   function siteTitle() { return d().siteTitle || ""; }
   function skin() { return d().skin || ""; }
+  function strings() { return d().strings || {}; }
   function messageLines() {
     const s = settings();
     if (!s?.message) return [];
@@ -17,10 +18,9 @@
 <head>
 
   <link rel="stylesheet" href="/public/notfound.css">
-  <title>页面不存在 - {siteTitle()}</title>
+  <title>{strings().title} - {siteTitle()}</title>
   <meta name="robots" content="noindex, nofollow">
   <meta property="og:site_name" content={siteTitle()}>
-  <meta property="og:locale" content="zh_CN">
 </head>
 
 {#if skin()}
@@ -45,31 +45,31 @@
     </div>
 
     {#if settings().showSearch}
-    <form class="nf-search" action="/search" method="get">
-      <input type="search" name="q" placeholder="搜索文章…" aria-label="搜索文章">
+    <form class="nf-search" action={d().searchAction || "/search"} method="get">
+      <input type="search" name="q" placeholder={strings().searchPlaceholder} aria-label={strings().searchLabel}>
       <button type="submit">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="11" cy="11" r="8"/>
           <path d="M21 21l-4.35-4.35"/>
         </svg>
-        搜索
+        {strings().searchSubmit}
       </button>
     </form>
     {/if}
 
     <div class="nf-home">
-      <a href="/">
+      <a href={d().homeHref || "/"}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
           <polyline points="9 22 9 12 15 12 15 22"/>
         </svg>
-        返回首页
+        {strings().backHome}
       </a>
     </div>
 
     {#if recent().length > 0}
     <div class="nf-recent">
-      <h2>最近文章</h2>
+      <h2>{strings().recent}</h2>
       <ul>
         {#each recent() as post}
         <li><a href={post.url}>{post.title}</a></li>

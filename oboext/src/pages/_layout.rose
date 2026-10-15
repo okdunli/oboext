@@ -1,5 +1,5 @@
 <script>
-  // Theme-aware chrome shell. rosefd memoizes $data by loader key + payload, so a path-distinct payload keeps the two results in separate cache slots.
+  // Theme-aware chrome shell. rosefd memoizes $data by the loader function's source text, so distinct loader calls memoize independently.
   let chrome = $data(() => __rvLoad("chrome", { admin: adminPath() }));
 
   function adminPath() {
@@ -20,6 +20,20 @@
   }
   function isNotSkyscraper() {
     return chrome().themeSlug !== "skyscraper";
+  }
+  // Locale-dependent document attributes are read through this pure closure
+  // instead of the chrome signal: rosefd's signal map is process-global with
+  // save/restore isolation, so under concurrent renders one render's setChrome
+  // can overwrite another's between the body pass and the head pass. A signal
+  // read in <html lang> then lands on whichever render wrote last. Deriving
+  // the locale per call from the request context (server) or location
+  // (client) keeps it immune to that race.
+  function docLocale() {
+    if (typeof window !== "undefined") {
+      const p = window.location.pathname;
+      return p === "/en" || p.indexOf("/en/") === 0 ? "en" : "zh-CN";
+    }
+    return String(getContext().locale || "zh-CN") === "en" ? "en" : "zh-CN";
   }
   // Safety net: guarantees links never render as default-underlined even if a theme's own stylesheet fails to load or a class mismatch leaves an <a>.
   function linkResetHtml() {
@@ -48,6 +62,7 @@
   <meta property="og:title" content={chrome().siteTitle}>
   <meta property="og:description" content={chrome().siteDescription}>
   <meta property="og:type" content="website">
+  <meta property="og:locale" content={docLocale() === "en" ? "en_US" : "zh_CN"}>
 
   <meta property="og:url" content={chrome().siteUrl}>
   {@html chrome().ogImageHtml}
@@ -80,7 +95,7 @@
   {#if publicPath()}{@html chrome().pluginHead}{/if}
   <link rel="icon" href="data:,">
 
-  <html lang="zh-CN">
+  <html lang={docLocale()}>
   {#if publicPath()}
   <body class="min-h-screen bg-[var(--bg)] text-[var(--text)] antialiased">
   {/if}

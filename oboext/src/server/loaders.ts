@@ -49,7 +49,7 @@ import { renderUserCenter, renderUserCenterGuest } from "./account.js";
 import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
 import { getAdminSecurity } from "./security.js";
 import { can } from "./admin.js";
-import { getThemeChrome, publicAssetHref, themeScriptTags, bluemixNotFoundPage, catIconName, type MenuItem } from "./theme-chrome.js";
+import { getThemeChrome, publicAssetHref, themeScriptTags, catIconName, type MenuItem } from "./theme-chrome.js";
 import { createLogger } from "./logger.js";
 import {
   DEFAULT_LOCALE,
@@ -1805,7 +1805,11 @@ async function notFound(_p: unknown, _ctx: Ctx) {
     getActiveThemeSlug(),
     listPosts({ status: "published", limit: 6 }),
   ]);
-  const themed = themeSlug === "bluemix";
+  // The 404 body is a THEME capability: a theme that ships a designed
+  // not-found page mirrors it as chrome.notFoundPage. The program asks for the
+  // capability, not for a theme name.
+  const chromeForNotFound = getThemeChrome(themeSlug);
+  const themed = typeof chromeForNotFound.notFoundPage === "function";
   let recent: Array<{ url: string; title: string }> = [];
   if (settings.showRecent) {
     recent = (recentResult.items || [])
@@ -1817,7 +1821,10 @@ async function notFound(_p: unknown, _ctx: Ctx) {
     recent,
     siteTitle: site.siteTitle ?? "",
     themeSlug,
-    skin: themed ? bluemixNotFoundPage({ settings, recent, t, homeHref: localeHref("/", locale) }) : "",
+    skin:
+      themed && chromeForNotFound.notFoundPage
+        ? chromeForNotFound.notFoundPage({ settings, recent, t, homeHref: localeHref("/", locale) })
+        : "",
     locale,
     htmlLang: htmlLangOf(locale),
     // 返回首页 keeps the visitor in the locale they asked for.

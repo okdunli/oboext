@@ -921,8 +921,8 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
 
 async function search(payload: { q?: string; page?: number; all?: boolean }, ctx?: Ctx) {
   const q = (payload.q ?? "").trim();
-  const page = pageNum(payload.page);
   const cleaned = q;
+  const page = payload.page ?? 1;
   // All reads below (settings, themeSlug, sidebar batch) pre-issue here so
   // they pipeline with the results query instead of queueing behind it; the
   // old shape awaited settings -> themeSlug serially, then re-read both

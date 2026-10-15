@@ -237,6 +237,36 @@ export async function getTag(id: number): Promise<Tag> {
 // ------------------------------------------------------------- post lists
 
 /**
+ * Split a raw search box value into terms: whitespace-separated (CJK included),
+ * empties dropped, duplicates collapsed, capped at 8 so a paste bomb cannot
+ * fan out into an unbounded AND chain. Callers AND the terms together, so
+ * "LoRa 模组" means "both words somewhere in title/excerpt".
+ */
+export function searchTerms(q: string | undefined | null): string[] {
+  const raw = (q ?? "").trim();
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of raw.split(/\s+/)) {
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+/**
+ * Escape the ILIKE wildcards (%, _, \) inside one term. Without this a user
+ * query of "%" or "_" turns the pattern into a match-everything scan - the
+ * search box then answers a different question than the one asked. Pair with
+ * an ESCAPE '\' clause on the ILIKE.
+ */
+export function ilikeEscape(term: string): string {
+  return term.replace(/[\\%_]/g, "\\$&");
+}
+
+/**
  * Filter signature for the native pinned-id set. The pinned SELECT's WHERE is
  * built from exactly these fields (the pinned branch below already rejects
  * random/search/excludeId, so they can never appear here), which makes this
@@ -303,10 +333,18 @@ export async function listPostsRaw(
     conditions.push(
       sql`EXISTS (SELECT 1 FROM ${postTags} pt JOIN ${tags} t ON t.id = pt.tag_id WHERE pt.post_id = ${posts.id} AND t.slug = ${opts.tagSlug})`,
     );
-  if (opts.search)
+  // Search terms are AND-ed, each matching title OR excerpt. Wildcards inside
+  // a term are escaped so a bare "%" cannot answer a different question.
+  const searchTermsEsc = searchTerms(opts.search).map(ilikeEscape);
+  if (searchTermsEsc.length) {
     conditions.push(
-      sql`(${posts.title} ILIKE ${"%" + opts.search + "%"} OR ${posts.excerpt} ILIKE ${"%" + opts.search + "%"})`,
+      and(
+        ...searchTermsEsc.map((t) =>
+          sql`(${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.excerpt} ILIKE ${"%" + t + "%"} ESCAPE '\\')`,
+        ),
+      ),
     );
+  }
   if (opts.year) conditions.push(sql`EXTRACT(YEAR FROM ${posts.publishedAt}) = ${opts.year}`);
   if (opts.month) conditions.push(sql`EXTRACT(MONTH FROM ${posts.publishedAt}) = ${opts.month}`);
   if (opts.excludeId) conditions.push(sql`${posts.id} <> ${opts.excludeId}`);
@@ -348,15 +386,37 @@ export async function listPostsRaw(
       : notInArray(posts.id, floatingIds)
     : where;
 
+  // Relevance first when searching: title matching the whole query > title
+  // matching any term > excerpt matching the whole query > everything else,
+  // then the archive's own order. id is the final tiebreaker so OFFSET
+  // pagination can never duplicate or skip a row across pages.
+  const wholeQuery = ilikeEscape((opts.search ?? "").trim());
+  const searchRank = searchTermsEsc.length
+    ? [
+        sql`(CASE
+          WHEN ${posts.title} ILIKE ${"%" + wholeQuery + "%"} ESCAPE '\\' THEN 0
+          WHEN ${sql.join(
+            searchTermsEsc.map((t) => sql`${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\'`),
+            sql` OR `,
+          )} THEN 1
+          WHEN ${posts.excerpt} ILIKE ${"%" + wholeQuery + "%"} ESCAPE '\\' THEN 2
+          ELSE 3 END)`,
+      ]
+    : [];
+
   const order = opts.random
     ? [sql`random()`]
-    : opts.orderBy === "views"
-      ? [desc(posts.views), desc(posts.publishedAt)]
-      : opts.orderBy === "likes"
-        ? [desc(posts.likes), desc(posts.publishedAt)]
-        : opts.orderBy === "comments"
-          ? [desc(posts.commentsCount), desc(posts.publishedAt)]
-          : [desc(posts.publishedAt), desc(posts.createdAt)];
+    : [
+        ...searchRank,
+        ...(opts.orderBy === "views"
+          ? [desc(posts.views), desc(posts.publishedAt)]
+          : opts.orderBy === "likes"
+            ? [desc(posts.likes), desc(posts.publishedAt)]
+            : opts.orderBy === "comments"
+              ? [desc(posts.commentsCount), desc(posts.publishedAt)]
+              : [desc(posts.publishedAt), desc(posts.createdAt)]),
+        desc(posts.id),
+      ];
 
   // Content bodies are the heavy column (hundreds of KB per post). Lists
   // render title/excerpt/url only, so the default select ships '' in its place
@@ -462,6 +522,8 @@ export async function listPosts(
 export async function searchSingleHit(q: string): Promise<string | null> {
   const cleaned = q.trim();
   if (!cleaned) return null;
+  const terms = searchTerms(cleaned).map(ilikeEscape);
+  if (!terms.length) return null;
   return memoQuery<string | null>(`sred:${cleaned}`, 60_000, async () => {
     const rows = await db
       .select({
@@ -477,7 +539,11 @@ export async function searchSingleHit(q: string): Promise<string | null> {
         and(
           eq(posts.status, "published"),
           publishedVisible,
-          sql`(${posts.title} ILIKE ${"%" + cleaned + "%"} OR ${posts.excerpt} ILIKE ${"%" + cleaned + "%"})`,
+          and(
+            ...terms.map((t) =>
+              sql`(${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.excerpt} ILIKE ${"%" + t + "%"} ESCAPE '\\')`,
+            ),
+          ),
         ),
       )
       .limit(2);

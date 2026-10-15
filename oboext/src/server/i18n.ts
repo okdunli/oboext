@@ -161,6 +161,12 @@ export const zhCatalog: Record<string, string> = {
   "reading.reset": "恢复默认",
   "reading.enter": "开启阅读模式",
   "reading.exit": "退出阅读模式",
+  "pjax.copied": "已复制",
+  "pjax.shared": "已分享",
+  "pjax.copy_failed": "复制失败",
+  "pjax.no_match": "没有匹配「{q}」的文章",
+  "pjax.total": "共 {n} 篇，按 Enter 查看全部",
+  "pjax.toc": "目录",
 };
 
 /** English overlays. Missing keys fall back to zhCatalog by design. */
@@ -300,6 +306,12 @@ export const enCatalog: Record<string, string> = {
   "reading.reset": "Reset to defaults",
   "reading.enter": "Enter reading mode",
   "reading.exit": "Exit reading mode",
+  "pjax.copied": "Copied",
+  "pjax.shared": "Shared",
+  "pjax.copy_failed": "Copy failed",
+  "pjax.no_match": "No posts matching \u201c{q}\u201d",
+  "pjax.total": "{n} posts in total, press Enter to see all",
+  "pjax.toc": "Contents",
 };
 
 /** The catalog for a locale: English overlaid on the Chinese defaults. */

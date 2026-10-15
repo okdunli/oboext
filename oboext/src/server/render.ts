@@ -574,6 +574,8 @@ export function postHead(
   const desc = p.seoDescription || p.excerpt || siteDescription;
   const url = `${origin}${p.url}`;
   const ogImage = p.featuredImage || logoUrl || "";
+  const primaryCat = p.categories?.[0]?.name ?? "";
+  const tagMetas = (p.tags ?? []).map((t) => `<meta property="article:tag" content="${esc(t.name)}">`).join("");
   const author = p.author?.name;
   const iso = (v: Date | string | null | undefined) => new Date(v ?? p.publishedAt!).toISOString();
   // BreadcrumbList: home -> (primary category) -> this post. The first crumb
@@ -606,13 +608,16 @@ export function postHead(
     `<meta property="og:url" content="${esc(url)}">`,
     ogImage ? `<meta property="og:image" content="${esc(ogImage)}">` : "",
     `<meta property="og:type" content="article">`,
+    `<meta property="og:site_name" content="${esc(siteTitle)}">`,
+    primaryCat ? `<meta property="article:section" content="${esc(primaryCat)}">` : "",
+    tagMetas,
     `<meta property="article:published_time" content="${iso(p.publishedAt)}">`,
     `<meta property="article:modified_time" content="${iso(p.updatedAt || p.publishedAt)}">`,
     author ? `<meta property="article:author" content="${esc(author)}">` : "",
     `<meta name="twitter:card" content="summary_large_image">`,
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
-    p.featuredImage ? `<meta name="twitter:image" content="${esc(p.featuredImage)}">` : "",
+    ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : "",
     jsonLd(posting),
     jsonLd({
       "@context": "https://schema.org",
@@ -954,11 +959,12 @@ export function pageHead(
     `<meta property="og:url" content="${esc(url)}">`,
     ogImage ? `<meta property="og:image" content="${esc(ogImage)}">` : "",
     `<meta property="og:type" content="website">`,
+    `<meta property="og:site_name" content="${esc(siteTitle)}">`,
 
     `<meta name="twitter:card" content="summary_large_image">`,
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
-    p.featuredImage ? `<meta name="twitter:image" content="${esc(p.featuredImage)}">` : "",
+    ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : "",
     jsonLd({
       "@context": "https://schema.org",
       "@type": "WebPage",

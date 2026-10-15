@@ -545,17 +545,25 @@ async function home(ctx?: Ctx) {
   // WebSite JSON-LD rides the home head: SearchAction is only truthful here
   // (the /search route is the sitewide query target).
   const origin0 = ctx?.origin ?? "";
+  const homeCanonical = origin0 ? `${origin0}/` : "/";
+  const siteName = settings.siteTitle ?? "";
+  const homeOgImage = settings.logoUrl ? R.esc(settings.logoUrl) : "";
   const homeHead =
-    `<link rel="canonical" href="${R.esc(origin0)}">` +
+    `<link rel="canonical" href="${R.esc(homeCanonical)}">` +
+    `<meta property="og:site_name" content="${R.esc(siteName)}">` +
+    (homeOgImage
+      ? `<meta property="og:image" content="${homeOgImage}">` +
+        `<meta name="twitter:image" content="${homeOgImage}">`
+      : "") +
     R.jsonLd({
       "@context": "https://schema.org",
       "@type": "WebSite",
-      name: settings.siteTitle ?? "",
+      name: siteName,
       description: settings.siteDescription ?? "",
-      url: origin0,
+      url: homeCanonical,
       potentialAction: {
         "@type": "SearchAction",
-        target: `${origin0}/search?q={search_term_string}`,
+        target: `${homeCanonical}search?q={search_term_string}`,
         "query-input": "required name=search_term_string",
       },
     });
@@ -716,9 +724,18 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
     headTitle: seoTitle,
     head:
       `<link rel="canonical" href="${R.esc(blogUrl)}">` +
+      `<meta name="description" content="${R.esc(settings.siteDescription ?? "")}">` +
+      `<meta name="robots" content="index, follow">` +
       `<meta property="og:title" content="${R.esc(seoTitle)}">` +
+      `<meta property="og:description" content="${R.esc(settings.siteDescription ?? "")}">` +
       `<meta property="og:url" content="${R.esc(blogUrl)}">` +
-      `<meta name="twitter:title" content="${R.esc(seoTitle)}">`,
+      `<meta property="og:type" content="website">` +
+      `<meta property="og:site_name" content="${R.esc(siteTitle)}">` +
+      (settings.logoUrl ? `<meta property="og:image" content="${R.esc(settings.logoUrl)}">` : "") +
+      `<meta name="twitter:card" content="summary_large_image">` +
+      `<meta name="twitter:title" content="${R.esc(seoTitle)}">` +
+      `<meta name="twitter:description" content="${R.esc(settings.siteDescription ?? "")}">` +
+      (settings.logoUrl ? `<meta name="twitter:image" content="${R.esc(settings.logoUrl)}">` : ""),
     main: tc.listPage({
 
       title: themeSlug === "bluemix" ? `最新文章 · ${total} 篇` : "全部文章",

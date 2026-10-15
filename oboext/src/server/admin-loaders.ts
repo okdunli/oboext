@@ -77,9 +77,11 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
     navRaw?: string;
     csrfHref: string;
     adminHref: string;
+    autosaveHref: string;
   } = { user, needsSetup: !(await hasAnyUser()) };
   out.csrfHref = publicAssetHref("csrf.js");
   out.adminHref = publicAssetHref("admin.js");
+  out.autosaveHref = publicAssetHref("autosave.js");
   if (user) {
     const [prefs, extras] = await Promise.all([
       getAdminMenuPrefs(),

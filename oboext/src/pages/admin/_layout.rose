@@ -71,6 +71,7 @@
        are deferred; document order keeps csrf.js first. -->
   <script src={session().csrfHref} defer></script>
   <script src={session().adminHref} defer></script>
+  <script src={session().autosaveHref} defer></script>
 </head>
 
 {#if authed()}

@@ -1,7 +1,5 @@
 <script>
-  // Admin-segment 404 (port of app/admin/not-found.tsx). Renders for any
-  // unmatched /admin* URL and every notFound() thrown under the segment -
-  // wrapped in the admin layout, which renders the bare slot for guests.
+  // Admin-segment 404 (port of app/admin/not-found.tsx).
 
   // admin entrance on, unauthenticated /admin* hits land here, and an entry
   // scanner must not be able to identify the CMS from this page.
@@ -17,37 +15,3 @@
   <p class="anf-msg">页面不存在或已被移动。</p>
   <a class="anf-home" href="/">返回首页</a>
 </div>
-
-<style>
-  .anf-wrap {
-    display: flex;
-    min-height: 100vh;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: #09090b;
-    padding: 1rem;
-    text-align: center;
-  }
-  .anf-code {
-    font-size: 3.75rem;
-    font-weight: 700;
-    color: #27272a;
-    margin: 0;
-  }
-  .anf-msg {
-    margin-top: 1rem;
-    font-size: 0.875rem;
-    color: #71717a;
-  }
-  .anf-home {
-    margin-top: 1.5rem;
-    font-size: 0.875rem;
-    color: #a1a1aa;
-    text-decoration: none;
-  }
-  .anf-home:hover {
-    color: #e4e4e7;
-    text-decoration: underline;
-  }
-</style>

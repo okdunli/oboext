@@ -1100,6 +1100,8 @@ export function pageHead(
   origin: string,
   /** Social-card fallback when the page has no cover: the site logo. */
   logoUrl?: string,
+  /** Reading stats for the WebPage JSON-LD (wordCount / timeRequired). */
+  read?: { wordCount: number; minutes: number },
 ): string {
   const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
   const desc = p.seoDescription || p.excerpt || siteDescription;
@@ -1121,13 +1123,20 @@ export function pageHead(
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
     ogImage ? `<meta name="twitter:image" content="${esc(ogImage)}">` : "",
-    jsonLd({
-      "@context": "https://schema.org",
-      "@type": "WebPage",
-      name: fullTitle,
-      description: desc,
-      url,
-    }),
+    jsonLd((() => {
+      const wp: Record<string, unknown> = {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        name: fullTitle,
+        description: desc,
+        url,
+      };
+      if (read) {
+        if (read.wordCount > 0) wp.wordCount = read.wordCount;
+        wp.timeRequired = isoDuration(read.minutes);
+      }
+      return wp;
+    })()),
     jsonLd({
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",

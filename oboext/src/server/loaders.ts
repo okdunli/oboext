@@ -1365,6 +1365,14 @@ async function pageDetail(
   });
   const tc = getThemeChrome(themeSlug);
 
+  // Page reading time (parity with postDetail): CJK chars / latin words off the
+  // rendered body, floored at 1 minute. Feeds the WebPage JSON-LD.
+  const pgPlain = bodyHtml.replace(/<[^>]+>/g, " ");
+  const pgCjk = (pgPlain.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) ?? []).length;
+  const pgWords = pgPlain.replace(/[\u4e00-\u9fff\u3040-\u30ff]/g, " ").split(/\s+/).filter(Boolean).length;
+  const pgMinutes = Math.max(1, Math.round(pgCjk / 400 + pgWords / 200));
+  const pgWordCount = pgCjk + pgWords;
+
   return {
     main: tc.pagePage({
       page,
@@ -1375,7 +1383,7 @@ async function pageDetail(
       widgets,
     }),
     head:
-      R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl) +
+      R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl, { wordCount: pgWordCount, minutes: pgMinutes }) +
       pluginHead,
   };
 }

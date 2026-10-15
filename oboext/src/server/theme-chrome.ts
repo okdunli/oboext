@@ -277,6 +277,7 @@ const GLOBALS_BODY_UTILITIES = `.min-h-screen{min-height:100vh}
 @media (min-width:768px){.md\\:block{display:block}.md\\:hidden{display:none}}
 @media (min-width:1024px){.lg\\:hidden{display:none}.lg\\:grid-cols-\\[1fr_300px\\]{grid-template-columns:1fr 300px}}
 @media (min-width:1280px){.xl\\:hidden{display:none}}
+.rv-ic{display:inline-block;vertical-align:-0.125em;flex-shrink:0;overflow:visible;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 `;
 
 
@@ -2293,28 +2294,21 @@ function lucideSvg(name: string, px: number, cls = "", styleExtra = ""): string 
   }
   if (!svg) return "";
   const c = cls ? ` ${cls}` : "";
-  const style = `display:inline-block;vertical-align:-0.125em;flex-shrink:0${styleExtra ? ";" + styleExtra : ""}`;
-  
-  
-  return svg
-    // Strip the root <svg>'s width/height only - the next line re-adds them at
-    // the call site's size, and the viewBox does the actual scaling.
-    //
-    // The pattern is ANCHORED to the root tag on purpose. An unanchored
-    // /\s(?:width|height)="\d+"/g also matches nested elements, and those
-    // dimensions are GEOMETRY, not presentation: a <rect> without a width does
-    // not render at all. That silently emptied every rect in cpu.svg, book-open
-    // and the rest, so those glyphs came out with rectangular holes.
-    // Two passes, because the two attributes are independent.
-    .replace(/^(<svg\b[^>]*?)\s(?:width|height)="\d+"/, (m, head) => head)
-    .replace(/^(<svg\b[^>]*?)\s(?:width|height)="\d+"/, (m, head) => head)
-    .replace(/^<svg\b[^>]*?\bxmlns="[^"]*"/, (m) => `${m} width="${px}" height="${px}"`)
-    .replace(/stroke="#[0-9a-fA-F]{3,8}"/, 'stroke="currentColor"')
-    // Glyphs that draw to y=2 / y=22 lose another 1px to the 2px stroke, and
-    // the default svg overflow:hidden clips it - those icons render sliced.
-    .replace(/^<svg\b/, '<svg overflow="visible"')
-    .replace(/class="lucide lucide-[^"]*"/, `class="lucide lucide-${LUCIDE_CLASS_ALIAS[name] || name}${c}"`)
-    .replace(/(<svg\b[^>]*)>/, `$1 style="${style}">`);
+  const m = /^<svg\b([^>]*)>/.exec(svg);
+  if (!m) return svg;
+  const root = m[1]
+    // xmlns, width/height, fill, stroke* and overflow are byte-for-byte
+    // identical on every glyph and were re-serialized into every <svg> on every
+    // page. They now live once in the shared `.rv-ic` rule (GLOBALS_BODY_UTILITIES)
+    // that every document inlines, so each icon drops ~210 bytes while the page
+    // pays a single ~150-byte rule. viewBox + the lucide class stay: the class
+    // is the theme hook and the viewBox is the geometry the stroke scales.
+    .replace(/\s*(?:xmlns|fill|stroke|stroke-width|stroke-linecap|stroke-linejoin|overflow)="[^"]*"/g, "")
+    .replace(/\s*(?:width|height)="\d+"/g, "")
+    .replace(/\s*class="[^"]*"/, ` class="lucide lucide-${LUCIDE_CLASS_ALIAS[name] || name} rv-ic${c}"`)
+    .replace(/^\s+/, "");
+  const style = styleExtra ? ` style="${styleExtra}"` : "";
+  return `<svg ${root} width="${px}" height="${px}"${style}>` + svg.slice(m[0].length);
 }
 
 

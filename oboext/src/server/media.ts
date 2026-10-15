@@ -1,10 +1,4 @@
-/**
- * Media library service — ported from lib/services/media.ts.
- *
- * Uploads need media:upload (admin/editor/author, like the original);
- * listing needs any session; delete/edit are owner-or-content:update:any.
- * Every read hits the live database.
- */
+// Media library service — ported from lib/services/media.ts.
 import { and, asc, desc, eq, or, sql, type SQL } from "drizzle-orm";
 import { db } from "./db.js";
 import { media as mediaTable, posts, pages, type Media } from "./schema.js";
@@ -16,24 +10,12 @@ import { promisify } from "node:util";
 import fs from "node:fs";
 import path from "node:path";
 import { invalidateVariantCache } from "./render.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("media");
 
 const execFileP = promisify(execFile);
 
-/**
- * Image variants are produced through PowerShell's System.Drawing (GDI+).
- * That was chosen because every Windows box has it and it needs no npm
- * dependency - but it is a WINDOWS-ONLY TOOL. Production runs on Linux
- * (Vercel lambdas), where `powershell.exe` does not exist, so the call threw
- * ENOENT on every upload. Because the caller is fire-and-forget and its
- * rejection handler only invalidated the render cache, the failure was silent:
- * the upload returned 200, and `srcset` simply never appeared.
- *
- * So the capability is now declared rather than assumed. `variantsSupported`
- * is what the UI reads to decide whether to offer the feature at all, and the
- * generator returns a result instead of throwing so a caller can log the real
- * reason. On a platform without GDI+ the original image still serves - only
- * the derived widths are missing.
- */
+// Image variants are produced through PowerShell's System.Drawing (GDI+).
 const variantsSupported = process.platform === "win32";
 
 /** Widths generated for every image upload (F2e responsive variants). */
@@ -84,6 +66,9 @@ export async function getMediaVariants(
     isImage: true,
     variants,
     missing: variants.filter((v) => !v.exists).map((v) => v.width),
+    // `available` means "this host could have produced them", not "every
+    // requested width exists". Reporting true on a host with no GDI+ would
+    // tell the admin to retry a regeneration that can never succeed.
     available: variantsSupported,
   };
 }
@@ -109,11 +94,11 @@ export async function getMediaVariants(
 function scheduleVariantGeneration(abs: string, url: string): void {
   void generateImageVariants(abs)
     .then((ok) => {
-      if (!ok) console.warn(`[media] variants unavailable for ${url} on this host; serving the original only`);
+      if (!ok) log.warn(`[media] variants unavailable for ${url} on this host; serving the original only`);
       invalidateVariantCache(url);
     })
     .catch((e) => {
-      console.error(`[media] variant generation failed for ${url}: ${e instanceof Error ? e.message : String(e)}`);
+      log.error(`[media] variant generation failed for ${url}: ${e instanceof Error ? e.message : String(e)}`);
       invalidateVariantCache(url);
     });
 }
@@ -138,12 +123,13 @@ async function removeVariants(abs: string): Promise<string[]> {
       try {
         await fs.promises.unlink(p);
       } catch (e) {
+        // ENOENT is the normal case - most images never had every width.
         const code = (e as NodeJS.ErrnoException).code;
         if (code !== "ENOENT") failed.push(p);
       }
     }),
   );
-  if (failed.length) console.error(`[media] could not remove stale variants: ${failed.join(", ")}`);
+  if (failed.length) log.error(`[media] could not remove stale variants: ${failed.join(", ")}`);
   return failed;
 }
 
@@ -152,6 +138,9 @@ export async function regenerateMediaVariants(userIn: SessionUser | null, id: nu
   const existing = await getMedia(id);
   canManage(user, existing);
   if (!/\.(jpe?g|png)$/i.test(existing.url)) throw new ServiceError("仅图片支持变体", 400);
+  // A clear refusal beats a silent no-op: this endpoint is the manual retry
+  // button, and on a host without GDI+ it could only ever "succeed" while
+  // producing nothing.
   if (!variantsSupported) throw new ServiceError("当前部署环境不支持生成图片变体（需要 Windows/GDI+）", 501);
   const abs = uploadsAbsPath(existing.url);
   if (!abs) throw new ServiceError("无法定位文件", 400);
@@ -176,7 +165,7 @@ export async function regenerateMediaVariants(userIn: SessionUser | null, id: nu
 async function generateImageVariants(abs: string): Promise<boolean> {
   if (!/\.(jpe?g|png)$/i.test(abs)) return true;
   if (!variantsSupported) {
-    console.warn(`[media] variant generation skipped (no GDI+ on ${process.platform}): ${abs}`);
+    log.warn(`[media] variant generation skipped (no GDI+ on ${process.platform}): ${abs}`);
     return false;
   }
   const ext = path.extname(abs);
@@ -243,6 +232,7 @@ export async function listMedia(
   else if (type === "doc") conds.push(sql`NOT (${mediaTable.mimeType} LIKE 'image/%')`);
   const tag = String(filter.tag || "").trim();
   if (tag) conds.push(sql`${mediaTable.tags} ILIKE ${"%" + tag + "%"}`);
+  // an always-true predicate keeps the two queries identical in shape
   const where: SQL = conds.length ? and(...conds)! : sql`true`;
   const rows = await db
     .select()
@@ -269,8 +259,14 @@ export async function createMediaFromFile(
   const user = requireUser(userIn);
   if (!can(user.role, "media:upload")) throw new ServiceError("无权上传媒体", 403);
   const result = await uploadFile(file, "media");
+  // F2e: fire-and-forget responsive variants (.w400/.w800/.w1600 beside the
+  // original, same PowerShell pipeline as tools/make-variants.mjs). The
+  // upload responds immediately; the render cache for the URL drops its
+  // "no variants yet" entry once the files exist, so the very next render
+  // emits the srcset.
   const abs = uploadsAbsPath(result.url);
   if (abs) scheduleVariantGeneration(abs, result.url);
+  // the stored filename mirrors the object on disk, like the original
   const storedName = result.url.split("?")[0].split("/").pop() || file.name;
   const note = alt.trim() || file.name;
   const [row] = await db
@@ -297,7 +293,10 @@ export async function deleteMedia(userIn: SessionUser | null, id: number): Promi
   const user = requireUser(userIn);
   const existing = await getMedia(id);
   canManage(user, existing);
-  await deleteFile(existing.url).catch(() => {});
+  await deleteFile(existing.url).catch(() => {}); // tolerate storage failures
+  // F2e hygiene: the responsive variants are siblings of the original and are
+  // NOT covered by deleteFile's single-URL unlink - leaving them behind would
+  // orphan files the media library no longer knows about.
   const abs = uploadsAbsPath(existing.url);
   if (abs && /\.(jpe?g|png)$/i.test(abs)) {
     await removeVariants(abs);
@@ -485,6 +484,7 @@ export async function replaceMediaFile(
   if (!abs) throw new ServiceError("无法定位原文件", 400);
   const buffer = Buffer.from(await file.arrayBuffer());
   await fs.promises.writeFile(abs, buffer);
+  // the picture changed, so every cached variant of it is now wrong
   await removeVariants(abs);
   invalidateVariantCache(existing.url);
   if (/\.(jpe?g|png)$/i.test(abs)) scheduleVariantGeneration(abs, existing.url);

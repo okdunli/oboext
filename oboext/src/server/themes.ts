@@ -17,6 +17,8 @@ import {
 import { DEFAULT_THEME_CONFIG, resolveThemeConfig } from "./theme-tokens.js";
 import { getPalettePreset, paletteLayeredConfig, PALETTE_PRESETS } from "./theme-palettes.js";
 import { THEME_CONFIG_KEYS, THEME_CONFIG_SCHEMA } from "./theme-schema.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("themes");
 
 // ------------------------------------------------------------- manifest types
 
@@ -226,7 +228,7 @@ export function ensureThemes(): Promise<void> {
         // already ran, so reads keep working off the existing rows; the next
         // cold start retries the sync. Marking `synced` here would be wrong -
         // that would skip the write forever - so only the error is dropped.
-        console.warn(
+        log.warn(
           "[themes] folder sync failed; serving reads from the existing rows: " +
             (e instanceof Error ? e.message : String(e)),
         );

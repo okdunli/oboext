@@ -6,6 +6,8 @@ import { invalidateOptionCache } from "./options.js";
 import { invalidateSettings } from "./queries.js";
 import { reloadPlugins } from "./plugins.js";
 import { ServiceError } from "./errors.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("backup");
 
 export const BACKUP_KIND = "oboext-db-backup";
 const BACKUP_VERSION = 1;
@@ -153,7 +155,7 @@ async function writeAutoSnapshot(): Promise<string | undefined> {
     await Promise.all(all.slice(AUTO_KEEP).map((f) => fs.rm(path.join(AUTO_DIR, f), { force: true })));
     return file;
   } catch (err) {
-    console.warn("[backup] 恢复前自动快照失败（已忽略）:", err);
+    log.warn("[backup] 恢复前自动快照失败（已忽略）:", err);
     return undefined;
   }
 }

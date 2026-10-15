@@ -1,16 +1,10 @@
-/**
- * Plugin loader — port of oboext lib/plugins/loader.ts.
- *
- * Reads the enabled set, imports each entry through the build-time static
- * entry table (see plugin-entries.ts: the bundled server cannot import
- * arbitrary files at runtime), and runs its setup() inside withOwner() so
- * disabling a plugin surgically removes its registrations. State lives on
- * globalThis so every route module in the worker shares one initialisation.
- */
+// Plugin loader — port of oboext lib/plugins/loader.ts.
 import { removeAllByOwner, withOwner } from "./hooks.js";
 import { createContext, type PluginDefinition } from "./plugin-api.js";
 import { invalidatePluginDiscovery, pluginHasEntry } from "./plugin-registry.js";
 import { PLUGIN_ENTRIES } from "./plugin-entries.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("plugin-loader");
 
 type LoadedState = {
   /** slug -> definition, for teardown */
@@ -32,11 +26,7 @@ function state(): LoadedState {
 
 export type EnabledPlugin = { slug: string; settings: Record<string, unknown> };
 
-/**
- * Load (or reload) the given set of enabled plugins. Idempotent: the same
- * set twice is a no-op; a changed set unloads what disappeared (or changed
- * settings) and loads what appeared.
- */
+// Load (or reload) the given set of enabled plugins.
 export async function loadPlugins(enabled: EnabledPlugin[]): Promise<void> {
   const s = state();
   const signature = enabled
@@ -49,12 +39,13 @@ export async function loadPlugins(enabled: EnabledPlugin[]): Promise<void> {
   s.promise = (async () => {
     const wanted = new Set(enabled.map((p) => p.slug));
 
+    // Unload plugins that are no longer enabled (or whose settings changed).
     for (const [slug, def] of s.loaded) {
       if (wanted.has(slug) && s.signature === signature) continue;
       try {
         await def.teardown?.(createContext(slug, {}));
       } catch (err) {
-        console.error(`[plugins] teardown of "${slug}" failed:`, err);
+        log.error(`[plugins] teardown of "${slug}" failed:`, err);
       }
       removeAllByOwner(slug);
       s.loaded.delete(slug);
@@ -62,12 +53,12 @@ export async function loadPlugins(enabled: EnabledPlugin[]): Promise<void> {
 
     for (const { slug, settings } of enabled) {
       if (!pluginHasEntry(slug)) {
-        console.warn(`[plugins] "${slug}" is enabled but has no entry file — skipped.`);
+        log.warn(`[plugins] "${slug}" is enabled but has no entry file — skipped.`);
         continue;
       }
       const entry = PLUGIN_ENTRIES[slug];
       if (!entry) {
-        console.warn(
+        log.warn(
           `[plugins] "${slug}" is not in the build-time entry table ` +
             "(installed after the last build?) — run a rebuild, skipped.",
         );
@@ -81,10 +72,11 @@ export async function loadPlugins(enabled: EnabledPlugin[]): Promise<void> {
           await withOwner(slug, () => def.setup(ctx));
           s.loaded.set(slug, def);
         } else {
+          // Top-level side-effect style.
           s.loaded.set(slug, { setup: () => {} });
         }
       } catch (err) {
-        console.error(`[plugins] failed to load "${slug}":`, err);
+        log.error(`[plugins] failed to load "${slug}":`, err);
       }
     }
 

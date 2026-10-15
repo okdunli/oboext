@@ -1,10 +1,6 @@
-/**
- * Hook system — extension contract shared by plugins and themes.
- * Ported 1:1 from oboext lib/hooks.ts. Named registry of ordered
- * callbacks: actions are fire-and-forget, filters transform a payload.
- * Default priority 10, idempotent registration by function identity,
- * shared on globalThis across the worker process.
- */
+import { createLogger } from "./logger.js";
+const log = createLogger("hooks");
+// Hook system — extension contract shared by plugins and themes.
 
 export type HookCallback<P = any> = (payload: P) => P | void | Promise<P | void>;
 
@@ -45,6 +41,7 @@ export function withOwner<T>(owner: string, fn: () => T): T {
 
 function insert(map: Map<string, Registration[]>, hook: string, reg: Registration) {
   const list = map.get(hook) ?? [];
+  // De-dupe by function identity so double-evaluation is a no-op.
   if (list.some((r) => r.callback === reg.callback)) return;
   list.push(reg);
   list.sort((a, b) => a.priority - b.priority);
@@ -92,7 +89,7 @@ export function doAction<P = any>(hook: string, payload?: P): void {
     try {
       r.callback(payload as P);
     } catch (err) {
-      console.error(`[hooks] action "${hook}" (${r.owner ?? "core"}) failed:`, err);
+      log.error(`[hooks] action "${hook}" (${r.owner ?? "core"}) failed:`, err);
     }
   }
 }
@@ -105,7 +102,7 @@ export function applyFilters<P>(hook: string, payload: P): P {
       const next = r.callback(value) as P | undefined;
       if (next !== undefined && next !== null) value = next;
     } catch (err) {
-      console.error(`[hooks] filter "${hook}" (${r.owner ?? "core"}) failed:`, err);
+      log.error(`[hooks] filter "${hook}" (${r.owner ?? "core"}) failed:`, err);
     }
   }
   return value;
@@ -119,7 +116,7 @@ export async function applyAsyncFilters<P>(hook: string, payload: P): Promise<P>
       const next = (await r.callback(value)) as P | undefined;
       if (next !== undefined && next !== null) value = next;
     } catch (err) {
-      console.error(`[hooks] async filter "${hook}" (${r.owner ?? "core"}) failed:`, err);
+      log.error(`[hooks] async filter "${hook}" (${r.owner ?? "core"}) failed:`, err);
     }
   }
   return value;
@@ -147,10 +144,7 @@ export function hasHookOwner(hook: string, owner: string): boolean {
   return (registry().filters.get(hook) ?? []).some((r) => r.owner === owner);
 }
 
-/**
- * Well-known core hooks. Documented here so plugin authors have one canonical
- * list, and so renaming one is a compile error rather than a silent no-op.
- */
+// Well-known core hooks. Documented here so plugin authors have one canonical list, and so renaming one is a compile error rather than a silent no-op.
 export const HOOKS = {
   /** filter — ({ html, context }) transform rendered block HTML */
   contentHtml: "content.html",
@@ -210,11 +204,6 @@ export const HOOKS = {
   /** async filter — ({ slug, path, method, request, response }) plugin HTTP
    * gateway at /api/plugin/<slug>/<...path>. */
   apiRequest: "api.request",
-  /** filter — ({ slug, html, scriptSrc }) a plugin's custom admin panel at
-   * /admin/plugins/<slug>: server-rendered body + the URL of an EXTERNAL
-   * script (the admin document's strict CSP allows 'self' scripts only, so
-   * panels ship JS as a file served from /plugin-assets/<slug>/). The host
-   * route guards existence/activation; the first filter whose slug matches
-   * owns the panel (rosezm idiom: plain HTML + delegated JS). */
+  // Filter — ({ slug, html, scriptSrc }) a plugin's custom admin panel at /admin/plugins/<slug>: server-rendered body + the URL of an EXTERNAL script.
   adminPanel: "admin.panel",
 } as const;

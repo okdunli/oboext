@@ -30,6 +30,8 @@ import { getPermalinkConfig, postUrlFor } from "./links.js";
 import type { SessionUser } from "./auth.js";
 import { hashPassword } from "./auth.js";
 import { HOOKS, applyAsyncFilters, doAction } from "./hooks.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("admin");
 
 // --------------------------------------------------------------------- errors
 
@@ -128,7 +130,7 @@ export async function apiGate(
     return jsonOk(out ?? null);
   } catch (e) {
     if (e instanceof ServiceError) return jsonFail(e.message, e.status);
-    console.error("[admin api]", e);
+    log.error("[admin api]", e);
     const detail =
       process.env.DEBUG_API_ERRORS === "true" && e instanceof Error ? `: ${e.message}` : "";
     return jsonFail("服务器内部错误" + detail, 500);

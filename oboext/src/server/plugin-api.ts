@@ -1,10 +1,4 @@
-/**
- * The public surface a plugin is handed at setup time (ported from
- * oboext lib/plugins/api.ts). Plugins never touch the hook registry
- * directly — they receive a scoped API so every registration is attributed
- * to the owning slug (enabling clean unload) and settings arrive as a plain
- * object with defaults already merged.
- */
+// The public surface a plugin is handed at setup time (ported from oboext lib/plugins/api.ts).
 import {
   addAction,
   addFilter,
@@ -13,6 +7,8 @@ import {
   HOOKS,
   type HookCallback,
 } from "./hooks.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("plugin-api");
 
 export interface PluginContext<S = Record<string, unknown>> {
   slug: string;
@@ -54,6 +50,6 @@ export function createContext<S = Record<string, unknown>>(
     doAction,
     applyFilters,
     HOOKS,
-    log: (...args: unknown[]) => console.log(`[plugin:${slug}]`, ...args),
+    log: (msg: string, ...args: unknown[]) => log.child(slug).info(msg, ...args),
   };
 }

@@ -11,6 +11,8 @@
   import { getAdminMenuPrefs, homeRedirectFor } from "@server/admin-menu";
   import { syncPlugins, ensurePluginsLoaded } from "@server/plugins";
   import { dispatchPluginApi } from "@server/plugin-gateway";
+  import { createLogger } from "@server/logger";
+  const log = createLogger("data-api");
 
   // Lazy: the framework's build imports dist/server.js for route analysis; touching the DB at module top level would make builds require a DB.
   let readyPromise;
@@ -20,7 +22,7 @@
     await syncPlugins();
     await ensurePluginsLoaded();
   }).catch((err) => {
-    console.error("[oboext] database init failed:", err);
+    log.error("[oboext] database init failed:", err);
     throw err;
   }));
 

@@ -1,7 +1,10 @@
 import { desc, eq, lt, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
 import { securityEvents } from "./schema.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("security-events");
 
+// Retention: the events table only ever had INSERTs, so it grows forever.
 let lastPruneAt = 0;
 export async function pruneSecurityEvents(): Promise<void> {
   const now = Date.now();
@@ -13,7 +16,7 @@ export async function pruneSecurityEvents(): Promise<void> {
       .delete(securityEvents)
       .where(lt(securityEvents.createdAt, new Date(now - days * 86_400_000)));
   } catch (e) {
-    console.warn("[security-events] prune failed:", e);
+    log.warn("[security-events] prune failed:", e);
   }
 }
 

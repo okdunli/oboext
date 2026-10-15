@@ -1,20 +1,10 @@
-/**
- * Authentication — ported verbatim in spirit from the original app
- * (lib/auth.ts + the throttling half of lib/services/security-events.ts).
- *
- * jose HS256 sessions (7d), bcryptjs cost-10 passwords, a per-PGlite-dir
- * persisted secret at .data/.auth-secret, and a security_events sliding-window
- * login throttle (5 failures / 15 min, same account OR same IP).
- *
- * Route handlers receive raw Requests, so cookies arrive as
- * plain header strings: sessionCookieHeader()/clearSessionCookieHeader() build
- * Set-Cookie values the API routes attach to their Response.
- */
+// Authentication — ported verbatim in spirit from the original app (lib/auth.ts + the throttling half of lib/services/security-events.ts).
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
+// Esbuild bundles server.js for a neutral platform: bcryptjs's runtime probes (`require("crypto")` and the browser-only `self.crypto`) both fail.
 bcrypt.setRandomFallback((len: number) => Array.from(crypto.randomBytes(len)));
 import { and, desc, eq, gt, or, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
@@ -23,6 +13,8 @@ import { pruneSecurityEvents } from "./security-events.js";
 import type { Role } from "./schema.js";
 import { ServiceError } from "./errors.js";
 import { getAdminSecurity } from "./security.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("auth");
 
 export const COOKIE_NAME = "cms_session";
 /** Session lifetime in days. Also the CSRF token's, since it shadows this
@@ -41,18 +33,20 @@ export function getSecret(): Uint8Array {
   const secret = process.env.AUTH_SECRET;
   if (secret && secret.length >= 16) return new TextEncoder().encode(secret);
   if (process.env.NODE_ENV === "production") {
-    console.warn(
+    log.warn(
       "[oboext] AUTH_SECRET is not set — deriving a stable secret from the database " +
         "connection string so sessions survive across serverless instances. Set AUTH_SECRET " +
         "in production for a non-derivable secret.",
     );
   }
 
+  // Serverless filesystems (Vercel) are read-only, so the previous write-to-disk fallback generated a NEW random secret on every request.
   const stable = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || process.env.VERCEL_URL;
   if (stable) {
     return new TextEncoder().encode(crypto.createHash("sha256").update(stable).digest("hex"));
   }
 
+  // Local dev without a database: persist once to disk if the FS is writable.
   try {
     fs.mkdirSync(path.dirname(DEV_SECRET_PATH), { recursive: true });
     if (!fs.existsSync(DEV_SECRET_PATH)) {
@@ -131,6 +125,8 @@ export async function verifyToken(token: string): Promise<SessionUser | null> {
     const { payload } = await jwtVerify(token, getSecret());
     await ensureMigrations();
     const id = payload.id as number;
+    // Only session tokens carry the `id` claim; a 2FA challenge ticket
+    // (sub = user id, twofa: true) must never authenticate a request.
     if (!Number.isInteger(id)) return null;
     const [row] = await db
       .select({ status: users.status, email: users.email, name: users.name, role: users.role })
@@ -172,6 +168,8 @@ export async function verifyCredentials(
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, row.id));
   return { id: row.id, email: row.email, name: row.name, role: row.role };
 }
+
+// ------------------------------------------------------------- login throttle
 
 export const LOGIN_EVENTS = {
   SUCCESS: "login.success",
@@ -227,13 +225,18 @@ export async function recordLoginEvent(input: {
       ip: input.ip ?? null,
       userAgent: input.userAgent ?? null,
     });
+    // retention: drop records past OBOEXT_SECURITY_LOG_DAYS (no-op unless the
+    // hourly throttle is due)
     await pruneSecurityEvents();
   } catch (e) {
-    console.error("[security-events] write failed:", e);
+    // audit failure must never block the login flow
+    log.error("[security-events] write failed:", e);
   }
 }
 
 export class LoginThrottledError extends Error {}
+
+// ------------------------------------------------------------- first-run admin
 
 /**
  * Whether the install has been initialized (at least one user row).
@@ -254,6 +257,8 @@ export function hasAnyUser(): Promise<boolean> {
       const [row] = await db.select({ count: sql<number>`count(*)` }).from(users);
       return Number(row?.count ?? 0) > 0;
     })().catch((e) => {
+      // A failed probe must not be cached as "empty": that would lock a live
+      // install behind the setup wall until the process restarts.
       g.__oboeHasAnyUser = undefined;
       throw e;
     });
@@ -276,6 +281,9 @@ export async function createFirstAdmin(input: {
       role: "admin",
     })
     .returning();
+  // The memoized probe answered false a moment ago; drop it so the next
+  // hasAnyUser() reads the row we just inserted instead of replaying the
+  // pre-install answer (which would keep bouncing the owner to /admin/setup).
   (globalThis as unknown as { __oboeHasAnyUser?: Promise<boolean> }).__oboeHasAnyUser = undefined;
   return { id: row.id, email: row.email, name: row.name, role: row.role };
 }
@@ -290,6 +298,11 @@ export function clientIp(req: Request): string | null {
 export function clientUa(req: Request): string | null {
   return (req.headers.get("user-agent") || "").slice(0, 500) || null;
 }
+
+// ------------------------------------------------- contact lookup + reset
+// Ports of lib/services/users.ts's contact helpers — the email/SMS code
+// login, password reset and (later) member registration all resolve a user
+// by account or by channel + contact target.
 
 export async function findUserByAccount(account: string) {
   const identifier = account.trim();
@@ -360,9 +373,17 @@ export function normalizeContactTarget(channel: "email" | "sms", raw: string): s
   return p;
 }
 
+// ------------------------------------------------------- 2FA challenge ticket
+// Password (or code) login succeeded but a second-factor plugin wants a
+// dynamic code: instead of a session we issue a 10-minute ticket that only
+// /api/auth/login-2fa can redeem (purpose claim + user id, HS256).
+
 const CHALLENGE_MINUTES = 10;
 
 export async function signChallengeTicket(user: SessionUser): Promise<string> {
+  // Claim shape mirrors the original: { twofa: true } + sub = user id, and
+  // deliberately NO `id` claim — a challenge ticket must never double as a
+  // session cookie (that would skip the second factor entirely).
   return new SignJWT({ twofa: true })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(String(user.id))
@@ -378,6 +399,7 @@ export async function verifyChallengeTicket(ticket: string): Promise<SessionUser
     if (payload.twofa !== true || !payload.sub) return null;
     const id = Number(payload.sub);
     if (!Number.isInteger(id)) return null;
+    // Re-read the row so a banned/deleted account cannot finish the challenge.
     const [row] = await db
       .select({ status: users.status, email: users.email, name: users.name, role: users.role })
       .from(users)

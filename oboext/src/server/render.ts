@@ -14,7 +14,7 @@ import { uploadsAbsPath } from "./storage.js";
 import { sanitizeHtml } from "./sanitize.js";
 import fsMod from "node:fs";
 import pathMod from "node:path";
-import { DEFAULT_LOCALE, makeT, type Translate } from "./i18n.js";
+import { DEFAULT_LOCALE, makeT, type Locale, type Translate } from "./i18n.js";
 
 export function extractSubtitle(title: string): string {
   // Match pattern: "prefix 123 · subtitle · subsubtitle"
@@ -848,6 +848,8 @@ export type CommentModel = {
   items: FlatComment[];
   avatar: { source: AvatarSource; size: number; default: string; rating: string };
   config: Record<string, unknown>;
+  locale: Locale;
+  t?: Translate;
 };
 
 const DFLT_AVATAR_BG = "linear-gradient(135deg,#dce8f7,#bcd6f3)";
@@ -882,6 +884,10 @@ const ICON_SEND =
 
 type CommentNode = FlatComment & { children: CommentNode[] };
 
+function commentT(m: CommentModel): Translate {
+  return m.t ?? makeT(m.locale || DEFAULT_LOCALE);
+}
+
 function buildCommentTree(flat: FlatComment[]): CommentNode[] {
   const byId = new Map<number, CommentNode>();
   flat.forEach((c) => byId.set(c.id, { ...c, children: [] }));
@@ -902,6 +908,7 @@ function renderCommentNodes(
 ): string {
   const inner = nodes
     .map((n) => {
+      const L = commentT(m);
       const url = safeCommentUrl(n.authorUrl);
       const name = url
         ? `<div class="name has-url"><a href="${esc(url)}" target="_blank" rel="nofollow noopener noreferrer">${esc(n.authorName)}</a></div>`
@@ -909,10 +916,10 @@ function renderCommentNodes(
       const avatar = getAvatarUrl(n.authorEmail, m.avatar);
       const bg = avatar ? `background-image:url(&quot;${esc(avatar)}&quot;)` : "";
       const reply = m.open
-        ? `<span><div class="flex-shrink-0 reply flex items-center" data-comment-reply=${n.id} title="回复">${ICON_REPLY}</div></span>`
+        ? `<span><div class="flex-shrink-0 reply flex items-center" data-comment-reply=${n.id} title="${esc(L("comments.reply"))}">${ICON_REPLY}</div></span>`
         : "";
       const parentInfo = parentName
-        ? `<span class="parent-info">回复 ${esc(parentName)}：</span>`
+        ? `<span class="parent-info">${esc(L("comments.reply_to", { name: esc(parentName) }))}</span>`
         : "";
       const children = n.children.length
         ? renderCommentNodes(n.children, m, depth + 1, n.authorName)
@@ -932,7 +939,8 @@ function renderCommentNodes(
 }
 
 function builtinCommentsHtml(m: CommentModel): string {
-  if (!m.open) return '<div class="sf-comment-close">本文已关闭评论。</div>';
+  const L = commentT(m);
+  if (!m.open) return '<div class="sf-comment-close">' + esc(L("comments.closed_post")) + "</div>";
 
   const meBox = m.me
     ? '<div class="sf-comment-me">' +
@@ -946,10 +954,10 @@ function builtinCommentsHtml(m: CommentModel): string {
     ? ""
     : '<div class="guest-info flex">' +
       '<div class="item"><input type="text" class="comment-field" name="authorName" autocomplete="nickname" placeholder=' +
-      `"昵称${m.requireNameEmail ? " *" : ""}">` +
+      `"${esc(L("comments.nickname"))}${m.requireNameEmail ? " *" : ""}">` +
       `<i>${ICON_USER}</i></div>` +
       '<div class="item"><input type="email" class="comment-field" name="authorEmail" autocomplete="email" placeholder=' +
-      `"邮箱${m.requireNameEmail ? " *" : ""}">` +
+      `"${esc(L("comments.email"))}${m.requireNameEmail ? " *" : ""}">` +
       `<i>${ICON_MAIL}</i></div>` +
       `<div class="item"><input type="url" class="comment-field" name="authorUrl" autocomplete="url" placeholder="${esc(m.authorUrlLabel)}${m.requireAuthorUrl ? " *" : ""}"><i>${ICON_LINK}</i></div>` +
       "</div>";
@@ -967,45 +975,47 @@ function builtinCommentsHtml(m: CommentModel): string {
   const form =
     '<form class="comment-form sf-comment-form my-5" novalidate data-comment-form ' +
     `data-post-id=${m.postId} data-post-type=${esc(m.postType)} data-require=${m.requireNameEmail ? "1" : "0"}` +
-    ` data-require-url=${m.requireAuthorUrl ? "1" : "0"}>` +
+    ` data-require-url=${m.requireAuthorUrl ? "1" : "0"} data-comment-locale=${esc(m.locale || DEFAULT_LOCALE)}>` +
     '<input type="hidden" name="parentId" value="">' +
     meBox +
     guestFields +
     '<div class="input">' +
-    `<textarea name="content" placeholder="请输入...">${esc(m.defaultContent || "")}</textarea></div>` +
+    `<textarea name="content" placeholder="${esc(L("comments.placeholder"))}">${esc(m.defaultContent || "")}</textarea></div>` +
     '<div class="sf-toolbar">' +
     // No mx-5 here: the toolbar's own padding already insets the row, so the
     // margin pushed the emoji trigger 20px further right than the textarea
     // edge above it - the button did not line up with the field it belongs to.
     // The panel is positioned against .funcs, so it stays inside this element.
     '<div class="funcs">' +
-    `<button type="button" aria-label="表情" title="表情" data-comment-emoji>${ICON_SMILE}</button>` +
+    `<button type="button" aria-label="${esc(L("comments.emoji"))}" title="${esc(L("comments.emoji"))}" data-comment-emoji>${ICON_SMILE}</button>` +
     '<span class="emoji-panel-wrap" data-emoji-panel aria-hidden="true"></span>' +
     "</div>" +
     '<div class="form-actions">' +
-    `<button type="button" class="cancel" data-comment-cancel style="display:none">${ICON_RESET}取消回复</button>` +
-    `<button type="submit" class="btn-submit">${ICON_SEND}<span data-submit-label>发表评论</span></button>` +
+    `<button type="button" class="cancel" data-comment-cancel style="display:none">${ICON_RESET}${esc(L("comments.cancel_reply"))}</button>` +
+    `<button type="submit" class="btn-submit">${ICON_SEND}<span data-submit-label>${esc(L("comments.submit"))}</span></button>` +
     "</div></div></form>";
 
   const tree = m.items.length
     ? renderCommentNodes(buildCommentTree(m.items), m, 0)
-    : '<div class="sf-comment-close">还没有评论，来抢沙发吧。</div>';
+    : '<div class="sf-comment-close">' + esc(L("comments.empty")) + "</div>";
   return '<div data-comment-notice class="sf-comment-close" style="display:none;color:var(--primary-color)"></div>' + form + tree;
 }
 
 function commentsInner(m: CommentModel): string {
+  const L = commentT(m);
   if (!m.enabled || m.provider === "none") {
-    return '<div class="sf-comment-close">评论已关闭。</div>';
+    return '<div class="sf-comment-close">' + esc(L("comments.closed")) + "</div>";
   }
   if (m.provider !== "builtin") {
     return '<div class="sf-comment-provider" data-comment-provider="' + esc(m.provider) +
-      '" data-config="' + esc(JSON.stringify(m.config)) + '"></div>';
+      '" data-config="' + esc(JSON.stringify(m.config)) + '" data-comment-locale=' + esc(m.locale || DEFAULT_LOCALE) + '></div>';
   }
   return builtinCommentsHtml(m);
 }
 
 export function commentsSection(m: CommentModel): string {
-  return '<section class="sk-section sk-comments"><h2 class="title_style_01">评论</h2>' +
+  const L = commentT(m);
+  return '<section class="sk-section sk-comments"><h2 class="title_style_01">' + esc(L("comments.title")) + "</h2>" +
     commentsInner(m) + "</section>";
 }
 

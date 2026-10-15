@@ -1271,12 +1271,14 @@ async function postDetail(
 
     requireAuthorUrl: settings.requireAuthorUrl ?? false,
 
-    authorUrlLabel: "链接",
+    authorUrlLabel: t("comments.url_label"),
     defaultContent: config.defaultContent,
     me,
     items,
     avatar: config.avatar,
     config: { ...config },
+    locale,
+    t,
   });
   // post.meta filter (reading-time, . ): plugin rows on the meta line.
   const metaPayload = applyFilters<{ post: unknown; items: R.MetaItem[] }>(HOOKS.postMeta, {
@@ -1389,7 +1391,8 @@ async function pageDetail(
   const settingsP = safe(getSettings());
   const row = payload.preloaded ?? (await getPublishedPageRow(payload.slug));
   if (!row) return { notFound: true };
-  const t = makeT(localeOf(ctx));
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
 
   // One hydration, three consumers: the page, its rendered body and the plugin
   // head all chain off it, so body rendering (pure CPU without DB-backed
@@ -1439,12 +1442,14 @@ async function pageDetail(
 
     requireAuthorUrl: settings.requireAuthorUrl ?? false,
 
-    authorUrlLabel: "链接",
+    authorUrlLabel: t("comments.url_label"),
     defaultContent: config.defaultContent,
     me,
     items,
     avatar: config.avatar,
     config: { ...config },
+    locale,
+    t,
   });
   const tc = getThemeChrome(themeSlug);
 

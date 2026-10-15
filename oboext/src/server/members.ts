@@ -1,5 +1,3 @@
-
-
 import crypto from "node:crypto";
 import { sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
@@ -15,6 +13,7 @@ import { getPermalinkConfig } from "./links.js";
 import { addPasswordlessMark } from "./passwordless.js";
 import { getAdminSecurity, normalizePublicPath } from "./security.js";
 import { ServiceError } from "./errors.js";
+import { passwordError } from "./password-policy.js";
 
 const OPTION_KEY = "memberSettings";
 
@@ -200,9 +199,8 @@ export async function registerMember(input: RegisterInput): Promise<SessionUser>
   const passwordRaw = input.password ?? "";
   let passwordHash: string;
   if (passwordRaw) {
-    if (passwordRaw.length < 8 || passwordRaw.length > 200) {
-      throw new ServiceError("密码长度需为 8~200 个字符", 422);
-    }
+    const pwErr = passwordError(passwordRaw, { email: input.email, name });
+    if (pwErr) throw pwErr;
     passwordHash = await hashPassword(passwordRaw);
   } else if (member.passwordRequired) {
     throw new ServiceError("请填写密码", 422);

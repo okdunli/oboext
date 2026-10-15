@@ -14,6 +14,7 @@ import type { Role } from "./schema.js";
 import { ServiceError } from "./errors.js";
 import { getAdminSecurity } from "./security.js";
 import { createLogger } from "./logger.js";
+import { passwordError } from "./password-policy.js";
 const log = createLogger("auth");
 
 export const COOKIE_NAME = "cms_session";
@@ -272,11 +273,20 @@ export async function createFirstAdmin(input: {
   password: string;
 }): Promise<SessionUser> {
   if (await hasAnyUser()) throw new Error("系统已初始化，无法重复创建管理员");
+  const email = (input.email || "").trim();
+  const name = (input.name || "").trim();
+  if (!email || !name) throw new ServiceError("邮箱和昵称不能为空", 422);
+  if (!EMAIL_RE.test(email) || email.length > 120)
+    throw new ServiceError("邮箱格式不正确", 422);
+  if (name.length > 64) throw new ServiceError("昵称长度不能超过 64 个字符", 422);
+  if (!input.password) throw new ServiceError("密码不能为空", 422);
+  const pwErr = passwordError(input.password, { email, name });
+  if (pwErr) throw pwErr;
   const [row] = await db
     .insert(users)
     .values({
-      email: input.email,
-      name: input.name,
+      email,
+      name,
       passwordHash: await hashPassword(input.password),
       role: "admin",
     })

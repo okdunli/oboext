@@ -1,10 +1,5 @@
 <script>
-  // POST /api/auth/login { account, password }
-  // Sliding-window throttle (5 fails / 15 min, same account or IP), bcrypt
-  // verify, then the 7-day cms_session cookie. When a second-factor plugin
-  // (two-factor) claims the auth.challenge filter, no session is issued:
-  // a 10-minute challenge ticket comes back and /api/auth/login-2fa
-  // finishes the login with a TOTP/recovery code.
+  // POST /api/auth/login { account, password } Sliding-window throttle (5 fails / 15 min, same account or IP), bcrypt verify.
   import { jsonOk, jsonFail, readBody, apiGate } from "@server/admin";
   import {
     verifyCredentials,
@@ -20,6 +15,7 @@
   import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { verifyLoginCaptcha, readCaptchaCookie } from "@server/captcha";
   import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
+  import { v, parseOrThrow } from "@server/validate";
 
   export async function POST(request) {
     return apiGate(async () => {
@@ -27,6 +23,13 @@
       const account = String(body.account || "").trim();
       const password = String(body.password || "");
       if (!account || !password) return jsonFail("请输入账号和密码", 422);
+      parseOrThrow(
+        v.object({
+          account: v.string({ max: 120, label: "账号" }),
+          password: v.string({ max: 200, trim: false, label: "密码" }),
+        }),
+        { account, password },
+      );
 
       const sec = await getAdminSecurity();
       if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);

@@ -1,5 +1,3 @@
-
-
 import { and, eq, ne, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
 import { users } from "./schema.js";
@@ -8,10 +6,13 @@ import { hashPassword, verifyPassword } from "./auth.js";
 import type { SessionUser } from "./auth.js";
 import { isPasswordlessUser, clearPasswordlessMark } from "./passwordless.js";
 import { ServiceError } from "./errors.js";
+import { passwordError } from "./password-policy.js";
 import { HOOKS, applyAsyncFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { getPublicRegisterConfig } from "./members.js";
 import type { VirtualSiteRoute } from "./virtual-routes.js";
+
+// --------------------------------------------------------- self-service CRUD
 
 export async function getOwnProfile(actor: SessionUser) {
   await ensureMigrations();
@@ -70,6 +71,8 @@ export async function changeOwnPassword(
   await ensureMigrations();
   const [target] = await db.select().from(users).where(eq(users.id, actor.id));
   if (!target) throw new ServiceError("用户不存在", 404);
+  const pwErr = passwordError(newPassword, { email: target.email, name: target.name });
+  if (pwErr) throw pwErr;
   const nopassword = await isPasswordlessUser(actor.id);
   if (!nopassword && !(await verifyPassword(currentPassword, target.passwordHash))) {
     throw new ServiceError("当前密码不正确", 422);
@@ -82,6 +85,8 @@ export async function changeOwnPassword(
   await clearPasswordlessMark(actor.id);
   return { id: actor.id };
 }
+
+// ------------------------------------------------------------- user center
 
 export type UserCenterMenuItem = {
   href: string;

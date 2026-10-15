@@ -31,6 +31,8 @@ import type { SessionUser } from "./auth.js";
 import { hashPassword } from "./auth.js";
 import { HOOKS, applyAsyncFilters, doAction } from "./hooks.js";
 import { createLogger } from "./logger.js";
+import { passwordError } from "./password-policy.js";
+import { v, parseOrThrow } from "./validate.js";
 const log = createLogger("admin");
 
 // --------------------------------------------------------------------- errors
@@ -99,7 +101,12 @@ export function jsonFail(message: string, status = 400): Response {
   });
 }
 
+const MAX_BODY_BYTES = 10 * 1024 * 1024;
+
 export async function readBody(req: Request): Promise<any> {
+  const declared = Number(req.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES)
+    throw new ServiceError("请求体过大", 413);
   try {
     return await req.json();
   } catch {
@@ -410,11 +417,59 @@ function normIds(v: unknown): number[] {
     : [];
 }
 
+const POST_STATUSES = ["draft", "published", "archived"] as const;
+
+function normBlocks(v: unknown): Block[] {
+  if (!Array.isArray(v)) throw new ServiceError("内容格式不正确", 422);
+  if (v.length > 2000) throw new ServiceError("内容块数量过多", 422);
+  for (const b of v) {
+    if (b === null || typeof b !== "object" || Array.isArray(b))
+      throw new ServiceError("内容块格式不正确", 422);
+  }
+  return v as Block[];
+}
+
+function checkPostShape(input: Partial<PostInput>): void {
+  if (input.title !== undefined && String(input.title).trim().length > 200)
+    throw new ServiceError("标题长度不能超过 200 个字符", 422);
+  if (input.slug != null && String(input.slug).length > 100)
+    throw new ServiceError("别名长度不能超过 100 个字符", 422);
+  if (input.status !== undefined && !POST_STATUSES.includes(input.status))
+    throw new ServiceError("非法的文章状态", 422);
+  if (
+    input.commentStatus !== undefined &&
+    input.commentStatus !== "open" &&
+    input.commentStatus !== "closed"
+  )
+    throw new ServiceError("非法的评论开关状态", 422);
+  if (input.publishedAt != null && Number.isNaN(Date.parse(String(input.publishedAt))))
+    throw new ServiceError("发布时间格式不正确", 422);
+  if (input.excerpt != null && String(input.excerpt).length > 2000)
+    throw new ServiceError("摘要长度不能超过 2000 个字符", 422);
+  if (input.seoTitle != null && String(input.seoTitle).length > 200)
+    throw new ServiceError("SEO 标题长度不能超过 200 个字符", 422);
+  if (input.seoDescription != null && String(input.seoDescription).length > 500)
+    throw new ServiceError("SEO 描述长度不能超过 500 个字符", 422);
+  if (input.seoKeywords != null && String(input.seoKeywords).length > 500)
+    throw new ServiceError("SEO 关键词长度不能超过 500 个字符", 422);
+  if (input.featuredImage != null && String(input.featuredImage).length > 500)
+    throw new ServiceError("特色图片地址过长", 422);
+  if (input.template != null && String(input.template).length > 100)
+    throw new ServiceError("模板名称过长", 422);
+  if (input.format != null && String(input.format).length > 50)
+    throw new ServiceError("文章形式名称过长", 422);
+  if (input.authorId != null) {
+    const n = Number(input.authorId);
+    if (!Number.isInteger(n) || n <= 0) throw new ServiceError("非法的作者账号", 422);
+  }
+}
+
 export async function createPost(user: SessionUser, input: PostInput) {
   requireCap(user, "content:create");
   const title = (input.title || "").trim();
   if (!title) throw new ServiceError("标题不能为空", 422);
-  const content = Array.isArray(input.content) ? input.content : [];
+  checkPostShape(input);
+  const content = Array.isArray(input.content) ? normBlocks(input.content) : [];
   const slugBase = slugify(input.slug || title);
   const slug = uniqueSlug(slugBase, await takenSlugs(slugBase));
   const tails = await uniqueLinkTails(title);
@@ -463,6 +518,7 @@ export async function createPost(user: SessionUser, input: PostInput) {
 
 export async function updatePost(user: SessionUser, id: number, input: Partial<PostInput>) {
   const existing = await adminGetPost(user, id); // 404 + ownership
+  checkPostShape(input);
   let slug = existing.slug;
   if (input.slug && input.slug !== existing.slug) {
     const base = slugify(input.slug);
@@ -837,6 +893,13 @@ export async function updateComment(
 ) {
   const u = requireUser(user);
   if (!can(u.role, "content:update:any")) throw new ServiceError("权限不足", 403);
+  if (patch.status !== undefined && !["published", "pending", "spam"].includes(patch.status))
+    throw new ServiceError("非法的评论状态", 422);
+  if (patch.content !== undefined) {
+    const c = String(patch.content).trim();
+    if (!c) throw new ServiceError("评论内容不能为空", 422);
+    if (c.length > 5000) throw new ServiceError("评论内容过长", 422);
+  }
   const [existing] = await db.select().from(comments).where(eq(comments.id, id));
   if (!existing) throw new ServiceError("评论不存在", 404);
   const set: Record<string, unknown> = {};
@@ -1187,6 +1250,15 @@ export async function createUser(
   const name = (input.name || "").trim();
   if (!email || !name || !input.password)
     throw new ServiceError("邮箱、昵称和密码不能为空", 422);
+  parseOrThrow(
+    v.object({
+      email: v.email({ label: "邮箱" }),
+      name: v.string({ min: 1, max: 64, label: "昵称" }),
+    }),
+    { email, name },
+  );
+  const pwErr = passwordError(input.password, { email, name });
+  if (pwErr) throw pwErr;
   const [exists] = await db.select({ id: users.id }).from(users).where(eq(users.email, email));
   if (exists) throw new ServiceError("邮箱已存在", 422);
   const [row] = await db
@@ -1215,6 +1287,26 @@ export async function updateUser(
   if ((input.role !== undefined || input.email !== undefined || input.status !== undefined) && !managing)
     throw new ServiceError("无权修改角色、邮箱或账号状态", 403);
   if (!isSelf && !managing) throw new ServiceError("无权修改其他用户", 403);
+  if (input.role !== undefined && !["admin", "editor", "author", "subscriber"].includes(input.role))
+    throw new ServiceError("非法的用户角色", 422);
+  if (input.email !== undefined && input.email !== null && String(input.email).trim() !== "") {
+    const nextEmail = String(input.email).trim();
+    parseOrThrow(v.object({ email: v.email({ label: "邮箱" }) }), { email: nextEmail });
+  }
+  if (input.name !== undefined && input.name !== null && String(input.name).trim().length > 64)
+    throw new ServiceError("昵称长度不能超过 64 个字符", 422);
+  if (input.status !== undefined) {
+    const nextStatus = String(input.status ?? "").trim();
+    if (!nextStatus || nextStatus.length > 32)
+      throw new ServiceError("非法的账号状态", 422);
+  }
+  if (input.password) {
+    const pwErr = passwordError(input.password, {
+      email: input.email ?? target.email,
+      name: input.name ?? target.name,
+    });
+    if (pwErr) throw pwErr;
+  }
   const [row] = await db
     .update(users)
     .set({

@@ -1377,7 +1377,7 @@ function defaultPostPage(parts: PostPageParts): string {
           .join("") +
         `</ul></details>`
       : "";
-  return `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><article>` +
+  return `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><article id="post-body">` +
     `<header class="mb-6">` +
     // No "back to home" link above the title. The header already carries the
     // site brand as a link to "/", so this was a second control to the same
@@ -1705,7 +1705,7 @@ function pseudoPostPage(parts: PostPageParts): string {
   const comments = `<section class="pl-section" style="padding-top:0;margin-top:32px"><div class="pl-section-head">` +
     `<h2><span class="pl-section-mark"></span>${T("comments.title")} <small>response · ${p.commentsCount} reply</small></h2></div>` +
     `${parts.commentsHtml}</section>`;
-  return `<div class="pl-article-wrap"><div class="pl-article-card">` +
+  return `<div class="pl-article-wrap"><article class="pl-article-card" id="post-body">` +
     `<a href="${esc(parts.blogIndex || "/blog")}" class="pl-back"><span>←</span><span>back to index</span></a>` +
     `<header class="pl-article-head">` +
     `<div class="pl-article-meta">` +
@@ -1727,7 +1727,7 @@ function pseudoPostPage(parts: PostPageParts): string {
     comments +
     (parts.adjacentHtml || "") +
     `<aside style="margin-top:48px">${parts.widgets || ""}</aside>` +
-    `</div></div>`;
+    `</article></div>`;
 }
 
 function pseudoPagePage(parts: PagePageParts): string {
@@ -2059,7 +2059,7 @@ function cmPagePage(parts: PagePageParts): string {
   const comments = p.commentStatus === "open"
     ? `<section class="cm-section"><div class="cm-section-head"><h2>log replies</h2></div>${parts.commentsHtml}</section>`
     : "";
-  return `<article class="cm-article">` +
+  return `<article class="cm-article" id="post-body">` +
     `<a href="/" class="cm-back">cd ..</a>` +
     meta +
     `<h1 class="cm-title">${esc(p.title)}</h1>` +
@@ -2846,7 +2846,7 @@ function bmixPostPage(parts: PostPageParts): string {
     `<div class="sidebar"><div class="pf_scroller sidebar-sticky"><div class="sidebar-content">${sidebar}${sideWidgets}</div></div></div>` +
     `<div class="main-content">` +
     `<div class="model-wrapper article"><div class="model">` +
-    `<article class="bmx-blocks" data-bmix-article>${bodyHtml}</article>` +
+    `<article class="bmx-blocks" data-bmix-article id="post-body">${bodyHtml}</article>` +
     parts.shareHtml +
     `</div></div>` +
     postBottom +

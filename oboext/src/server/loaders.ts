@@ -316,7 +316,7 @@ async function chromeData(pathname: string, t: Translate) {
       footerContainerAlign: (themeSettings as Record<string, unknown>).footerContainerAlign,
       footerMenu: (footerMenu?.items ?? []) as MenuItem[],
     },
-    R.widgetAreaHtml(footerWidgets, "sk-footer-widgets"),
+    R.widgetAreaHtml(footerWidgets, "sk-footer-widgets", t),
   );
 
   // renders customCss + customHead at body open and customFooter + the
@@ -362,7 +362,7 @@ async function chromeData(pathname: string, t: Translate) {
       tagCloud: R.tagCloud(tags, t),
       stats: R.blogStats(stats, t),
       popular: R.popularWidget(popular, t),
-      widgets: R.widgetAreaHtml(sideWidgets, "sk-widget-area"),
+      widgets: R.widgetAreaHtml(sideWidgets, "sk-widget-area", t),
     }),
     footerHtml,
   };
@@ -443,11 +443,11 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
 
 // -------- bluemix home helpers (mirror themes/bluemix/HomePage.tsx logic) --------
 
-async function sideWidgetsFor(themeSlug: string): Promise<string> {
+async function sideWidgetsFor(themeSlug: string, t?: Translate): Promise<string> {
 
   if (themeSlug !== "codeman" && themeSlug !== "pseudolinear") return "";
   const wrap = themeSlug === "pseudolinear" ? "pl-side-stack" : "sk-widget-area";
-  return R.widgetAreaHtml(await getAreaWidgets(themeSlug, "sidebar"), wrap);
+  return R.widgetAreaHtml(await getAreaWidgets(themeSlug, "sidebar"), wrap, t);
 }
 
 // Sync twin of sideWidgetsFor: identical markup, but over an area that was
@@ -455,10 +455,11 @@ async function sideWidgetsFor(themeSlug: string): Promise<string> {
 function sideWidgetsHtml(
   themeSlug: string,
   items: Awaited<ReturnType<typeof getAreaWidgets>>,
+  t?: Translate,
 ): string {
   if (themeSlug !== "codeman" && themeSlug !== "pseudolinear") return "";
   const wrap = themeSlug === "pseudolinear" ? "pl-side-stack" : "sk-widget-area";
-  return R.widgetAreaHtml(items, wrap);
+  return R.widgetAreaHtml(items, wrap, t);
 }
 
 async function bmixDrawerPosts(themeSlug: string): Promise<PostView[] | undefined> {
@@ -729,8 +730,8 @@ async function home(ctx?: Ctx) {
       showHero,
       bannerMax,
       recentCount,
-      homeTop: R.widgetAreaHtml(homeTopItems, "container-np bmx-ad-area"),
-      sideWidgets: R.widgetAreaHtml(homeSideItems, "bmx-ad-area"),
+      homeTop: R.widgetAreaHtml(homeTopItems, "container-np bmx-ad-area", t),
+      sideWidgets: R.widgetAreaHtml(homeSideItems, "bmx-ad-area", t),
     }),
   };
 }
@@ -743,7 +744,7 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
   // its queries overlap the pager window's wave instead of following it.
   const themeSlugP = safe(getActiveThemeSlug());
   const tsP = safe(getActiveThemeSettings());
-  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default");
+  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default", t);
   const [settings, themeSlug, cfg, catRows, all, ts] = await Promise.all([
     getSettings(),
     themeSlugP,
@@ -822,7 +823,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
   // (same pattern as blogList).
   const themeSlugP = safe(getActiveThemeSlug());
   const tsP = safe(getActiveThemeSettings());
-  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default");
+  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default", t);
   const [category, settings, cfg, themeSlug, catRows, ts] = await Promise.all([
     getCategoryBySlug(payload.slug),
     getSettings(),
@@ -909,7 +910,7 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
   // (same pattern as blogList/categoryList).
   const themeSlugP = safe(getActiveThemeSlug());
   const tsP = safe(getActiveThemeSettings());
-  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s !== "skyscraper");
+  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s !== "skyscraper", t);
   const [tag, settings, cfg, themeSlug, ts] = await Promise.all([
     getTagBySlug(payload.slug),
     getSettings(),
@@ -980,7 +981,7 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   const settingsP = safe(getSettings());
   const themeSlugP = safe(getActiveThemeSlug());
   const tsP = safe(getActiveThemeSettings());
-  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default");
+  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default", t);
   const settings0 = await settingsP;
   const themeSlug = await themeSlugP;
 
@@ -1107,10 +1108,11 @@ function sidebarBatchP(
   themeSlugP: Promise<string>,
   tsP: Promise<Record<string, unknown>>,
   want: (themeSlug: string) => boolean,
+  tr?: Translate,
 ): Promise<[string, PostView[] | undefined, Awaited<ReturnType<typeof defaultSidebarData>>]> {
   const p = Promise.all([themeSlugP, tsP]).then(([s, t]) =>
     Promise.all([
-      sideWidgetsFor(s),
+      sideWidgetsFor(s, tr),
       bmixDrawerPosts(s),
       defaultSidebarData(want(s), t.useCustomIcons === true),
     ]),
@@ -1318,12 +1320,12 @@ async function postDetail(
 
   // Sidebar widgets for codeman/pseudolinear paint the area read in the
   // opening wave; the other themes return "" and use sidebarWidgets below.
-  const widgets = sideWidgetsHtml(themeSlug, sideItems);
+  const widgets = sideWidgetsHtml(themeSlug, sideItems, t);
   const postBottom = widgetAreas
-    ? R.widgetAreaHtml(bottomItems, isBluemix ? "model-wrapper bmx-ad-area" : "space-y-6")
+    ? R.widgetAreaHtml(bottomItems, isBluemix ? "model-wrapper bmx-ad-area" : "space-y-6", t)
     : "";
   const sidebarWidgets = widgetAreas
-    ? R.widgetAreaHtml(sideItems, isBluemix ? "bmx-ad-area" : "space-y-6")
+    ? R.widgetAreaHtml(sideItems, isBluemix ? "bmx-ad-area" : "space-y-6", t)
     : "";
   // F7: the preview banner rides the rendered main for managers/authors on
   // unpublished posts only - a fixed bar over the theme's own chrome.

@@ -110,10 +110,10 @@
 </div>
 
 <div class="adm-toolbar" style="gap:8px;">
-  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-op="publish">批量发布</button>
-  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-op="draft">转草稿</button>
-  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-op="archive">批量归档</button>
-  <button class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-op="delete">批量删除</button>
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="publish">批量发布</button>
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="draft">转草稿</button>
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="archive">批量归档</button>
+  <button class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="delete" data-confirm="确认删除选中的文章？此操作不可撤销。">批量删除</button>
 </div>
 
 <div class="adm-card adm-table-wrap">

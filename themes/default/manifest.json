@@ -1,8 +1,10 @@
 {
   "name": "Oboext Default",
   "slug": "default",
+  "public": true,
+  "publicScripts": ["pjax.js"],
   "description": "Default blog theme with elegant typography",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "author": "Oboext",
   "isDefault": true,
   "config": {

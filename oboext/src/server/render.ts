@@ -696,6 +696,14 @@ export function shareBar(p: PostView, siteName = "", siteDescription = ""): stri
   );
 }
 
+function isoDuration(mins: number): string {
+  const m = Math.max(0, Math.round(mins));
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  const hh = h > 0 ? h + "H" : "";
+  return "PT" + hh + r + "M";
+}
+
 export function postHead(
   p: PostView,
   siteTitle: string,
@@ -703,6 +711,8 @@ export function postHead(
   origin: string,
   /** Social-card fallback when the post has no cover: the site logo. */
   logoUrl?: string,
+  /** Reading stats for BlogPosting JSON-LD (wordCount / timeRequired). */
+  read?: { wordCount: number; minutes: number },
 ): string {
   const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
   const desc = p.seoDescription || p.excerpt || siteDescription;
@@ -732,6 +742,10 @@ export function postHead(
   };
   if (p.featuredImage) posting.image = [p.featuredImage];
   if (p.tags?.length) posting.keywords = p.tags.map((t) => t.name).join(", ");
+  if (read) {
+    if (read.wordCount > 0) posting.wordCount = read.wordCount;
+    posting.timeRequired = isoDuration(read.minutes);
+  }
   return [
     `<title>${esc(fullTitle)}</title>`,
     `<meta name="description" content="${esc(desc)}">`,

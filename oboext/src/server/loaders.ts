@@ -1220,14 +1220,14 @@ async function postDetail(
   // Reading time from the rendered body: CJK counts per character (~400/min),
   // everything else per word (~200/min). Floor of 1 so short posts still read
   // as "about a minute". Rides the postMeta payload so every theme's meta row
-  // (defMetaHtml, bluemix hero badges) picks it up in one place.
-  {
-    const plain = bodyHtml.replace(/<[^>]+>/g, " ");
-    const cjk = (plain.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) ?? []).length;
-    const words = plain.replace(/[\u4e00-\u9fff\u3040-\u30ff]/g, " ").split(/\s+/).filter(Boolean).length;
-    const minutes = Math.max(1, Math.round(cjk / 400 + words / 200));
-    metaPayload.items.unshift({ label: "阅读时长", value: `约 ${minutes} 分钟` });
-  }
+  // (defMetaHtml, bluemix hero badges) picks it up in one place. wordCount /
+  // minutes also feed the BlogPosting JSON-LD (timeRequired / wordCount).
+  const readPlain = bodyHtml.replace(/<[^>]+>/g, " ");
+  const readCjk = (readPlain.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) ?? []).length;
+  const readWords = readPlain.replace(/[\u4e00-\u9fff\u3040-\u30ff]/g, " ").split(/\s+/).filter(Boolean).length;
+  const readMinutes = Math.max(1, Math.round(readCjk / 400 + readWords / 200));
+  const readWordCount = readCjk + readWords;
+  metaPayload.items.unshift({ label: "阅读时长", value: `约 ${readMinutes} 分钟` });
   const metaHtml = metaPayload.items.length
     ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--muted)">${metaPayload.items.map((m) => `<span>${R.esc(m.label)}：${R.esc(m.value)}</span>`).join("")}</div>`
     : "";
@@ -1287,7 +1287,7 @@ async function postDetail(
       canonical: `${ctx.origin}${post.url}`,
     }),
     head:
-      R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl) +
+      R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl, { wordCount: readWordCount, minutes: readMinutes }) +
       pluginHead,
   };
 }

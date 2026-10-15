@@ -2,12 +2,27 @@
 
   import { apiGate } from "@server/admin";
   import { startOAuth, STATE_COOKIE } from "@server/oauth";
+  import { resolveLocale, makeT } from "@server/i18n";
 
   function pathProvider(request) {
     return decodeURIComponent(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
   }
 
+  // Same locale signals as the callback: this is a browser navigation, not a
+  // client-stamped XHR, and the request's language decides the wording of the
+  // JSON error the visitor sees in the address bar's page.
+  function visitorT(request) {
+    return makeT(
+      resolveLocale({
+        url: request.url,
+        cookie: request.headers.get("cookie"),
+        accept: request.headers.get("accept-language"),
+      }),
+    );
+  }
+
   export async function GET(request) {
+    const t = visitorT(request);
     return apiGate(async () => {
       const key = pathProvider(request);
       const url = new URL(request.url);
@@ -15,10 +30,13 @@
       const redirect = url.searchParams.get("redirect") ?? undefined;
       const user = getContext().user;
       if (bind && !user) {
-        return new Response(JSON.stringify({ error: "请先登录后再绑定账号" }), {
-          status: 401,
-          headers: { "content-type": "application/json; charset=utf-8" },
-        });
+        return new Response(
+          JSON.stringify({ error: t("api.oauth_bind_login_required") }),
+          {
+            status: 401,
+            headers: { "content-type": "application/json; charset=utf-8" },
+          },
+        );
       }
       const { authorizeUrl, state } = await startOAuth({
         key,
@@ -34,6 +52,6 @@
           "set-cookie": `${STATE_COOKIE}=${encodeURIComponent(state)}; HttpOnly; SameSite=Lax; Path=/api/oauth; Max-Age=600`,
         },
       });
-    });
+    }, t);
   }
 </script>

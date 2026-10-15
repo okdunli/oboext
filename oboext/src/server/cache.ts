@@ -152,6 +152,8 @@ export function invalidateContentCaches(): void {
   invalidatePrefix("widget:");
   invalidatePrefix("pathmiss:");
   invalidatePrefix("pg:");
+  invalidatePrefix("pgh:");
+  invalidatePrefix("hydr:");
   invalidatePrefix("rp:");
 }
 

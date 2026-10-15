@@ -1228,6 +1228,10 @@ export async function updateUser(
     })
     .where(eq(users.id, id))
     .returning();
+  // The hydrated post/page views carry the author's name and email, so a
+  // rename or an email change has to drop them or the old name keeps serving
+  // for the whole SWR window.
+  invalidateContentCaches();
   return publicUser(row);
 }
 
@@ -1238,6 +1242,9 @@ export async function deleteUser(actor: SessionUser | null, id: number) {
   const [target] = await db.select({ id: users.id }).from(users).where(eq(users.id, id));
   if (!target) throw new ServiceError("用户不存在", 404);
   await db.delete(users).where(eq(users.id, id));
+  // Posts keep their author row cached by id; dropping the user must not keep
+  // a deleted author's name on the public site for the rest of the window.
+  invalidateContentCaches();
   return { id };
 }
 

@@ -1135,7 +1135,7 @@ async function postDetail(
   // off it, so body rendering (pure CPU without DB-backed shortcodes, one
   // round trip with them) overlaps the reads wave instead of running after it,
   // and the head follows the post instead of re-reading anything.
-  const hydratedP = safe(hydrate(row));
+  const hydratedP = safe(hydrate(row, { preview: previewing }));
   const bodyHtmlP = hydratedP.then((p) => R.buildPostBody(p, "post", highlight));
   const pluginHeadP = Promise.all([hydratedP, settingsP])
     .then(([post, settings]) => ({

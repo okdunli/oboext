@@ -1,5 +1,7 @@
 <script>
 
+  import { makeT } from "@server/i18n";
+
   export const shell = false;
 
   let d = $data(() => __rvLoad("notFound", {}));
@@ -8,6 +10,18 @@
   function siteTitle() { return d().siteTitle || ""; }
   function skin() { return d().skin || ""; }
   function strings() { return d().strings || {}; }
+  // The title lives in <head>, which the compiler renders after the body
+  // pass; a signal read there can land on a concurrent render's value (the
+  // signal map is process-global). Deriving it from the request context
+  // keeps it race-immune, same pattern as the layout's docLocale().
+  function nfLocale() {
+    if (typeof window !== "undefined") {
+      const p = window.location.pathname;
+      return p === "/en" || p.indexOf("/en/") === 0 ? "en" : "zh-CN";
+    }
+    return String(getContext().locale || "zh-CN") === "en" ? "en" : "zh-CN";
+  }
+  function nfTitle() { return makeT(nfLocale())("notfound.title"); }
   function messageLines() {
     const s = settings();
     if (!s?.message) return [];
@@ -18,7 +32,7 @@
 <head>
 
   <link rel="stylesheet" href="/public/notfound.css">
-  <title>{strings().title} - {siteTitle()}</title>
+  <title>{nfTitle()} - {siteTitle()}</title>
   <meta name="robots" content="noindex, nofollow">
   <meta property="og:site_name" content={siteTitle()}>
 </head>

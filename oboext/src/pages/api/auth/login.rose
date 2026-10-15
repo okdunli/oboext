@@ -16,13 +16,15 @@
   import { verifyLoginCaptcha, readCaptchaCookie } from "@server/captcha";
   import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
   import { v, parseOrThrow } from "@server/validate";
+  import { makeT, headerLocale } from "@server/i18n";
 
   export async function POST(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const body = await readBody(request);
       const account = String(body.account || "").trim();
       const password = String(body.password || "");
-      if (!account || !password) return jsonFail("请输入账号和密码", 422);
+      if (!account || !password) return jsonFail(t("api.login_required"), 422);
       parseOrThrow(
         v.object({
           account: v.string({ max: 120, label: "账号" }),
@@ -32,12 +34,13 @@
       );
 
       const sec = await getAdminSecurity();
-      if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);
+      if (!isEntryReferer(request, sec)) return jsonFail(t("api.no_entry"), 404);
 
       const captchaError = await verifyLoginCaptcha(
         sec,
         body.captcha,
         readCaptchaCookie(request),
+        t,
       );
       if (captchaError) return jsonFail(captchaError, 400);
 
@@ -47,14 +50,15 @@
         await assertLoginAllowed(account, ip);
       } catch (e) {
         await recordLoginEvent({ eventType: LOGIN_EVENTS.LOCKED, account, ip, userAgent: ua });
-        if (e instanceof LoginThrottledError) return jsonFail(e.message, 429);
+        if (e instanceof LoginThrottledError)
+          return jsonFail(t("api.throttled", { n: e.minutes }), 429);
         throw e;
       }
 
       const user = await verifyCredentials(account, password);
       if (!user) {
         await recordLoginEvent({ eventType: LOGIN_EVENTS.FAIL, account, ip, userAgent: ua });
-        return jsonFail("账号或密码错误", 401);
+        return jsonFail(t("api.login_wrong"), 401);
       }
 
       const challenged = await applyAsyncFilters(HOOKS.authChallenge, {
@@ -85,6 +89,6 @@
           "set-cookie": await sessionCookiePair(user),
         },
       });
-    });
+    }, t);
   }
 </script>

@@ -235,6 +235,61 @@ export const zhCatalog: Record<string, string> = {
   "login.oauth_or": "其他登录方式",
   "login.oauth_use": "使用 {x} 登录",
   "login.req_fail": "请求失败 ({n})",
+  // ---- API error messages (server -> bilingual public clients) ----
+  // The bilingual clients (login-card.js / register.js / comments.js) show
+  // these verbatim, so the server picks the language from the x-locale
+  // header those clients stamp; admin.js and the member-center clients do
+  // not stamp it and keep the default Chinese.
+  "api.csrf_rejected": "请求校验失败，请刷新页面后重试",
+  "api.err_internal": "服务器内部错误",
+  "api.no_entry": "接口不存在",
+  "api.login_required": "请输入账号和密码",
+"api.unauthenticated": "未认证",
+  "api.login_wrong": "账号或密码错误",
+  "api.throttled": "登录失败次数过多，请 {n} 分钟后再试",
+  "api.code_required": "请输入验证码",
+  "api.code_wrong": "验证码不正确或已过期",
+  "api.twofa_required": "请输入动态码或恢复码",
+  "api.twofa_wrong": "动态码或恢复码不正确",
+  "api.twofa_expired": "验证已过期，请重新登录",
+  "api.forgot_required": "请输入邮箱或昵称",
+  "api.reset_required": "请填写完整信息",
+  "api.reset_wrong": "验证码错误或已过期",
+  "api.captcha_wrong": "验证码不正确或已过期",
+  "api.captcha_required": "请输入验证码",
+  "api.captcha_unavailable": "验证码校验服务暂不可用，请稍后再试",
+  "api.register_closed": "注册已关闭",
+  "api.invite_required": "请填写邀请码",
+  "api.invite_wrong": "邀请码无效",
+  "api.name_invalid": "昵称需为 2~32 个字符，且不能包含空格或 @",
+  "api.name_required": "请填写昵称",
+  "api.password_required": "请填写密码",
+  "api.email_required": "请填写邮箱",
+  "api.email_invalid": "邮箱格式不正确",
+  "api.phone_required": "请填写手机号",
+  "api.phone_invalid": "手机号格式不正确",
+  "api.name_taken": "昵称已被占用",
+  "api.email_taken": "邮箱已被注册",
+  "api.phone_taken": "手机号已被注册",
+  "api.contact_taken_email": "该邮箱已被其他账号绑定",
+  "api.contact_taken_phone": "该手机号已被其他账号绑定",
+  "api.send_too_often": "发送太频繁，请 1 分钟后再试",
+  "api.send_rate_limited": "请求过于频繁，请稍后再试",
+  "api.code_attempts": "验证码错误次数过多，请重新获取",
+  "api.pw_min": "密码长度至少为 {n} 个字符",
+  "api.pw_max": "密码长度不能超过 {n} 个字符",
+  "api.pw_common": "密码过于常见，请更换一个更独特的密码",
+  "api.pw_repeat": "密码不能由同一个字符重复组成",
+  "api.pw_sequential": "密码不能包含 6 位以上的连续升降序字符",
+  "api.pw_similar": "密码不能包含账号或昵称",
+  "api.comment_no_post": "缺少 postId",
+"api.comment_missing": "内容不存在",
+"api.comment_closed": "评论已关闭",
+"api.comment_post_closed": "本文评论已关闭",
+"api.comment_empty": "评论内容不能为空",
+"api.comment_too_long": "评论内容过长",
+"api.comment_name_email": "请填写昵称和邮箱",
+"api.comment_url": "请填写链接",
   "format.standard": "标准",
   "format.aside": "日志",
   "format.quote": "引语",
@@ -539,6 +594,57 @@ export const enCatalog: Record<string, string> = {
   "login.oauth_or": "Other sign-in methods",
   "login.oauth_use": "Sign in with {x}",
   "login.req_fail": "Request failed ({n})",
+  // ---- API error messages (mirror of the zh block above) ----
+  "api.csrf_rejected": "Request validation failed. Please refresh the page and try again.",
+  "api.err_internal": "Internal server error",
+  "api.no_entry": "Not found",
+  "api.login_required": "Enter your account and password",
+"api.unauthenticated": "Not signed in",
+  "api.login_wrong": "Wrong account or password",
+  "api.throttled": "Too many failed sign-in attempts. Try again in {n} minute(s)",
+  "api.code_required": "Enter the code",
+  "api.code_wrong": "The code is incorrect or has expired",
+  "api.twofa_required": "Enter your 2FA code or a recovery code",
+  "api.twofa_wrong": "Incorrect 2FA code or recovery code",
+  "api.twofa_expired": "Verification expired. Please sign in again",
+  "api.forgot_required": "Enter your email or nickname",
+  "api.reset_required": "Please fill in every field",
+  "api.reset_wrong": "The reset code is incorrect or has expired",
+  "api.captcha_wrong": "The captcha is incorrect or has expired",
+  "api.captcha_required": "Enter the captcha",
+  "api.captcha_unavailable": "The captcha service is temporarily unavailable. Please try again later",
+  "api.register_closed": "Registration is closed",
+  "api.invite_required": "Enter the invitation code",
+  "api.invite_wrong": "Invalid invitation code",
+  "api.name_invalid": "A nickname must be 2-32 characters with no spaces or @",
+  "api.name_required": "Enter a nickname",
+  "api.password_required": "Enter a password",
+  "api.email_required": "Enter an email address",
+  "api.email_invalid": "Invalid email address",
+  "api.phone_required": "Enter a phone number",
+  "api.phone_invalid": "Invalid phone number",
+  "api.name_taken": "That nickname is taken",
+  "api.email_taken": "That email is already registered",
+  "api.phone_taken": "That phone number is already registered",
+  "api.contact_taken_email": "That email is bound to another account",
+  "api.contact_taken_phone": "That phone number is bound to another account",
+  "api.send_too_often": "Too many codes sent. Try again in 1 minute",
+  "api.send_rate_limited": "Too many requests. Please try again later",
+  "api.code_attempts": "Too many wrong codes. Request a new one",
+  "api.pw_min": "Use at least {n} characters",
+  "api.pw_max": "Use at most {n} characters",
+  "api.pw_common": "That password is too common. Pick a more unique one",
+  "api.pw_repeat": "A password cannot be one repeated character",
+  "api.pw_sequential": "A password cannot contain 6+ consecutive ascending or descending characters",
+  "api.pw_similar": "A password cannot contain your account or nickname",
+  "api.comment_no_post": "Missing postId",
+"api.comment_missing": "Post not found",
+"api.comment_closed": "Comments are closed",
+"api.comment_post_closed": "Comments are closed on this post",
+"api.comment_empty": "Please write a comment",
+"api.comment_too_long": "Comment is too long",
+"api.comment_name_email": "Nickname and email are required",
+"api.comment_url": "Link is required",
   "format.standard": "Standard",
   "format.aside": "Aside",
   "format.quote": "Quote",
@@ -810,6 +916,29 @@ export function resolveLocale(input: {
   if (fromCookie && fromCookie !== DEFAULT_LOCALE) return fromCookie;
   for (const cand of parseAcceptLanguage(input.accept)) return cand;
   return DEFAULT_LOCALE;
+}
+
+/**
+ * The request locale off a context-like object, defaulting when the
+ * middleware did not set one. API routes read it to pick the language of
+ * their JSON error messages (the middleware fills ctx.locale from the
+ * client-stamped x-locale header for /api/* paths).
+ */
+export function ctxLocale(ctx?: { locale?: string } | null): Locale {
+  const raw = ctx && ctx.locale;
+  return raw === "en" || raw === "zh-CN" ? raw : DEFAULT_LOCALE;
+}
+
+/**
+ * Request locale off the client-stamped `x-locale` header. The bilingual
+ * public scripts (login card, register, comments) stamp the header on every
+ * API call; a plain curl without it falls back to Chinese, which is what the
+ * admin surfaces read anyway.
+ */
+export function headerLocale(req: {
+  headers: { get(name: string): string | null };
+}): Locale {
+  return ctxLocale({ locale: req.headers.get("x-locale") });
 }
 
 // ------------------------------------------------------------------ rendering

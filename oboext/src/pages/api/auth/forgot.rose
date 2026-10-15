@@ -1,10 +1,5 @@
 <script>
-  // POST /api/auth/forgot { account }
-  //
-  // Password reset step one: send a 6-digit reset code (10 min, single use)
-  // to the account's bound email via the generic code service (purpose=reset).
-  // An unknown account (or one without an email) answers the same
-  // { sent: true } without sending — no account enumeration.
+  // POST /api/auth/forgot { account } Password reset step one: send a 6-digit reset code (10 min).
   import { jsonOk, jsonFail, readBody, apiGate } from "@server/admin";
   import {
     clientIp,
@@ -16,19 +11,22 @@
   import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { verifyLoginCaptcha, readCaptchaCookie } from "@server/captcha";
   import { sendVerificationCode } from "@server/notify";
+  import { makeT, headerLocale } from "@server/i18n";
 
   export async function POST(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const body = await readBody(request);
       const account = String(body.account || "").trim();
-      if (!account) return jsonFail("请输入邮箱或昵称", 422);
+      if (!account) return jsonFail(t("api.forgot_required"), 422);
 
       const sec = await getAdminSecurity();
-      if (!isEntryReferer(request, sec)) return jsonFail("接口不存在", 404);
+      if (!isEntryReferer(request, sec)) return jsonFail(t("api.no_entry"), 404);
       const captchaError = await verifyLoginCaptcha(
         sec,
         body.captcha,
         readCaptchaCookie(request),
+        t,
       );
       if (captchaError) return jsonFail(captchaError, 400);
 
@@ -51,6 +49,6 @@
       }
 
       return { sent: true };
-    });
+    }, t);
   }
 </script>

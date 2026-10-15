@@ -8,16 +8,18 @@
   import { clientIp, hasAnyUser, findUserByContact, normalizeContactTarget } from "@server/auth";
   import { getNotifySettings, sendVerificationCode } from "@server/notify";
   import { getMemberSettings } from "@server/members";
+  import { makeT, headerLocale } from "@server/i18n";
 
   export async function POST(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const body = await readBody(request);
       const channel = body.channel === "sms" ? "sms" : "email";
       const purpose = String(body.purpose || "login");
       if (purpose !== "login" && purpose !== "register" && purpose !== "bind") {
-        return jsonFail("接口不存在", 404);
+        return jsonFail(t("api.no_entry"), 404);
       }
-      if (!(await hasAnyUser())) return jsonFail("接口不存在", 404);
+      if (!(await hasAnyUser())) return jsonFail(t("api.no_entry"), 404);
 
       const notify = await getNotifySettings();
       const ip = clientIp(request);
@@ -25,14 +27,16 @@
       if (purpose === "bind") {
 
         const me = getContext().user;
-        if (!me) return jsonFail("未认证", 401);
+        if (!me) return jsonFail(t("api.unauthenticated"), 401);
         const channelReady = channel === "email" ? notify.email.enabled : notify.sms.enabled;
-        if (!channelReady) return jsonFail("接口不存在", 404);
+        if (!channelReady) return jsonFail(t("api.no_entry"), 404);
         const target = normalizeContactTarget(channel, String(body.target || ""));
         const owner = await findUserByContact(channel, target);
         if (owner && owner.id !== me.id) {
           return jsonFail(
-            channel === "email" ? "该邮箱已被其他账号绑定" : "该手机号已被其他账号绑定",
+            channel === "email"
+              ? t("api.contact_taken_email")
+              : t("api.contact_taken_phone"),
             409,
           );
         }
@@ -42,12 +46,12 @@
 
       if (purpose === "register") {
         const member = await getMemberSettings();
-        if (!member.registerEnabled) return jsonFail("接口不存在", 404);
+        if (!member.registerEnabled) return jsonFail(t("api.no_entry"), 404);
         const ready =
           channel === "email"
             ? notify.email.enabled && notify.register.emailVerify
             : notify.sms.enabled && notify.register.phoneVerify;
-        if (!ready) return jsonFail("接口不存在", 404);
+        if (!ready) return jsonFail(t("api.no_entry"), 404);
         const target = normalizeContactTarget(channel, String(body.target || ""));
         const out = await sendVerificationCode({
           channel,
@@ -62,7 +66,7 @@
         channel === "email"
           ? notify.email.enabled && notify.login.emailVerify
           : notify.sms.enabled && notify.login.phoneVerify;
-      if (!ready) return jsonFail("接口不存在", 404);
+      if (!ready) return jsonFail(t("api.no_entry"), 404);
 
       const target = normalizeContactTarget(channel, String(body.target || ""));
 
@@ -76,6 +80,6 @@
         ip,
       });
       return { sent: true, resendAfter: out.resendAfter };
-    });
+    }, t);
   }
 </script>

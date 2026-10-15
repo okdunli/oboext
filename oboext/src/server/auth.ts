@@ -206,7 +206,7 @@ export async function assertLoginAllowed(account: string, ip: string | null): Pr
     const remainMs = unlockAt - Date.now();
     if (remainMs > 0) {
       const mins = Math.max(1, Math.ceil(remainMs / 60_000));
-      throw new LoginThrottledError(`登录失败次数过多，请 ${mins} 分钟后再试`);
+      throw new LoginThrottledError(`登录失败次数过多，请 ${mins} 分钟后再试`, mins);
     }
   }
 }
@@ -235,7 +235,14 @@ export async function recordLoginEvent(input: {
   }
 }
 
-export class LoginThrottledError extends Error {}
+export class LoginThrottledError extends Error {
+  /** Whole minutes until the sliding window frees the account/IP again. */
+  minutes: number;
+  constructor(message: string, minutes: number) {
+    super(message);
+    this.minutes = minutes;
+  }
+}
 
 // ------------------------------------------------------------- first-run admin
 

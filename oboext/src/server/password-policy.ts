@@ -97,9 +97,30 @@ export function passwordViolations(pw: string, ctx: PasswordContext = {}): strin
   return out;
 }
 
+/**
+ * Catalog key for one violation sentence. The Chinese sentence stays the
+ * admin-surface message; the key lets the bilingual public routes render
+ * the same violation in the request's language.
+ */
+function violationKey(
+  sentence: string,
+): { key: string; params?: Record<string, string | number> } {
+  if (sentence.startsWith("密码长度至少为"))
+    return { key: "api.pw_min", params: { n: envInt("OBOEXT_PASSWORD_MIN_LENGTH", 8) } };
+  if (sentence.startsWith("密码长度不能超过"))
+    return { key: "api.pw_max", params: { n: envInt("OBOEXT_PASSWORD_MAX_LENGTH", 200) } };
+  if (sentence.startsWith("密码过于常见")) return { key: "api.pw_common" };
+  if (sentence.startsWith("密码不能由同一个字符")) return { key: "api.pw_repeat" };
+  if (sentence.startsWith("密码不能包含 6 位以上")) return { key: "api.pw_sequential" };
+  if (sentence.startsWith("密码不能包含账号或昵称")) return { key: "api.pw_similar" };
+  return { key: "api.pw_common" };
+}
+
 export function passwordError(pw: string, ctx?: PasswordContext): ServiceError | null {
   const violations = passwordViolations(pw, ctx);
-  return violations.length > 0 ? new ServiceError(violations[0], 422) : null;
+  if (violations.length === 0) return null;
+  const hit = violationKey(violations[0]);
+  return new ServiceError(violations[0], 422, hit.key, hit.params);
 }
 
 export function assertPassword(pw: string, ctx?: PasswordContext): void {

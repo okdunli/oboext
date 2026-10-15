@@ -410,6 +410,112 @@ function highlightCodeBlocks(html: string): string {
   });
 }
 
+// Adds loading="lazy" + decoding="async" + intrinsic width/height (CLS guard) and a
+// responsive srcset (when variant siblings exist) to every <img> in post/page bodies,
+// including raw <img> tags from the `html` block. Hero/featured images render separately.
+const contentImgDimCache = new Map<string, [number, number] | null>();
+
+function readImageDims(abs: string): [number, number] | null {
+  let fd: number;
+  try {
+    fd = fsMod.openSync(abs, "r");
+  } catch {
+    return null;
+  }
+  try {
+    const buf = Buffer.alloc(32);
+    let n = 0;
+    while (n < buf.length) {
+      const r = fsMod.readSync(fd, buf, n, buf.length - n, n);
+      if (r <= 0) break;
+      n += r;
+    }
+    if (n < 24) return null;
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+      const w = buf.readUInt32BE(16);
+      const h = buf.readUInt32BE(20);
+      return w > 0 && h > 0 ? [w, h] : null;
+    }
+    if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) {
+      const w = buf.readUInt16LE(6);
+      const h = buf.readUInt16LE(8);
+      return w > 0 && h > 0 ? [w, h] : null;
+    }
+    if (buf[0] === 0x42 && buf[1] === 0x4d) {
+      const w = buf.readUInt32LE(18);
+      const h = buf.readUInt32LE(22);
+      return w > 0 && h > 0 ? [w, h] : null;
+    }
+    if (buf[0] === 0xff && buf[1] === 0xd8) {
+      let off = 2;
+      while (off + 9 <= n) {
+        if (buf[off] !== 0xff) return null;
+        const marker = buf[off + 1];
+        if (
+          (marker >= 0xc0 && marker <= 0xc3) ||
+          (marker >= 0xc5 && marker <= 0xc7) ||
+          (marker >= 0xc9 && marker <= 0xcb) ||
+          (marker >= 0xcd && marker <= 0xcf)
+        ) {
+          const h = buf.readUInt16BE(off + 5);
+          const w = buf.readUInt16BE(off + 7);
+          return w > 0 && h > 0 ? [w, h] : null;
+        }
+        if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+          off += 2;
+          continue;
+        }
+        const len = buf.readUInt16BE(off + 2);
+        if (len === 0) return null;
+        off += 2 + len;
+      }
+      return null;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    try {
+      fsMod.closeSync(fd);
+    } catch {
+      /* noop */
+    }
+  }
+}
+
+export function optimizeContentImages(html: string): string {
+  if (!html.includes("<img")) return html;
+  return html.replace(/<img\b([^>]*)>/gi, (full, attrsRaw: string) => {
+    let attrs = (attrsRaw as string).replace(/\s*\/\s*$/, "");
+    const hasLoading = /\sloading\s*=/i.test(attrs);
+    const hasDecoding = /\sdecoding\s*=/i.test(attrs);
+    const hasDims = /\s(width|height)\s*=/i.test(attrs);
+    const hasSrcset = /\ssrcset\s*=/i.test(attrs);
+    if (!hasLoading) attrs = ` loading="lazy"${attrs}`;
+    if (!hasDecoding) attrs = ` decoding="async"${attrs}`;
+    if (!hasDims || !hasSrcset) {
+      const srcM = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(attrs);
+      const url = srcM?.[1];
+      if (url && url.startsWith("/uploads/")) {
+        if (!hasSrcset) {
+          const vs = imgVariantAttrs(url);
+          if (vs) attrs += vs;
+        }
+        if (!hasDims) {
+          let dim = contentImgDimCache.get(url);
+          if (dim === undefined) {
+            const abs = uploadsAbsPath(url);
+            dim = abs ? readImageDims(abs) : null;
+            contentImgDimCache.set(url, dim);
+          }
+          if (dim) attrs += ` width="${dim[0]}" height="${dim[1]}"`;
+        }
+      }
+    }
+    return `<img${attrs}>`;
+  });
+}
+
 export async function buildPostBody(
   p: { content?: Block[] | null; slug: string; title?: string | null },
   kind: "post" | "page" = "post",
@@ -430,7 +536,7 @@ export async function buildPostBody(
     HOOKS.contentHtml,
     { html, context: { kind, slug: p.slug, title: p.title ?? undefined } },
   );
-  return filtered.html;
+  return optimizeContentImages(filtered.html);
 }
 
 /** DB-backed resolvers for the [gallery]/[posts] shortcodes (original

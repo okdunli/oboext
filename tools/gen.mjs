@@ -4,19 +4,24 @@
  *
  * Per the dynamic-app rule this generator NEVER reads database content and
  * emits zero .rose / HTML pages - every page reads the live database per
- * request through $data(). It only prepares static, content-free resources:
+ * request through $data(). It only prepares static, content-free resources.
  *
- *   oboext/theme.css         themes/skyscraper/skyscraper.css with the two woff2
- *                             fonts inlined as data URIs + award badge rules
- *   oboext/public/theme.css  same, served at /public/theme.css
- *   oboext/public/avatar*.png
- *   oboext/public/noflash.js anti dark-mode-flash bootstrap (external, so
- *                             the strict CSP only needs script-src 'self')
+ * Themes and plugins are DISCOVERED, never listed here:
+ *
+ *   plugins/<slug>/plugin.json  -> the static entry table (plugin-entries.ts),
+ *                                  because the server is one esbuild bundle
+ *                                  and plugin imports must resolve at build
+ *                                  time.
+ *   themes/<slug>/manifest.json -> everything else. The theme that owns the
+ *                                  site-wide chrome stylesheet declares
+ *                                  "chrome": true; when no theme does (a
+ *                                  program shipped with only the default
+ *                                  theme), the default theme is used. No
+ *                                  theme name is hardcoded in the program.
  *
  * Theme assets are read from the theme's OWN directory (themes/<slug>/), never
- * from a shared top-level seed/. A theme must be self-contained so it can be
- * installed or removed as one unit; seed/ now holds only demo fixtures
- * (seed-source.json) and is not on the asset path at all.
+ * from a shared top-level seed/. A theme is self-contained so it can be
+ * installed or removed as one unit.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
@@ -24,12 +29,39 @@ import { fileURLToPath } from 'url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OBOEXT = join(ROOT, 'oboext');
-// The theme that owns the site-wide chrome. Its stylesheet and fonts ship from
-// inside the theme folder, so a theme is removable without touching site code.
-const CHROME_THEME = 'skyscraper';
-const THEME_DIR = join(ROOT, 'themes', CHROME_THEME);
+const THEMES = join(ROOT, 'themes');
+const PLUGINS = join(ROOT, 'plugins');
 const PUBLIC = join(OBOEXT, 'public');
 mkdirSync(PUBLIC, { recursive: true });
+
+function readJson(fp) {
+  try {
+    return JSON.parse(readFileSync(fp, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** Every theme folder carrying a manifest.json, sorted by slug. */
+function discoverThemes() {
+  if (!existsSync(THEMES)) return [];
+  const out = [];
+  for (const name of readdirSync(THEMES, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .sort()) {
+    const manifest = readJson(join(THEMES, name, 'manifest.json'));
+    if (manifest) out.push({ slug: name, manifest });
+  }
+  return out;
+}
+
+const themes = discoverThemes();
+
+// The theme that owns the build-time chrome stylesheet: declared, then the
+// default theme, then whatever exists. Absent themes simply skip this step -
+// the program still builds and serves.
+const chrome = themes.find((t) => t.manifest.chrome) || themes.find((t) => t.manifest.isDefault) || themes[0] || null;
 
 // --------------------------------------------------------- plugin entries
 // The server is one esbuild bundle: plugin entries must be statically
@@ -37,21 +69,22 @@ mkdirSync(PUBLIC, { recursive: true });
 // table so enabling a plugin can import its server code (plugin-entries.ts).
 {
   const ENTRY_CANDIDATES = ['index.ts', 'index.tsx', 'index.js', 'index.mjs'];
-  const pluginsDir = join(ROOT, 'plugins');
   const entryLines = [];
-  if (existsSync(pluginsDir)) {
-    for (const name of readdirSync(pluginsDir, { withFileTypes: true })
+  if (existsSync(PLUGINS)) {
+    for (const name of readdirSync(PLUGINS, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => d.name)
       .sort()) {
-      if (!existsSync(join(pluginsDir, name, 'plugin.json'))) continue;
-      const entry = ENTRY_CANDIDATES.find((f) => existsSync(join(pluginsDir, name, f)));
+      if (!existsSync(join(PLUGINS, name, 'plugin.json'))) continue;
+      const entry = ENTRY_CANDIDATES.find((f) => existsSync(join(PLUGINS, name, f)));
       if (!entry) continue;
       entryLines.push(`  ${JSON.stringify(name)}: () => import("../../../plugins/${name}/index"),`);
     }
   }
+  const entriesFile = join(OBOEXT, 'src', 'server', 'plugin-entries.ts');
+  mkdirSync(dirname(entriesFile), { recursive: true });
   writeFileSync(
-    join(OBOEXT, 'src', 'server', 'plugin-entries.ts'),
+    entriesFile,
     `/* GENERATED by tools/gen.mjs — do not edit. */
 export const PLUGIN_ENTRIES: Record<string, () => Promise<any>> = {
 ${entryLines.join('\n')}
@@ -62,51 +95,48 @@ ${entryLines.join('\n')}
 }
 
 // --------------------------------------------------------------- theme.css
-const themeCssPath = join(THEME_DIR, `${CHROME_THEME}.css`);
-if (!existsSync(themeCssPath)) {
-  console.error(
-    `[gen] FATAL: ${CHROME_THEME}.css not found in themes/${CHROME_THEME}/ (${themeCssPath}). ` +
-      'The site-wide chrome stylesheet must live in the theme folder.',
-  );
-  process.exit(1);
-}
-let themeCss = readFileSync(themeCssPath, 'utf8');
-for (const name of ['skyscraper-icons.woff2', 'passero-one.woff2']) {
-  const fp = join(THEME_DIR, 'assets', 'fonts', name);
-  if (existsSync(fp)) {
-    const b64 = readFileSync(fp).toString('base64');
-    themeCss = themeCss.replaceAll(
-      `url("/assets/fonts/${name}")`,
-      `url("data:font/woff2;base64,${b64}")`,
-    );
+// The site-wide chrome stylesheet, derived from the chrome-owning theme's own
+// stylesheet with its declared fonts inlined as data URIs. Served from /public/
+// (CDN-served on Vercel) so it stays off the lambda.
+if (!chrome) {
+  console.warn('[gen] WARN: no themes/ found - skipping chrome stylesheet (program still builds).');
+} else {
+  const { slug, manifest } = chrome;
+  const themeDir = join(THEMES, slug);
+  const cssPath = join(themeDir, `${slug}.css`);
+  if (!existsSync(cssPath)) {
+    console.warn(`[gen] WARN: ${slug}.css not found in themes/${slug}/ - skipping chrome stylesheet.`);
   } else {
-    console.warn(`[gen] WARN: font missing themes/${CHROME_THEME}/assets/fonts/${name}`);
+    let themeCss = readFileSync(cssPath, 'utf8');
+    for (const f of manifest.fonts ?? []) {
+      const rel = String(f).replace(/^assets\//, '').replace(/^\/+/, '');
+      const fp = join(themeDir, 'assets', rel);
+      if (existsSync(fp)) {
+        const b64 = readFileSync(fp).toString('base64');
+        themeCss = themeCss.replaceAll(
+          `url("/assets/${rel}")`,
+          `url("data:font/woff2;base64,${b64}")`,
+        );
+      } else {
+        console.warn(`[gen] WARN: font missing themes/${slug}/assets/${rel}`);
+      }
+    }
+    writeFileSync(join(OBOEXT, 'theme.css'), themeCss);
+    copyFileSync(join(OBOEXT, 'theme.css'), join(PUBLIC, 'theme.css'));
+    console.log(`[gen] chrome stylesheet from themes/${slug}/ (${themeCss.length} bytes)`);
   }
 }
-// emoji picker structural baseline (theme only carries .sk-comments overrides)
-const emojiCss = join(THEME_DIR, 'assets', 'emoji-panel.css');
-if (existsSync(emojiCss)) themeCss += '\n' + readFileSync(emojiCss, 'utf8');
-for (let n = 1; n <= 4; n++) {
-  themeCss +=
-    `\n.a_award${n},.b_award${n}{fill-rule:evenodd;}` +
-    `.a_award${n}{fill:url(#f_award${n});filter:url(#e_award${n});}` +
-    `.b_award${n}{fill:url(#d_award${n});}` +
-    `.c_award${n}{font-size:16px;fill:#fff;text-anchor:middle;font-weight:700;}\n`;
-}
-writeFileSync(join(OBOEXT, 'theme.css'), themeCss);
-copyFileSync(join(OBOEXT, 'theme.css'), join(PUBLIC, 'theme.css'));
 
 // --------------------------------------------------------------- images
+// The default avatar is a PROGRAM asset: it ships in oboext/public and is only
+// seeded from the chrome theme on a fresh tree where it is absent, so the
+// program stands alone with no themes installed.
 for (const name of ['avatar.png', 'avatar@2x.png']) {
-  const fp = join(THEME_DIR, 'assets', name);
-  if (existsSync(fp)) copyFileSync(fp, join(PUBLIC, name));
-  else console.warn(`[gen] WARN: avatar missing themes/${CHROME_THEME}/assets/${name}`);
+  const dest = join(PUBLIC, name);
+  if (existsSync(dest)) continue;
+  const src = chrome ? join(THEMES, chrome.slug, 'assets', name) : null;
+  if (src && existsSync(src)) copyFileSync(src, dest);
+  else console.warn(`[gen] WARN: no source for public/${name} (theme-less tree?)`);
 }
 
-// --------------------------------------------------------------- noflash
-writeFileSync(
-  join(PUBLIC, 'noflash.js'),
-  '(function(){try{if(localStorage.getItem("skyscraper-color-scheme")==="dark"){document.documentElement.setAttribute("data-color-scheme","dark");}}catch(e){}})();\n',
-);
-
-console.log('[gen] assets ready: theme.css, avatars, noflash.js');
+console.log('[gen] assets ready');

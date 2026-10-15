@@ -1525,14 +1525,16 @@ function waShell(w: { id: number; type: string; title: string }, body: string): 
 export function widgetAreaHtml(
   items: import("./widgets.js").ResolvedWidget[],
   wrapClass: string,
+  t?: Translate,
 ): string {
   if (!items.length) return "";
   const wrapStyle =
     wrapClass === "sk-widget-area" ? ' style="display:flex;flex-direction:column;gap:1.5rem"' : "";
-  return `<div class="${wrapClass}"${wrapStyle}>${items.map(widgetBody).join("")}</div>`;
+  return `<div class="${wrapClass}"${wrapStyle}>${items.map((w) => widgetBody(w, t)).join("")}</div>`;
 }
 
-function widgetBody(w: import("./widgets.js").ResolvedWidget): string {
+function widgetBody(w: import("./widgets.js").ResolvedWidget, t?: Translate): string {
+  const L = (k: string, v?: Record<string, string | number>) => (t ? t(k, v) : makeT(DEFAULT_LOCALE)(k, v));
   const cfg = w.config;
   const data = (w.data ?? []) as any[];
 
@@ -1611,7 +1613,9 @@ function widgetBody(w: import("./widgets.js").ResolvedWidget): string {
             .map((a) => {
               const [y, m] = String(a.period).split("-");
               const href = m ? `/archives?year=${enc(y)}&month=${enc(m)}` : `/archives?year=${enc(y)}`;
-              const label = m ? `${y} 年 ${Number(m)} 月` : `${y} 年`;
+              const label = m
+                ? L("archives.ym", { y, m: Number(m) })
+                : L("archives.y", { y });
               const count = cfg.showCount ? `<span style="${waDim}">${esc(a.count)}</span>` : "";
               return `<li style="${waRow}"><a href="${href}" style="${waLink}">${esc(label)}</a>${count}</li>`;
             })
@@ -1642,16 +1646,16 @@ function widgetBody(w: import("./widgets.js").ResolvedWidget): string {
     case "stats": {
       const s = (w.data ?? {}) as Record<string, number>;
       const rows: [string, string | number][] = [];
-      if (cfg.showPosts) rows.push(["文章", s.posts ?? 0]);
-      rows.push(["分类", s.categories ?? 0], ["标签", s.tags ?? 0]);
-      if (cfg.showComments) rows.push(["评论", s.comments ?? 0]);
-      if (cfg.showViews) rows.push(["总阅读", s.views ?? 0]);
+      if (cfg.showPosts) rows.push([L("stats.posts"), s.posts ?? 0]);
+      rows.push([L("stats.categories"), s.categories ?? 0], [L("stats.tags"), s.tags ?? 0]);
+      if (cfg.showComments) rows.push([L("stats.comments"), s.comments ?? 0]);
+      if (cfg.showViews) rows.push([L("stats.views"), s.views ?? 0]);
       if (cfg.showRuntime && cfg.since) {
         const days = Math.max(
           0,
           Math.floor((Date.now() - new Date(String(cfg.since)).getTime()) / 86400000),
         );
-        rows.push(["已运行", `${days} 天`]);
+        rows.push([L("stats.uptime"), L("stats.days", { n: days })]);
       }
       return waShell(
         w,
@@ -1670,8 +1674,8 @@ function widgetBody(w: import("./widgets.js").ResolvedWidget): string {
       return waShell(
         w,
         `<form action="/search" method="get" style="display:flex;gap:.4rem">` +
-          `<input name="q" placeholder="${esc(String(cfg.placeholder ?? "搜索文章…"))}" style="flex:1;min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:.45rem .7rem;font-size:.85rem;color:var(--text)">` +
-          `<button type="submit" style="background:var(--accent);color:var(--accent-text);border:0;border-radius:var(--radius);padding:.45rem .8rem;font-size:.85rem;cursor:pointer">搜索</button></form>`,
+          `<input name="q" placeholder="${esc(String(cfg.placeholder ?? L("search.placeholder")))}" style="flex:1;min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:.45rem .7rem;font-size:.85rem;color:var(--text)">` +
+          `<button type="submit" style="background:var(--accent);color:var(--accent-text);border:0;border-radius:var(--radius);padding:.45rem .8rem;font-size:.85rem;cursor:pointer">${L("search.submit")}</button></form>`,
       );
 
     case "profile": {

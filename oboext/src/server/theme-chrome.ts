@@ -180,7 +180,7 @@ export type PostPageParts = {
 
   postBottom?: string;
 
-  /** 上一篇/下一篇 navigation card (adjacent.ts adjacentHtml). Rendered after
+  /** Previous/next navigation card (adjacent.ts adjacentHtml). Rendered after
    *  the comments block by every theme; empty string collapses the slot. */
   adjacentHtml?: string;
 
@@ -200,6 +200,8 @@ export type PagePageParts = {
   commentsHtml: string;
 
   widgets?: string;
+
+  settings?: Record<string, unknown>;
 };
 
 // ------------------------------------------------------------------- helpers
@@ -648,13 +650,6 @@ function menuItemsHtml(items: MenuItem[], cls: string, activeUrl: string): strin
     .join("");
 }
 
-function pagerHtml(page: number, totalPages: number, hrefFor: (p: number) => string): string {
-  if (totalPages <= 1) return "";
-  const prev = page > 1 ? `<a href="${esc(hrefFor(page - 1))}" class="pager-prev">&laquo; 上一页</a>` : "";
-  const next = page < totalPages ? `<a href="${esc(hrefFor(page + 1))}" class="pager-next">下一页 &raquo;</a>` : "";
-  return `<nav class="ob-pager">${prev}<span class="pager-info">第 ${page}/${totalPages} 页</span>${next}</nav>`;
-}
-
 // ============================================================= SKYSCRAPER
 
 const skyscraperChrome: ThemeChrome = {
@@ -967,10 +962,10 @@ function defaultCatPill(c: { name: string; url?: string; icon?: string | null })
 
 function defaultPostCard(p: PostView, idx: number, t?: Translate): string {
   const cats = ((p.categories || []).slice(0, 2).map(defaultCatPill)).join("");
-  const author = esc(p.author?.name ?? (t ? t("post.author_unknown") : "未知作者"));
+  const author = esc(p.author?.name ?? (t ?? makeT(DEFAULT_LOCALE))("post.author_unknown"));
   const comments =
     p.commentsCount > 0
-      ? `<span class="df-meta-item">${lucideSvg("message-circle", 13)}${t ? t("post.comments", { n: p.commentsCount }) : `${p.commentsCount} 评论`}</span>`
+      ? `<span class="df-meta-item">${lucideSvg("message-circle", 13)}${(t ?? makeT(DEFAULT_LOCALE))("post.comments", { n: p.commentsCount })}</span>`
       : "";
   return `<article class="group flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] transition hover:-translate-y-0.5 hover:border-[var(--accent)]">` +
     (p.featuredImage
@@ -1204,7 +1199,7 @@ function defaultBreadcrumb(items: { label: string; href?: string }[], t?: Transl
       return `<span class="df-meta-item">${inner}${last ? "" : lucideSvg("chevron-right", 12, "text-zinc-600")}</span>`;
     })
     .join("");
-  const aria = t ? t("crumb.aria") : "面包屑";
+  const aria = (t ?? makeT(DEFAULT_LOCALE))("crumb.aria");
   return `<nav aria-label="${aria}" class="flex flex-wrap items-center gap-1 text-xs text-zinc-500">${spans}</nav>`;
 }
 
@@ -1511,7 +1506,7 @@ function pseudoPostCard(p: PostView, idx: number, total: number, t?: Translate):
     `<span style="color:var(--pl-ink-3);opacity:0.5">·</span><span>${plYmd(p.publishedAt)}</span>${catHtml}</div>` +
     `<h3><a href="${esc(p.url)}">${esc(p.title)}</a></h3>` +
     (p.excerpt ? `<p>${esc(p.excerpt)}</p>` : "") +
-    `<a href="${esc(p.url)}" class="pl-read">${t ? t("post.read_more") : "阅读全文"}</a>` +
+    `<a href="${esc(p.url)}" class="pl-read">${(t ?? makeT(DEFAULT_LOCALE))("post.read_more")}</a>` +
     `</article>`;
 }
 
@@ -1527,7 +1522,7 @@ function pseudoHomeCard(p: PostView, idx: number, total: number, t?: Translate):
     `<span style="color:var(--pl-ink-3);opacity:0.5">·</span><span>${plYmd(p.publishedAt)}</span>${catHtml}</div>` +
     `<h3><a href="${esc(p.url)}">${esc(p.title)}</a></h3>` +
     (p.excerpt ? `<p>${esc(p.excerpt)}</p>` : "") +
-    `<a href="${esc(p.url)}" class="pl-read">${t ? t("post.read_more") : "阅读全文"}</a>` +
+    `<a href="${esc(p.url)}" class="pl-read">${(t ?? makeT(DEFAULT_LOCALE))("post.read_more")}</a>` +
     `</article>`;
 }
 
@@ -1731,6 +1726,7 @@ function pseudoPostPage(parts: PostPageParts): string {
 }
 
 function pseudoPagePage(parts: PagePageParts): string {
+  const T: Translate = (k, v) => tr(parts.settings as Record<string, any>, k, v);
   const p = parts.page;
   const recent = parts.recent.length
     ? plSection(T("pseudo.latest"), "recent entries", `count = ${parts.recent.length}`,
@@ -2116,6 +2112,7 @@ function bmixNavActive(settings: Record<string, any>, url: string): boolean {
 
 function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
+  const T = (k: string, v?: Record<string, string | number>) => tr(settings, k, v);
   const logo = settings.logoUrl
     ? `<img src="${esc(settings.logoUrl)}" alt="${title}">`
     : `<span>${title}</span>`;
@@ -2148,9 +2145,9 @@ function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
   return `<div class="nav-top">` +
     `<div class="nav at-top" data-rv-navbar>` +
     `<div class="nav-content container-np flex items-center xxs:flex-wrap xs:flex-wrap">` +
-    `<button type="button" class="mobile-menu-btn sm:hidden md:hidden lg:hidden xl:hidden flex flex-col justify-center" aria-label="菜单" aria-expanded="false" data-rv-menu-btn><div></div><div></div><div></div></button>` +
+    `<button type="button" class="mobile-menu-btn sm:hidden md:hidden lg:hidden xl:hidden flex flex-col justify-center" aria-label="${T("bmix.menu")}" aria-expanded="false" data-rv-menu-btn><div></div><div></div><div></div></button>` +
     `<a href="/" class="${logoCls}"${onHome ? ' aria-current="page"' : ""}>${logo}</a>` +
-    `<button type="button" class="mobile-sidebar-btn md:hidden lg:hidden xl:hidden" aria-label="个人信息" aria-expanded="false" style="margin-left:auto" data-rv-sidebar-btn><div class="sidebar-icon flex justify-end"><div class="sidebar-icon-sidebar"><div></div><div></div><div></div></div></div></button>` +
+    `<button type="button" class="mobile-sidebar-btn md:hidden lg:hidden xl:hidden" aria-label="${T("bmix.profile")}" aria-expanded="false" style="margin-left:auto" data-rv-sidebar-btn><div class="sidebar-icon flex justify-end"><div class="sidebar-icon-sidebar"><div></div><div></div><div></div></div></div></button>` +
     `<div class="menu flex-grow xxs:order-last xs:order-last flex justify-end xxs:justify-start xs:justify-start" data-rv-menunav>` +
     `<div class="pf_scroller flex" data-rv-scroller>` +
     `<ul class="menu" data-level="0">` +
@@ -2159,12 +2156,12 @@ function bmixNav(settings: Record<string, any>, items: MenuItem[]): string {
     `</ul></div></div>` +
     `<div class="menu-funcs flex items-center">` +
     `<span class="self-center">` +
-    `<button type="button" class="theme-toggle cursor-hand" aria-label="切换到深色模式" title="切换到深色" data-rv-theme-toggle>` +
+    `<button type="button" class="theme-toggle cursor-hand" aria-label="${T("bmix.dark")}" title="${T("bmix.dark_hint")}" data-rv-theme-toggle>` +
       `<span class="theme-toggle-ic">${bmixIc("moon", 15)}</span>` +
     `</button>` +
     `</span>` +
     `<span class="self-center">` +
-      `<div class="sf-search"><button type="button" class="nav-search cursor-hand" aria-label="搜索" aria-expanded="false">${bmixIc("search", 16)}</button></div>` +
+      `<div class="sf-search"><button type="button" class="nav-search cursor-hand" aria-label="${T("search.aria")}" aria-expanded="false">${bmixIc("search", 16)}</button></div>` +
     `</span>` +
     `</div>` +
     `</div></div></div>`;
@@ -2411,7 +2408,8 @@ function bmixSectionTitle(text: string): string {
 }
 
 
-function bmixPager(page: number, total: number, hrefFor: (p: number) => string): string {
+function bmixPager(page: number, total: number, hrefFor: (p: number) => string, t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   if (total <= 1) return "";
   const show = {
     first: page > 3,
@@ -2422,13 +2420,13 @@ function bmixPager(page: number, total: number, hrefFor: (p: number) => string):
     last: page <= total - 3,
   };
   const cells: string[] = [];
-  if (show.first) cells.push(`<li class="first" data-tip="第一页"><a href="${esc(hrefFor(1))}"><span>1</span>${bmixIc("chevrons-left", 12)}</a></li>`);
+  if (show.first) cells.push(`<li class="first" data-tip="${L("pager.first")}"><a href="${esc(hrefFor(1))}"><span>1</span>${bmixIc("chevrons-left", 12)}</a></li>`);
   if (show.prev2) cells.push(`<li><a href="${esc(hrefFor(page - 2))}">${page - 2}</a></li>`);
   if (show.prev1) cells.push(`<li><a href="${esc(hrefFor(page - 1))}">${page - 1}</a></li>`);
   cells.push(`<li class="active"><a aria-current="page">${page}</a></li>`);
   if (show.next1) cells.push(`<li><a href="${esc(hrefFor(page + 1))}">${page + 1}</a></li>`);
   if (show.next2) cells.push(`<li><a href="${esc(hrefFor(page + 2))}">${page + 2}</a></li>`);
-  if (show.last) cells.push(`<li class="last" data-tip="最后一页"><a href="${esc(hrefFor(total))}">${bmixIc("chevrons-right", 12)}<span>${total}</span></a></li>`);
+  if (show.last) cells.push(`<li class="last" data-tip="${L("pager.last")}"><a href="${esc(hrefFor(total))}">${bmixIc("chevrons-right", 12)}<span>${total}</span></a></li>`);
   return `<div class="main-pagination-wrapper"><ul class="main-pagination">` +
     
     `<li class="anchor" aria-hidden style="transform:translateX(0px);width:0px;transition-duration:0s"></li>` +
@@ -2466,22 +2464,24 @@ function bmixHeroScene(p: PostView, i: number): string {
     `</div></div></a></div>`;
 }
 
-function bmixBanner(posts: PostView[], max: number): string {
+function bmixBanner(posts: PostView[], max: number, t?: Translate): string {
+  const L = (k: string, v?: Record<string, string | number>) => (t ? t(k, v) : makeT(DEFAULT_LOCALE)(k, v));
   const visible = (posts || []).slice(0, Math.max(1, Math.min(max, 5)));
   if (!visible.length) return `<div class="coverflow-swiper"><div class="slider"><div class="stage"></div></div></div>`;
   const scenes = visible.map((p, i) => bmixHeroScene(p, i)).join("");
   const dots = visible.length > 1
     ? `<div class="anchors-wrapper"><div class="anchors">${visible
-        .map((_, i) => `<button type="button" class="anchor${i === 0 ? " active" : ""}" aria-label="第 ${i + 1} 张"></button>`)
+        .map((_, i) => `<button type="button" class="anchor${i === 0 ? " active" : ""}" aria-label="${L("car.slide", { n: i + 1 })}"></button>`)
         .join("")}</div></div>`
     : "";
   const controls = visible.length > 1
-    ? `<div class="controls"><button type="button" class="prev" aria-label="上一个">${bmixIc("chevron-left", 16)}</button><button type="button" class="next" aria-label="下一个">${bmixIc("chevron-right", 16)}</button></div>`
+    ? `<div class="controls"><button type="button" class="prev" aria-label="${L("car.prev")}">${bmixIc("chevron-left", 16)}</button><button type="button" class="next" aria-label="${L("car.next")}">${bmixIc("chevron-right", 16)}</button></div>`
     : "";
   return `<div class="coverflow-swiper"><div class="slider"><div class="stage">${scenes}</div>${controls}${dots}</div></div>`;
 }
 
-function bmixCatNav(activeHref: string, cats: TaxRef[], blogIndex: string): string {
+function bmixCatNav(activeHref: string, cats: TaxRef[], blogIndex: string, t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   
   
   const isActive = (href: string) => {
@@ -2493,8 +2493,8 @@ function bmixCatNav(activeHref: string, cats: TaxRef[], blogIndex: string): stri
   const parentIds = new Set(cats.filter((c) => (c as any).parentId != null).map((c) => (c as any).parentId));
   const roots = cats.filter((c) => (c as any).parentId == null || !parentIds.has((c as any).parentId));
   const items: string[] = [];
-  items.push(`<li data-ai="0" class="${isActive("/") ? "is-active" : ""}"><a href="/" target="_self" aria-current="${isActive("/") ? "page" : ""}">${bmixIc("lightbulb", 13, 6)}智能推荐</a></li>`);
-  items.push(`<li data-ai="1" class="${isActive(blogIndex) ? "is-active" : ""}"><a href="${esc(blogIndex)}" target="_self" aria-current="${isActive(blogIndex) ? "page" : ""}">${bmixIc("pen-line", 13, 6)}最新文章</a></li>`);
+  items.push(`<li data-ai="0" class="${isActive("/") ? "is-active" : ""}"><a href="/" target="_self" aria-current="${isActive("/") ? "page" : ""}">${bmixIc("lightbulb", 13, 6)}${L("bmix.smart")}</a></li>`);
+  items.push(`<li data-ai="1" class="${isActive(blogIndex) ? "is-active" : ""}"><a href="${esc(blogIndex)}" target="_self" aria-current="${isActive(blogIndex) ? "page" : ""}">${bmixIc("pen-line", 13, 6)}${L("sidebar.recent")}</a></li>`);
   let ai = 2;
   
   for (const root of roots) {
@@ -2547,13 +2547,19 @@ function bmixStripTag(title: string): string {
 function bmixRankings(
   boards: { most_comments: RankPost[]; most_likes: RankPost[]; most_reads: RankPost[] } | null | undefined,
   tabs: { labels: Record<string, string>; order: string[]; defaultTab: string } | undefined,
+  t?: Translate,
 ): string {
   if (!boards) return "";
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   const empty = boards.most_comments.length === 0 && boards.most_likes.length === 0 && boards.most_reads.length === 0;
   if (empty) return "";
   const order = tabs?.order && tabs.order.length === 3 ? tabs.order : ["most_comments", "most_likes", "most_reads"];
   const labels = tabs?.labels || {};
-  const DEF: Record<string, string> = { most_comments: "热评文章", most_likes: "大家喜欢", most_reads: "阅读最多" };
+  const DEF: Record<string, string> = {
+    most_comments: L("rank.most_comments"),
+    most_likes: L("rank.most_likes"),
+    most_reads: L("rank.most_reads"),
+  };
   const defaultTab = tabs?.defaultTab && order.includes(tabs.defaultTab) ? tabs.defaultTab : order[0];
   const GOLD = "/theme-assets/bluemix/rankings/873a161a.svg";
   const SILVER = "/theme-assets/bluemix/rankings/b31ba85e.svg";
@@ -2570,7 +2576,7 @@ function bmixRankings(
   const tabIndex = order.indexOf(defaultTab);
   
   const boardsJson = JSON.stringify(boards).replace(/</g, "\\u003c");
-  return `<div class="widget-rankings mb-20" data-boards="${esc(boardsJson)}" data-default-tab="${esc(defaultTab)}"><div class="cat-title flex items-center extra-large justify-center"><div class="custom-icon mr-5">${bmixIc("ranking-star", 15)}</div><div class="content text-primary-gray text-bulge-primary-gray">排行榜</div></div>` +
+  return `<div class="widget-rankings mb-20" data-boards="${esc(boardsJson)}" data-default-tab="${esc(defaultTab)}"><div class="cat-title flex items-center extra-large justify-center"><div class="custom-icon mr-5">${bmixIc("ranking-star", 15)}</div><div class="content text-primary-gray text-bulge-primary-gray">${L("rank.title")}</div></div>` +
     `<div class="rankings-wrapper relative">` + bgLayer +
     `<div class="rankings-tabs"><div class="rankings-tab-row"><div class="tab-anchor" style="transform:translate(${tabIndex * 100}%)"></div>${tabsHtml}</div></div>` +
     `<div class="card-container">${bmRankPane(boards, defaultTab, labels, GOLD, SILVER, BRONZE)}</div></div></div>`;
@@ -2588,6 +2594,7 @@ function bmixHomeArticleRow(p: PostView): string {
 }
 
 function bmixHomeSidebar(posts: PostView[], settings: Record<string, unknown>, ts: Record<string, unknown>, widgetsHtml = ""): string {
+  const T: Translate = (k, v) => tr(settings as Record<string, any>, k, v);
   const items = posts || [];
   const popular = [...items].sort((a, b) => (b.views ?? 0) - (a.views ?? 0)).slice(0, 4);
   const recent = items.filter((p) => !popular.some((q) => q.id === p.id)).slice(0, 4);
@@ -2608,21 +2615,22 @@ function bmixHomeSidebar(posts: PostView[], settings: Record<string, unknown>, t
   const bloggerDesc = String(settings.tagline ?? settings.siteDescription ?? "Design a colorful life");
   return `<div class="panel"><div class="wrapper"><aside class="bmx-blocks">` +
     `<div class="widget-blogger flex items-center g-8">${avatarNode}<div class="metas"><div class="name">${esc(String(settings.siteTitle ?? ""))}</div><div class="description text-embossed">${esc(bloggerDesc)}</div></div></div>` +
-    `<div class="widget-title"><div class="title">热门文章</div></div><div class="widget-articles mb-20">${popular.map(bmixHomeArticleRow).join("")}</div>` +
-    `<div class="widget-title"><div class="title">最新文章</div></div><div class="widget-articles mb-20">${(recent.length ? recent : items.slice(0, 4)).map(bmixHomeArticleRow).join("")}</div>` +
+    `<div class="widget-title"><div class="title">${T("sky.popular")}</div></div><div class="widget-articles mb-20">${popular.map(bmixHomeArticleRow).join("")}</div>` +
+    `<div class="widget-title"><div class="title">${T("sidebar.recent")}</div></div><div class="widget-articles mb-20">${(recent.length ? recent : items.slice(0, 4)).map(bmixHomeArticleRow).join("")}</div>` +
     widgetsHtml +
     `</aside></div></div>`;
 }
 
-function bmixSection(title: string, to: string, icon: string | null, posts: PostView[]): string {
+function bmixSection(title: string, to: string, icon: string | null, posts: PostView[], t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   const cards = posts.map((p, i) => bmixPostCard(p, i)).join("");
-  
-  
+
+
   const titleHtml = `<div class="cat-title flex items-center large">` +
     (icon ? `<div class="custom-icon mr-5">${bmixIconFile(icon, 15)}</div>` : `<div class="icon flex default mr-5 ml-2"></div>`) +
     `<div class="content text-primary-gray text-bulge-primary-gray">${esc(title)}</div>` +
     `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span>` +
-    `<a href="${esc(to)}" class="more-btn flex items-center justify-center text-sm r-full text-embossed truncate"><span class="flex items-center justify-center"><span class="more-text">更多</span>${bmixIc("chevron-right", 7)}</span></a></div></div>`;
+    `<a href="${esc(to)}" class="more-btn flex items-center justify-center text-sm r-full text-embossed truncate"><span class="flex items-center justify-center"><span class="more-text">${L("bmix.more")}</span>${bmixIc("chevron-right", 7)}</span></a></div></div>`;
   return `<section class="home-category">${titleHtml}<div class="home-category-articles">${cards}</div></section>`;
 }
 
@@ -2637,15 +2645,15 @@ function bmixHome(parts: HomeParts): string {
     ? `<p class="text-primary-gray" style="padding:24px">${T("empty.posts_admin")}</p>`
     : `<div class="bmx-reveal"><div class="recent-articles">${recent.slice(0, recentCount).map((p, i) => bmixPostCard(p, i)).join("")}</div></div>`;
   
-  const catTitle = `<div class="cat-title flex items-center large"><div class="icon flex default mr-5 ml-2"></div><div class="content text-primary-gray text-bulge-primary-gray">近期文章</div>` +
+  const catTitle = `<div class="cat-title flex items-center large"><div class="icon flex default mr-5 ml-2"></div><div class="content text-primary-gray text-bulge-primary-gray">${T("bmix.recent")}</div>` +
     `<div class="line flex-grow ml-8 flex items-center"><span class="line-track"></span>` +
-    `<a href="${esc(parts.blogIndex || "/blog")}" class="more-btn flex items-center justify-center text-sm r-full text-embossed truncate"><span class="flex items-center justify-center"><span class="more-text">更多</span>${bmixIc("chevron-right", 7)}</span></a></div></div>`;
+    `<a href="${esc(parts.blogIndex || "/blog")}" class="more-btn flex items-center justify-center text-sm r-full text-embossed truncate"><span class="flex items-center justify-center"><span class="more-text">${T("bmix.more")}</span>${bmixIc("chevron-right", 7)}</span></a></div></div>`;
   const mainContent = `${catTitle}${inner}`;
   const sidebar = bmixHomeSidebar(recent, parts.settings, ts as Record<string, unknown>, parts.sideWidgets || "");
-  const catNav = bmixCatNav("/", parts.cats, parts.blogIndex || "/blog");
-  const banner = showHero ? bmixBanner(recent, bannerMax) : "";
-  const rankings = bmixRankings(parts.rankings, parts.rankTabs);
-  const sections = (parts.sections || []).map((s) => `<div class="bmx-reveal">${bmixSection(s.row.title, s.row.category.url, s.row.icon, s.posts)}</div>`).join("");
+  const catNav = bmixCatNav("/", parts.cats, parts.blogIndex || "/blog", T);
+  const banner = showHero ? bmixBanner(recent, bannerMax, T) : "";
+  const rankings = bmixRankings(parts.rankings, parts.rankTabs, T);
+  const sections = (parts.sections || []).map((s) => `<div class="bmx-reveal">${bmixSection(s.row.title, s.row.category.url, s.row.icon, s.posts, T)}</div>`).join("");
   // Original HomePage.tsx places the `home-top` area between the banner and the
   // two-column body (className "container-np bmx-ad-area").
   const homeTop = parts.homeTop || "";
@@ -2662,12 +2670,13 @@ function bmixHome(parts: HomeParts): string {
 }
 
 function bmixListPage(parts: ListParts): string {
+  const T: Translate = (k, v) => tr(parts.settings, k, v);
   const isBlog = parts.variant === "blog";
   const isCategory = parts.variant === "category";
   const isSearch = parts.variant === "search";
   const blogIndex = parts.blogIndex || "/blog";
   
-  const catNav = isSearch ? "" : bmixCatNav(parts.activeHref || (isBlog ? blogIndex : "/"), parts.cats || [], blogIndex);
+  const catNav = isSearch ? "" : bmixCatNav(parts.activeHref || (isBlog ? blogIndex : "/"), parts.cats || [], blogIndex, T);
 
   
   const hero = (parts.hero || []).filter((p) => p && p.url);
@@ -2688,10 +2697,11 @@ function bmixListPage(parts: ListParts): string {
   const gridCls = isBlog || isCategory || isSearch ? "blog-grid" : "list-grid";
   const cards = parts.items.map((p, i) => bmixPostCard(p, i)).join("");
   
-  const pager = !isCategory && parts.showPager !== false ? bmixPager(parts.page, parts.totalPages, parts.hrefFor) : "";
-  
+  const pager = !isCategory && parts.showPager !== false ? bmixPager(parts.page, parts.totalPages, parts.hrefFor, T) : "";
+
   const emptyHtml = `<p class="text-primary-gray" style="padding:24px">${esc(
-    parts.emptyHint || (isCategory ? "该分类下还没有文章。" : isSearch ? "没有匹配的文章。" : "还没有已发布的文章。"),
+    parts.emptyHint ||
+      (isCategory ? T("empty.category") : isSearch ? T("empty.search") : T("empty.posts")),
   )}</p>`;
   const body = cards
     ? 
@@ -2766,26 +2776,28 @@ function bmixPostToc(toc: { id: string; text: string; level: number }[]): string
  *  toggles visibility with a light slide-in animation. */
 
 
-function bmixCommentHead(count: number): string {
+function bmixCommentHead(count: number, t?: Translate): string {
+  const L = (k: string, v?: Record<string, string | number>) => (t ? t(k, v) : makeT(DEFAULT_LOCALE)(k, v));
   return `<div class="cat-title flex items-center large"><div class="custom-icon mr-5">${bmixIc("comments", 14)}</div>` +
-    `<div class="content text-primary-gray text-bulge-primary-gray">${count} 条回应</div>` +
+    `<div class="content text-primary-gray text-bulge-primary-gray">${L("post.replies", { n: count })}</div>` +
     `<div class="line flex-grow ml-8 flex items-center justify-end"></div></div>`;
 }
 
-function bmixPostSidebar(toc: { id: string; text: string; level: number }[], post: PostView, related: PostView[], popular: PostView[], randomPool: PostView[]): string {
+function bmixPostSidebar(toc: { id: string; text: string; level: number }[], post: PostView, related: PostView[], popular: PostView[], randomPool: PostView[], t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   const busy = new Set([...related.map((p) => p.id), ...popular.map((p) => p.id)]);
   const random: PostView[] = [];
   for (const p of randomPool) { if (random.length >= 4) break; if (!busy.has(p.id)) random.push(p); }
   for (const p of randomPool) { if (random.length >= 4) break; if (!random.some((r) => r.id === p.id)) random.push(p); }
   
   
-  const paneBookmark = bmixPostToc(toc) + bmixArticleGroup("相关文章", related, "暂无其它文章");
-  const paneBars = bmixArticleGroup("大家喜欢", popular, "暂无其它文章") + bmixArticleGroup("随机文章", random, "暂无其它文章");
+  const paneBookmark = bmixPostToc(toc) + bmixArticleGroup(L("post.related"), related, L("empty.no_related"));
+  const paneBars = bmixArticleGroup(L("rank.most_likes"), popular, L("empty.no_related")) + bmixArticleGroup(L("rank.random"), random, L("empty.no_related"));
   const paneJson = JSON.stringify({ bookmark: paneBookmark, bars: paneBars }).replace(/</g, "\\u003c");
   return `<div class="sidebar-titles"><ul class="grid cols-2">` +
     `<li class="anchor" aria-hidden="true" style="transform:translateX(100%)"></li>` +
-    `<li class="title" data-bmx-tab="bars"><a href="#" aria-label="大家喜欢" role="link" data-role="tab">${bmixIc("align-justify", 12, 0)}</a></li>` +
-    `<li class="title active" data-bmx-tab="bookmark"><a href="#" aria-label="目录·相关" role="link" data-role="tab">${bmixIc("bookmark", 12, 0)}</a></li>` +
+    `<li class="title" data-bmx-tab="bars"><a href="#" aria-label="${L("rank.most_likes")}" role="link" data-role="tab">${bmixIc("align-justify", 12, 0)}</a></li>` +
+    `<li class="title active" data-bmx-tab="bookmark"><a href="#" aria-label="${L("post.toc")} · ${L("post.related")}" role="link" data-role="tab">${bmixIc("bookmark", 12, 0)}</a></li>` +
     `</ul></div>` +
     `<div class="panel"><div class="wrapper">` +
     `<aside class="bmx-blocks bmx-tab-stage" data-bmx-panes="${esc(paneJson)}" data-bmx-shown="bookmark">` +
@@ -2796,6 +2808,7 @@ function bmixPostSidebar(toc: { id: string; text: string; level: number }[], pos
 /** bluemix article page — coverflow hero + two-column (sidebar / main). */
 function bmixPostPage(parts: PostPageParts): string {
   const p = parts.post;
+  const T: Translate = (k, v) => tr(parts.settings, k, v);
   const { html: bodyHtml, toc } = bmixHeadings(parts.bodyHtml, p.slug || "post");
   const { title1, title2 } = bmixSplitTitle(p.title);
   // mirror PostPage.tsx: cardToneFor(post.slug, post.metas, 0) —— bgAlpha 0.8。
@@ -2831,7 +2844,7 @@ function bmixPostPage(parts: PostPageParts): string {
     `</div></div>` +
     (hasImage ? `<img src="${imgUrl}" alt="" >` : "") +
     `</div></div></div>`;
-  const sidebar = bmixPostSidebar(toc, p, parts.related || [], parts.popular || [], parts.random || []);
+  const sidebar = bmixPostSidebar(toc, p, parts.related || [], parts.popular || [], parts.random || [], T);
   // Original PostPage.tsx appends the `sidebar` widget area after PostSidebar
   // and renders `post-bottom` between the article and the comment block; both
   // arrive pre-wrapped from the loader (className bmx-ad-area /
@@ -2852,7 +2865,7 @@ function bmixPostPage(parts: PostPageParts): string {
     postBottom +
     (parts.commentsHtml
       ? `<div class="model-wrapper"><div class="model">` +
-        bmixCommentHead(p.commentsCount) +
+        bmixCommentHead(p.commentsCount, T) +
         parts.commentsHtml +
         `</div></div>`
       : "") +

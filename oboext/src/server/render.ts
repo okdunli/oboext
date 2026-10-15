@@ -11,6 +11,7 @@ import { db } from "./db.js";
 import { media } from "./schema.js";
 import { listPosts } from "./queries.js";
 import { uploadsAbsPath } from "./storage.js";
+import { sanitizeHtml } from "./sanitize.js";
 import fsMod from "node:fs";
 import pathMod from "node:path";
 
@@ -176,7 +177,7 @@ function renderBlock(b: Block): string {
     case "divider":
       return "<hr/>";
     case "html":
-      return b.html; // trusted author markup, verbatim
+      return sanitizeHtml(b.html);
     default:
       return "";
   }

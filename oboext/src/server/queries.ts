@@ -333,14 +333,18 @@ export async function listPostsRaw(
     conditions.push(
       sql`EXISTS (SELECT 1 FROM ${postTags} pt JOIN ${tags} t ON t.id = pt.tag_id WHERE pt.post_id = ${posts.id} AND t.slug = ${opts.tagSlug})`,
     );
-  // Search terms are AND-ed, each matching title OR excerpt. Wildcards inside
-  // a term are escaped so a bare "%" cannot answer a different question.
+  // Search terms are AND-ed, each matching title OR excerpt OR a tag/category
+  // name (recall: a post tagged "docker" surfaces for "docker" even when the
+  // word sits in neither its title nor its excerpt). Wildcards inside a term
+  // are escaped so a bare "%" cannot answer a different question.
+  const taxTermMatch = (t: string) =>
+    sql`(EXISTS (SELECT 1 FROM ${postTags} pt JOIN ${tags} tg ON tg.id = pt.tag_id WHERE pt.post_id = ${posts.id} AND tg.name ILIKE ${"%" + t + "%"} ESCAPE '\\') OR EXISTS (SELECT 1 FROM ${postCategories} pc JOIN ${categories} cc ON cc.id = pc.category_id WHERE pc.post_id = ${posts.id} AND cc.name ILIKE ${"%" + t + "%"} ESCAPE '\\'))`;
   const searchTermsEsc = searchTerms(opts.search).map(ilikeEscape);
   if (searchTermsEsc.length) {
     conditions.push(
       and(
         ...searchTermsEsc.map((t) =>
-          sql`(${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.excerpt} ILIKE ${"%" + t + "%"} ESCAPE '\\')`,
+          sql`(${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.excerpt} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${taxTermMatch(t)})`,
         ),
       ),
     );
@@ -387,9 +391,9 @@ export async function listPostsRaw(
     : where;
 
   // Relevance first when searching: title matching the whole query > title
-  // matching any term > excerpt matching the whole query > everything else,
-  // then the archive's own order. id is the final tiebreaker so OFFSET
-  // pagination can never duplicate or skip a row across pages.
+  // matching any term > excerpt matching the whole query > a tag/category name
+  // matching > everything else, then the archive's own order. id is the final
+  // tiebreaker so OFFSET pagination can never duplicate or skip a row.
   const wholeQuery = ilikeEscape((opts.search ?? "").trim());
   const searchRank = searchTermsEsc.length
     ? [
@@ -400,7 +404,8 @@ export async function listPostsRaw(
             sql` OR `,
           )} THEN 1
           WHEN ${posts.excerpt} ILIKE ${"%" + wholeQuery + "%"} ESCAPE '\\' THEN 2
-          ELSE 3 END)`,
+          WHEN ${sql.join([taxTermMatch(wholeQuery), ...searchTermsEsc.map(taxTermMatch)], sql` OR `)} THEN 3
+          ELSE 4 END)`,
       ]
     : [];
 

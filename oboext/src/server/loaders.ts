@@ -1576,17 +1576,18 @@ async function feed(ctx: Ctx): Promise<string> {
         const cats = "author" in p && p.tags?.length
           ? p.tags.map((t) => `\n      <category>${escXml(t.name)}</category>`).join("")
           : "";
+        const media = p.featuredImage ? `\n      ${R.mediaImageTag(p.featuredImage, ctx.origin)}` : "";
         return (
           `    <item>\n      <title>${escXml(p.title)}</title>\n      <link>${escXml(ctx.origin)}${escXml(p.url)}</link>` +
           `\n      <guid>${escXml(ctx.origin)}${escXml(p.url)}</guid>` +
           `\n      <pubDate>${(p.publishedAt ? new Date(p.publishedAt) : new Date()).toUTCString()}</pubDate>` +
-          `\n      <description>${escXml(p.excerpt ?? "")}</description>${cats}${extra}\n    </item>`
+          `\n      <description>${escXml(p.excerpt ?? "")}</description>${media}${cats}${extra}\n    </item>`
         );
       }),
     )
   ).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:media="http://search.yahoo.com/mrss/">
   <channel>
     <title>${escXml(settings.siteTitle ?? "")}</title>
     <link>${escXml(ctx.origin)}</link>

@@ -359,9 +359,9 @@ async function chromeData(pathname: string, t: Translate) {
     ),
     asideHtml: tc.aside({
       menu: R.sidebarMenu(menuItems, pathname),
-      tagCloud: R.tagCloud(tags),
-      stats: R.blogStats(stats),
-      popular: R.popularWidget(popular),
+      tagCloud: R.tagCloud(tags, t),
+      stats: R.blogStats(stats, t),
+      popular: R.popularWidget(popular, t),
       widgets: R.widgetAreaHtml(sideWidgets, "sk-widget-area"),
     }),
     footerHtml,

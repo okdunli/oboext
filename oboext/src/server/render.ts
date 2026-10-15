@@ -670,7 +670,7 @@ export const section = (title: string, inner: string): string =>
 
 export const cardRow = (items: PostView[], awards = false, t?: Translate): string =>
   items.length === 0
-    ? `<div class="sk-empty">${t ? t("empty.posts") : "暂无内容"}</div>`
+    ? `<div class="sk-empty">${(t ?? makeT(DEFAULT_LOCALE))("empty.posts")}</div>`
     : `<div class="row post-card-row">${items.map((p, i) => postCard(p, awards ? i + 1 : 0, t)).join("")}</div>`;
 
 // --------------------------------------------------------------- post pages
@@ -1249,30 +1249,33 @@ function heroPage(p: PostView, pos: number): string {
     `<a class="img" tabindex="-1" style="background-image:url(${esc(p.featuredImage ?? "")})" href="${esc(p.url)}"></a></div>`
   );
 }
-function heroMeta(p: PostView): string {
+function heroMeta(p: PostView, t?: Translate): string {
+  const L = (k: string, v?: Record<string, string | number>) =>
+    t ? t(k, v) : makeT(DEFAULT_LOCALE)(k, v);
   const c = p.categories[0] ?? null;
   return (
     `<div class="meta-wrapper"><div class="meta">` +
     (c ? `<div class="taxonomy">${esc(c.name)}</div>` : "") +
     `<a class="title" href="${esc(p.url)}">${esc(p.title)}</a>` +
     `<div class="meta-bottom"><time>${fmtDate(p.publishedAt)}</time>` +
-    `<span class="reads">${p.views ?? 0} 阅读</span>` +
-    `<span class="comments">${p.commentsCount ?? 0} 条评论</span></div>` +
-    `<a class="goto" href="${esc(p.url)}">阅读全文</a></div></div>`
+    `<span class="reads">${L("theme.reads", { n: p.views ?? 0 })}</span>` +
+    `<span class="comments">${L("theme.comments", { n: p.commentsCount ?? 0 })}</span></div>` +
+    `<a class="goto" href="${esc(p.url)}">${L("post.read_more")}</a></div></div>`
   );
 }
 
-export function cardFlip(hero: PostView[]): string {
+export function cardFlip(hero: PostView[], t?: Translate): string {
   if (!hero.length) return "";
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   return (
     `<section class="cardFlip" id="cardFlip">` +
     `<div class="background" aria-hidden="true"><div class="default-background"><div class="head-img"><div class="img"></div></div></div></div>` +
     `<div class="slider-wrapper" aria-hidden="true"><div class="cardFlip-slider">` +
     hero.map((p, i) => heroPage(p, i)).join("") +
     `</div></div>` +
-    heroMeta(hero[0]) +
-    `<div class="navigator"><div class="prev" role="button" tabindex="0" aria-label="上一篇"><i class="skyscraper-icons-arrow-left"></i></div>` +
-    `<div class="next" role="button" tabindex="0" aria-label="下一篇"><i class="skyscraper-icons-arrow-left sk-i-flip-x"></i></div></div>` +
+    heroMeta(hero[0], t) +
+    `<div class="navigator"><div class="prev" role="button" tabindex="0" aria-label="${L("adjacent.older")}"><i class="skyscraper-icons-arrow-left"></i></div>` +
+    `<div class="next" role="button" tabindex="0" aria-label="${L("adjacent.newer")}"><i class="skyscraper-icons-arrow-left sk-i-flip-x"></i></div></div>` +
     `</section>`
   );
 }
@@ -1301,7 +1304,7 @@ export function homeHtml(parts: {
   // themes table if an admin switch appears in B/C phase.
   return (
     '<div class="sk-home">' +
-    cardFlip(parts.hero) +
+    cardFlip(parts.hero, parts.t) +
     (parts.cats.length ? scrollCats(parts.cats) : "") +
     section(L("sidebar.recent"), cardRow(parts.latest, false, parts.t)) +
     (parts.liked.length ? section(L("rank.most_likes"), cardRow(parts.liked, true, parts.t)) : "") +
@@ -1355,23 +1358,28 @@ export function listPage(parts: {
 
 export function topNav(settings: Record<string, any>): string {
   const title = esc(settings.siteTitle ?? "");
+  // The loaders' settings bag carries the bound translator (settings.t) under
+  // a non-default locale; the Chinese default catalog is the fallback.
+  const bound: Translate | undefined =
+    typeof settings.t === "function" ? settings.t : undefined;
+  const L = (k: string) => (bound ? bound(k) : makeT(DEFAULT_LOCALE)(k));
 
   const isHome = String(settings.__pathname ?? "/") === "/";
   const navCls = `top-nav is-sticky${isHome ? "" : " is-scrolled always-stay"}`;
   return (
     `<header class="${navCls}">` +
-    `<div class="sidebar-btn" role="button" tabindex="0" aria-label="打开侧栏"><i class="skyscraper-icons-bread"></i><i class="skyscraper-icons-cross closeBtn"></i></div>` +
-    `<div class="toolbox-btn" role="button" tabindex="0" aria-label="打开工具栏"><i class="skyscraper-icons-cog"></i></div>` +
+    `<div class="sidebar-btn" role="button" tabindex="0" aria-label="${L("sky.sidebar_open")}"><i class="skyscraper-icons-bread"></i><i class="skyscraper-icons-cross closeBtn"></i></div>` +
+    `<div class="toolbox-btn" role="button" tabindex="0" aria-label="${L("sky.toolbox_open")}"><i class="skyscraper-icons-cog"></i></div>` +
     `<div class="container"><div class="logo"><center><a aria-label="${title}" href="/"><div class="sk-logo">${title}</div></a></center></div>` +
     `<div class="toolbox"><div class="return-btn"><i class="skyscraper-icons-arrow-left"></i></div>` +
     `<div class="search sk-live-search"><i class="skyscraper-icons-search"></i>` +
-    `<form role="search" action="/search" method="get"><input id="pf_header_search" type="search" placeholder="搜索您想要的..." autocomplete="off" name="q" value=""></form></div>` +
-    `<div class="color-switcher-wrapper"><div class="mobile-button show-on-desktop" title="色彩模式"><i class="night-day"></i></div></div>` +
+    `<form role="search" action="/search" method="get"><input id="pf_header_search" type="search" placeholder="${L("search.placeholder")}" autocomplete="off" name="q" value=""></form></div>` +
+    `<div class="color-switcher-wrapper"><div class="mobile-button show-on-desktop" title="${L("sky.color_mode")}"><i class="night-day"></i></div></div>` +
     `<div class="login"><div class="vcard cursor-hand">` +
     `<img alt="" src="/public/avatar.png" srcset="/public/avatar@2x.png 2x" class="avatar avatar-96 photo avatar-default" height="96" width="96">` +
     `<span class="name">${title} </span><span class="caret"></span></div>` +
-    `<div class="login-main"><div class="user-type">欢迎光临</div><div class="operation">` +
-    `<a href="/about">关于我</a><a href="/admin/login">Login&nbsp;<i class="skyscraper-icons-sign-in"></i></a>` +
+    `<div class="login-main"><div class="user-type">${L("sky.welcome")}</div><div class="operation">` +
+    `<a href="/about">${L("sky.about")}</a><a href="/admin/login">Login&nbsp;<i class="skyscraper-icons-sign-in"></i></a>` +
     `</div></div></div></div></div></header>`
   );
 }
@@ -1429,9 +1437,10 @@ export function sidebarMenu(items: SkyItem[], pathname: string): string {
   );
 }
 
-export function tagCloud(tags: TaxRef[]): string {
+export function tagCloud(tags: TaxRef[], t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   return (
-    `<section class="widget widget_tag_cloud"><h4 class="widget-title">标签</h4><div class="tagcloud">` +
+    `<section class="widget widget_tag_cloud"><h4 class="widget-title">${L("sidebar.tags")}</h4><div class="tagcloud">` +
     tags
       .slice(0, 18)
       .map((t, i) => {
@@ -1448,21 +1457,27 @@ export function tagCloud(tags: TaxRef[]): string {
   );
 }
 
-export function blogStats(c: { posts: number; comments: number; tags: number; categories: number }): string {
+export function blogStats(
+  c: { posts: number; comments: number; tags: number; categories: number },
+  t?: Translate,
+): string {
+  const L = (k: string, v?: Record<string, string | number>) =>
+    t ? t(k, v) : makeT(DEFAULT_LOCALE)(k, v);
   return (
-    `<section class="widget widget_blogstat"><h4 class="widget-title">博客统计</h4>` +
+    `<section class="widget widget_blogstat"><h4 class="widget-title">${L("sky.stats")}</h4>` +
     `<ul style="list-style-type:initial;color:#738192">` +
-    `<li>日志总数：${c.posts} 篇</li>` +
-    `<li>评论数目：${c.comments} 条</li>` +
-    `<li>标签总数：${c.tags} 个</li>` +
-    `<li>分类总数：${c.categories} 个</li>` +
+    `<li>${L("sky.stats_posts", { n: c.posts })}</li>` +
+    `<li>${L("sky.stats_comments", { n: c.comments })}</li>` +
+    `<li>${L("sky.stats_tags", { n: c.tags })}</li>` +
+    `<li>${L("sky.stats_cats", { n: c.categories })}</li>` +
     `</ul></section>`
   );
 }
 
-export function popularWidget(posts: PostView[]): string {
+export function popularWidget(posts: PostView[], t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   return (
-    `<section class="widget widget_pf_post_list_widget"><h4 class="widget-title">最受欢迎</h4><ul>` +
+    `<section class="widget widget_pf_post_list_widget"><h4 class="widget-title">${L("sky.popular")}</h4><ul>` +
     posts
       .map(
         (p) =>

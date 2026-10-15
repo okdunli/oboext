@@ -704,6 +704,14 @@ function isoDuration(mins: number): string {
   return "PT" + hh + r + "M";
 }
 
+// MRSS <media:content> for an RSS item's featured image; resolves a relative
+// /uploads/... URL against the origin so the feed stays self-contained.
+export function mediaImageTag(url: string | null | undefined, origin: string): string {
+  if (!url) return "";
+  const abs = url.startsWith("http") ? url : `${origin}${url}`;
+  return `<media:content url="${esc(abs)}" medium="image" />`;
+}
+
 export function postHead(
   p: PostView,
   siteTitle: string,

@@ -49,7 +49,7 @@ import { renderUserCenter, renderUserCenterGuest } from "./account.js";
 import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
 import { getAdminSecurity } from "./security.js";
 import { can } from "./admin.js";
-import { getThemeChrome, publicAssetHref, bluemixNotFoundPage, catIconName, type MenuItem } from "./theme-chrome.js";
+import { getThemeChrome, publicAssetHref, themeScriptTags, bluemixNotFoundPage, catIconName, type MenuItem } from "./theme-chrome.js";
 import { createLogger } from "./logger.js";
 import {
   DEFAULT_LOCALE,
@@ -275,11 +275,14 @@ async function chromeData(pathname: string, t: Translate) {
   // Skyscraper's stylesheet consumes its private --sk-* scale; derive it
   // from the saved generic tokens so the appearance panel actually repaints
   // (light + dark blocks). See theme-bridge.ts.
-  const skBase = (getThemeManifest(themeSlug)?.config ?? {}) as Parameters<
+  const themeManifest = getThemeManifest(themeSlug);
+  const skBase = (themeManifest?.config ?? {}) as Parameters<
     typeof skyscraperBridgeRoot
   >[1];
+  // Private token-scale bridge: the theme declares it (manifest
+  // "tokensBridge"), the program does not know the theme's name.
   const skBridge =
-    themeSlug === "skyscraper"
+    themeManifest?.tokensBridge === "skyscraper"
       ? {
           root: skyscraperBridgeRoot(renderConfig, skBase),
           dark: skyscraperBridgeDark(renderConfig, skBase),
@@ -302,11 +305,14 @@ async function chromeData(pathname: string, t: Translate) {
   // the .rose layout) because the template compiler only interpolates
   // attributes it can resolve statically — a raw-HTML channel is the proven
   // path (same as bodyFix/nav/bodyOpen).
+  //
+  // The theme's own scripts come from its manifest ("scripts" → the theme's
+  // assets/ dir, "publicScripts" → program-owned /public/ assets), so the
+  // program carries no per-theme script list. The program-level runtime
+  // (csrf/reading-mode/comments) brackets them.
   const themeScripts =
     `<script src="${publicAssetHref("csrf.js")}" defer></script>` +
-    (themeSlug === "skyscraper" ? `<script src="${publicAssetHref("theme.js")}" defer></script>` : "") +
-    (themeSlug !== "skyscraper" ? `<script src="${publicAssetHref("theme-pjax.js")}" defer></script>` : "") +
-    (themeSlug === "bluemix" ? `<script src="${publicAssetHref("theme-bluemix.js")}" defer></script>` : "") +
+    themeScriptTags(themeSlug) +
     `<script src="${publicAssetHref("reading-mode.js")}" defer></script>` +
     `<script src="${publicAssetHref("comments.js")}" defer></script>`;
   const headerItems: MenuItem[] = (headerMenu?.items ?? []) as MenuItem[];
@@ -344,6 +350,7 @@ async function chromeData(pathname: string, t: Translate) {
     siteBodyOpen,
     siteBodyEnd,
     themeSlug,
+    layout: themeManifest?.layout || "default",
     cssHref: tc.cssHref(),
     // The inlined copy of the same stylesheet. Optional on the interface: a
     // theme that does not implement cssInline() yields "", and the layout then
@@ -403,7 +410,7 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
   const pre = (html: string) => prefixLocaleUrls(html, locale);
   // The locale switcher. data-no-pjax forces a full document load: pjax only
   // swaps #sk-main, so a soft navigation would leave the rest of the chrome
-  // (nav, footer) in the old language. theme-pjax.js keeps the href in sync
+  // (nav, footer) in the old language. pjax.js keeps the href in sync
   // with location.pathname on rv:nav, so the pill never goes stale.
   const localeSwitch = isAdmin
     ? ""
@@ -425,6 +432,7 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
     ogImageHtml: isAdmin ? "" : R.socialImageMetas(d.logoUrl, origin, d.siteTitle),
     themeHead: d.varsHtml + d.headExtra,
     themeSlug: d.themeSlug,
+    layout: d.layout,
     cssHref: d.cssHref,
     cssInline: d.cssInline,
     themeScripts: d.themeScripts,

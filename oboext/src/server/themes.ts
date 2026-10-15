@@ -51,15 +51,49 @@ export type ThemeManifest = {
   settingsSchema?: unknown;
   widgetAreas?: ThemeWidgetArea[];
   supports?: string[];
+
+  // --- program-facing capabilities. A theme declares what it needs; the
+  // program never keys off a theme's NAME. Every field is optional, so a
+  // minimal theme folder is still a valid theme.
+  /** The program ships a public renderer for this theme → activatable. */
+  public?: boolean;
+  /** Owns the site-wide chrome stylesheet generated at build time. One theme. */
+  chrome?: boolean;
+  /** Public chrome layout dialect the theme is built for. */
+  layout?: string;
+  /** Design-token bridge module id (e.g. "skyscraper"), when the theme's own
+   *  stylesheet consumes a private token scale. */
+  tokensBridge?: string;
+  /** Theme-relative client scripts, served from /theme-assets/<slug>/… */
+  scripts?: string[];
+  /** Program-owned client scripts, served from /public/… */
+  publicScripts?: string[];
+  /** Anti-FOUC bootstrap emitted in <head> (theme-relative path). */
+  noflash?: string;
+  /** Fonts to preload/inline, theme-relative under assets/ . */
+  fonts?: string[];
 };
 
 const THEMES_DIR = path.join(process.cwd(), "themes");
 
-// Themes whose public chrome is actually ported to rosezm renderers.
-export const PORTED_PUBLIC_THEMES = new Set(["skyscraper", "default", "pseudolinear", "codeman", "bluemix"]);
-
+/**
+ * A theme is activatable on the public site when its manifest says the
+ * program ships a renderer for it. This used to be a hardcoded slug set,
+ * which meant adding a theme required editing the program.
+ */
 export function isPublicThemePorted(slug: string): boolean {
-  return PORTED_PUBLIC_THEMES.has(slug);
+  return getThemeManifest(slug)?.public === true;
+}
+
+/** The theme that owns the build-time chrome stylesheet. */
+export function getChromeTheme(): ThemeManifest | null {
+  const all = discoverThemes();
+  return (
+    all.find((t) => t.chrome) ??
+    all.find((t) => t.isDefault) ??
+    all[0] ??
+    null
+  );
 }
 
 // Hard TTL for the active-theme reads.
@@ -192,9 +226,9 @@ export async function syncThemes(): Promise<void> {
     .from(siteSettings)
     .where(eq(siteSettings.id, 1));
   const active = s?.activeThemeSlug || "default";
-  if (discovered.has(active) && !PORTED_PUBLIC_THEMES.has(active)) {
+  if (discovered.has(active) && !isPublicThemePorted(active)) {
     const target =
-      manifests.find((m) => PORTED_PUBLIC_THEMES.has(m.slug)) ??
+      manifests.find((m) => m.public) ??
       manifests.find((m) => m.isDefault) ??
       null;
     if (target) {
@@ -506,7 +540,7 @@ export async function deleteTheme(id: number): Promise<{ id: number }> {
 /** Mark a theme as the public-site active theme. */
 export async function setActiveTheme(id: number): Promise<Theme> {
   const theme = await getThemeById(id);
-  if (!PORTED_PUBLIC_THEMES.has(theme.slug)) {
+  if (!isPublicThemePorted(theme.slug)) {
     throw new ServiceError("该主题的前台模板尚未适配，暂不能启用", 422);
   }
   await db

@@ -237,16 +237,15 @@ function readThemeCss(slug: string, file: string): { css: string; mtime: number 
   }
 }
 
-// T5: preload a theme's declared fonts (manifest.json "fonts": [...]) so the browser fetches them alongside the stylesheet instead of after it .
+// Preload a theme's declared fonts (manifest.json "fonts": [...]) so the
+// browser fetches them alongside the stylesheet instead of after it.
 function fontPreloadLinks(slug: string): string {
-  try {
-    const m = JSON.parse(fs.readFileSync(path.join(THEMES_DIR, slug, "manifest.json"), "utf-8")) as { fonts?: string[] };
-    return (m.fonts ?? [])
-      .map((f) => `<link rel="preload" as="font" type="font/woff2" href="/theme-assets/${slug}/${f}" crossorigin>`)
-      .join("");
-  } catch {
-    return "";
-  }
+  return (readThemeDecl(slug).fonts ?? [])
+    .map(
+      (f) =>
+        `<link rel="preload" as="font" type="font/woff2" href="${themeAssetHref(slug, f)}" crossorigin>`,
+    )
+    .join("");
 }
 
 const themeHrefCache = new Map<string, string>();
@@ -296,6 +295,74 @@ export function publicAssetHref(file: string): string {
   } catch {
     return `/public/${file}`;
   }
+}
+
+// ------------------------------------------------------------------ theme assets
+//
+// Everything a theme owns on the client (its scripts, its fonts, its
+// anti-FOUC bootstrap) is DECLARED in themes/<slug>/manifest.json and served
+// from the theme's own folder. The program knows no theme by name: it reads
+// the declaration. A theme-relative entry rides /theme-assets/<slug>/…; an
+// entry in `publicScripts` is a program-owned asset under /public/.
+// All paths are relative to the theme's assets/ directory.
+
+interface ThemeAssetDecl {
+  scripts?: string[];
+  publicScripts?: string[];
+  noflash?: string;
+  fonts?: string[];
+}
+
+function readThemeDecl(slug: string): ThemeAssetDecl {
+  try {
+    return JSON.parse(
+      fs.readFileSync(path.join(THEMES_DIR, slug, "manifest.json"), "utf-8"),
+    ) as ThemeAssetDecl;
+  } catch {
+    return {};
+  }
+}
+
+const themeAssetVersionCache = new Map<string, { size: number; v: string }>();
+/** Versioned href for a theme asset: /theme-assets/<slug>/<rel>?v=<hash>. */
+export function themeAssetHref(slug: string, file: string): string {
+  const rel = String(file).replace(/^assets\//, "").replace(/^\/+/, "");
+  const key = slug + ":" + rel;
+  try {
+    const fp = path.join(THEMES_DIR, slug, "assets", rel);
+    const st = fs.statSync(fp);
+    const cached = themeAssetVersionCache.get(key);
+    if (cached && cached.size === st.size) {
+      return `/theme-assets/${slug}/${rel}?v=${cached.v}`;
+    }
+    const v = fnv1a32(fs.readFileSync(fp));
+    themeAssetVersionCache.set(key, { size: st.size, v });
+    return `/theme-assets/${slug}/${rel}?v=${v}`;
+  } catch {
+    return `/theme-assets/${slug}/${rel}`;
+  }
+}
+
+/** The theme's declared client scripts, in declaration order. */
+export function themeScriptTags(slug: string): string {
+  const d = readThemeDecl(slug);
+  const tags: string[] = [];
+  for (const f of d.publicScripts ?? []) {
+    tags.push(`<script src="${publicAssetHref(f)}" defer></script>`);
+  }
+  for (const f of d.scripts ?? []) {
+    tags.push(`<script src="${themeAssetHref(slug, f)}" defer></script>`);
+  }
+  return tags.join("");
+}
+
+/** Manifest-declared <head> extras: font preloads + the anti-FOUC bootstrap. */
+export function themeHeadExtra(slug: string): string {
+  const d = readThemeDecl(slug);
+  const noflash = d.noflash
+    ? `<script src="${themeAssetHref(slug, d.noflash)}" defer></script>`
+    : "";
+  return fontPreloadLinks(slug) + noflash;
 }
 
 const GLOBALS_BODY_UTILITIES = `.min-h-screen{min-height:100vh}
@@ -668,7 +735,7 @@ const skyscraperChrome: ThemeChrome = {
   // Original parity (Layout.tsx:59,108): restore the saved color scheme
   // BEFORE first paint — an external head script (no defer) runs ahead of
   // the body, so dark-mode visitors never flash the light theme.
-  headExtra: () => fontPreloadLinks("bluemix") + `<script src="${publicAssetHref("noflash.js")}" defer></script>`,
+  headExtra: () => themeHeadExtra("skyscraper"),
   nav: (settings) => R.topNav(settings),
   bodyOpen: () =>
     `<div class="sk-body"><main id="sk-main"><div class="container"><div class="main-column"><div class="sk-frame">`,
@@ -773,7 +840,7 @@ function menuIconName(it: MenuItem): string {
 
 /**
  * One search field: a real GET form plus the combobox wiring that
- * theme-pjax.js drives.
+ * pjax.js drives.
  *
  * `panelId` MUST be unique per rendered field. The suggestion panel is looked
  * up by id (`aria-controls` -> getElementById) and two fields sharing one id
@@ -798,7 +865,7 @@ function searchField(
     `<input name="q" placeholder="${esc(placeholder)}" class="df-search-input" autocomplete="off"` +
     // role=combobox + aria-* is what turns the field into a combobox for a
     // screen reader; without it the suggestion list appears with no announced
-    // relationship to the input. aria-expanded is flipped by theme-pjax.js.
+    // relationship to the input. aria-expanded is flipped by pjax.js.
     ` role="combobox" aria-expanded="false" aria-autocomplete="list"` +
     ` aria-controls="${panelId}" aria-label="${esc(label)}">` +
     `<kbd class="df-search-kbd">/</kbd>` +
@@ -1292,7 +1359,7 @@ function defaultListPage(parts: ListParts): string {
  * page's copy button arrived with nothing bound to it and did nothing when
  * clicked — no error, no console message, just a dead button.
  *
- * The handler now lives in /public/theme-pjax.js, which is loaded once from
+ * The handler now lives in /public/pjax.js, which is loaded once from
  * `<head>` and therefore survives every swap. That file already documents this
  * class of bug; this entry is the second consumer of the same rule.
  */
@@ -1306,7 +1373,7 @@ function defaultShareButtons(title: string, url: string, t?: Translate): string 
   const x = `https://x.com/intent/post?url=${encodeURIComponent(url)}&text=${encodeURIComponent(title)}`;
   const mail = `mailto:?subject=${encodeURIComponent(title)}&body=${encodeURIComponent(url)}`;
   const btn = "df-share-btn";
-  // data-url is left empty on purpose: theme-pjax.js falls back to
+  // data-url is left empty on purpose: pjax.js falls back to
   // location.href, which is the page the visitor is actually looking at. The
   // server-rendered absolute URL is the page as of render time, and pjax has
   // no way to rewrite an attribute on the markup it swaps in.
@@ -1328,7 +1395,7 @@ function defaultShareButtons(title: string, url: string, t?: Translate): string 
  * The article HTML is render-cached for up to 15s, so the count in the markup
  * can be stale; the real number is fetched after load and written into the
  * [data-views-count] slot. That "after load" has to be driven from
- * theme-pjax.js on the rv:nav event, because this block renders inside
+ * pjax.js on the rv:nav event, because this block renders inside
  * <main id="sk-main"> and pjax replaces that subtree wholesale: an inline
  * script inside it runs on a direct page load and then never again, which is
  * why the count stayed at the cached value after a client-side navigation.
@@ -3039,7 +3106,7 @@ const bluemixChrome: ThemeChrome = {
   cssHref: () => themeCssHref("bluemix"),
   
   bodyFix: () => `<style id="rv-body-fix">body{background:#e5e9ef!important;color:var(--text-color-2)!important}html{background:#e5e9ef!important}</style>`,
-  headExtra: () => fontPreloadLinks("bluemix") + `<style id="rv-theme-bluemix-vars">${BLUEMIX_VARS}</style>`,
+  headExtra: () => themeHeadExtra("bluemix") + `<style id="rv-theme-bluemix-vars">${BLUEMIX_VARS}</style>`,
   nav: (settings, items) => bmixNav(settings, items),
   bodyOpen: (settings, items) =>
     

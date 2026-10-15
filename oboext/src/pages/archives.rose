@@ -1,5 +1,4 @@
 <script>
-  export const cache = 30;
   // Archive timeline. Bare: year/month index. ?year=Y groups that year by
   // month; ?year=Y&month=M shows the month's posts as cards.
   let result = $data(() =>

@@ -47,6 +47,8 @@ import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
 import { getAdminSecurity } from "./security.js";
 import { can } from "./admin.js";
 import { getThemeChrome, publicAssetHref, bluemixNotFoundPage, catIconName, type MenuItem } from "./theme-chrome.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("loaders");
 
 export type Ctx = {
   query: URLSearchParams;
@@ -362,7 +364,7 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
   if (statsOn) {
     const s = dbStats();
     const ms = Date.now() - t0;
-    console.log(
+    log.info(
       `[stats] chrome(${pathname}) queries=${s.count - (before?.count ?? 0)} ` +
         `dbTime=${s.total - (before?.total ?? 0)}ms wall=${ms}ms`,
     );
@@ -1847,7 +1849,7 @@ const PATH_MISS_TTL = 60_000;
 async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
   if (process.env.OBOEXT_DEBUG_RESOLVE) {
     const sm = (globalThis as any).__rosefd_signalMap as Map<string, unknown> | undefined;
-    console.log("[resolve-debug] payload:", JSON.stringify(payload), "pathname:", ctx?.pathname,
+    log.debug("[resolve-debug] payload:", JSON.stringify(payload), "pathname:", ctx?.pathname,
       "signalMap.slug:", JSON.stringify((sm as any)?.get?.("slug")?.() ?? (sm as any)?.get?.("slug")),
       "mapSize:", sm?.size);
   }

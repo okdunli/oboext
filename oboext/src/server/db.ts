@@ -5,6 +5,8 @@ import { sql, type SQL } from "drizzle-orm";
 // Type-only: a value import would pull the driver into the esbuild bundle.
 import type { PgliteDatabase } from "drizzle-orm/pglite";
 import * as schema from "./schema";
+import { createLogger } from "./logger.js";
+const log = createLogger("db");
 
 // Resolved off globalThis: a static import would be inlined as a second copy
 // of the registry, and the server would drain a copy the app never saw.
@@ -166,7 +168,7 @@ function registerGracefulShutdown(): () => void {
     } catch (err) {
       // A checkpoint failure (already closed, read-only dir) must not stop
       // the close itself - close() is what releases the file handles.
-      console.error("[db] PGlite checkpoint before close failed:", (err as Error)?.message ?? err);
+      log.error("[db] PGlite checkpoint before close failed:", (err as Error)?.message ?? err);
     }
     // Snapshot AFTER the checkpoint and BEFORE the close, because
     // dumpDataDir() reads a LIVE instance - there is nothing to dump once
@@ -177,9 +179,9 @@ function registerGracefulShutdown(): () => void {
     await writeRecoverySnapshot(client, snap);
     try {
       await client.close();
-      console.log(`[db] PGlite closed cleanly (checkpoint + WAL flushed, snapshot at ${snap})`);
+      log.info(`[db] PGlite closed cleanly (checkpoint + WAL flushed, snapshot at ${snap})`);
     } catch (err) {
-      console.error("[db] PGlite close error:", (err as Error)?.message ?? err);
+      log.error("[db] PGlite close error:", (err as Error)?.message ?? err);
     }
   };
 
@@ -283,11 +285,11 @@ function pickPostgresUrl(): string {
 function logDbTarget(label: string, url: string): void {
   try {
     const u = new URL(url);
-    console.log(
+    log.info(
       `[db] ${label} -> postgres://${u.hostname}:${u.port || 5432} (db=${u.pathname.slice(1) || "-"})`,
     );
   } catch {
-    console.log(`[db] ${label} -> (unparseable connection string; check DATABASE_URL / DATABASE_URL_UNPOOLED)`);
+    log.info(`[db] ${label} -> (unparseable connection string; check DATABASE_URL / DATABASE_URL_UNPOOLED)`);
   }
 }
 
@@ -313,7 +315,7 @@ function maybeStartDbKeepalive(connectionString: string): void {
   if (!postgresClient) return;
   const ms = Number(process.env.DB_KEEPALIVE_MS || 20000);
   if (!(ms > 0)) return;
-  console.log("[db] keepalive started interval=" + ms + "ms");
+  log.debug("[db] keepalive started interval=" + ms + "ms");
   let warned = false;
   const timer = setInterval(async () => {
     try {
@@ -322,7 +324,7 @@ function maybeStartDbKeepalive(connectionString: string): void {
     } catch (e) {
       if (!warned) {
         warned = true;
-        console.warn("[db] keepalive ping failed: " + (e && (e as Error).message) + " (will retry)");
+        log.debug("[db] keepalive ping failed: " + (e && (e as Error).message) + " (will retry)");
       }
     }
   }, ms);
@@ -400,7 +402,7 @@ async function createDb(): Promise<any> {
   // last good snapshot before giving up (see openPgliteWithRecovery).
   const { client, recovered } = await openPgliteWithRecovery(pgMod, dir);
   if (recovered) {
-    console.warn(
+    log.warn(
       `[db] PGlite data directory ${dir} was unreadable and has been restored from ${snapshotPath(dir)}`,
     );
   }
@@ -437,7 +439,7 @@ function queryLogger(): undefined | { logQuery: (q: string, p: unknown[]) => voi
       s.total += ms;
       const one = query.replace(/\s+/g, " ").slice(0, 160);
       if (s.samples.length < 400) s.samples.push({ q: one, ms });
-      console.log(`[q] ${ms}ms  ${one}`);
+      log.debug(`[q] ${ms}ms  ${one}`);
     },
   };
 }
@@ -491,7 +493,7 @@ async function tunePersistence(client: any): Promise<void> {
   } catch {
     // No reload needed on some builds; the next boot picks it up regardless.
   }
-  console.log(
+  log.info(
     `[db] PGlite persistence tuned via postgresql.auto.conf: ${applied.join(", ") || "nothing applied"}` +
       (rejected.length ? ` (rejected: ${rejected.join(", ")})` : "") +
       "  [shared_buffers/wal_buffers are fixed in the PGlite WASM build and cannot be changed]",
@@ -500,7 +502,7 @@ async function tunePersistence(client: any): Promise<void> {
     // Diagnostic mode: prove the values the next boot will actually see.
     for (const key of ["checkpoint_timeout", "wal_keep_size", "shared_buffers"]) {
       const v = await client.query("show " + key).then((r: any) => r.rows[0]?.[key]).catch(() => "?");
-      console.log(`[db]   ${key} = ${v}`);
+      log.debug(`[db]   ${key} = ${v}`);
     }
   }
 }
@@ -530,11 +532,11 @@ async function writeRecoverySnapshot(client: any, snap: string): Promise<void> {
     const buf = Buffer.from(await blob.arrayBuffer());
     fs.writeFileSync(tmp, buf);
     fs.renameSync(tmp, snap);
-    console.log(
+    log.info(
       `[db] recovery snapshot written: ${snap} (${(buf.length / 1048576).toFixed(1)} MB)`,
     );
   } catch (err) {
-    console.error(
+    log.error(
       "[db] recovery snapshot failed (the close itself is unaffected):",
       (err as Error)?.message ?? err,
     );
@@ -575,7 +577,7 @@ async function openPgliteWithRecovery(
     if (!isCorruptionError(message) || (!hasSnapshot && !forced)) {
       throw describeUnopenable(dir, message, hasSnapshot, forced);
     }
-    console.error(`[db] PGlite cannot open ${dir}: ${message}`);
+    log.error(`[db] PGlite cannot open ${dir}: ${message}`);
     if (!hasSnapshot) {
       throw new Error(
         `PGlite data directory ${dir} is damaged (${message}) and no snapshot exists at ${snap}. ` +
@@ -587,7 +589,7 @@ async function openPgliteWithRecovery(
     const wreck = dir + ".damaged-" + Date.now();
     try {
       fs.renameSync(dir, wreck);
-      console.warn(`[db] damaged directory moved to ${wreck}`);
+      log.warn(`[db] damaged directory moved to ${wreck}`);
     } catch {
       // fall through: loadDataDir writes a fresh directory anyway
     }
@@ -745,7 +747,7 @@ export function ensureDb(): Promise<any> {
           last = err;
           if (!isConnectionError(err) || i === attempts - 1) throw err;
           const backoff = [0, 1500, 4000][i] ?? 4000;
-          console.warn(`[db] connect attempt ${i + 1} failed, retrying in ${backoff}ms: ${(err as Error).message}`);
+          log.debug(`[db] connect attempt ${i + 1} failed, retrying in ${backoff}ms: ${(err as Error).message}`);
           await resetPostgresClient();
           await sleep(backoff);
         }
@@ -777,7 +779,7 @@ export async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
       // finish waking a suspended compute, so a single 500ms retry usually
       // lands inside the same refusal window and fails identically.
       const backoff = [0, 500, 1500][i] ?? 1500;
-      console.warn(
+      log.warn(
         `[db] query attempt ${i + 1} failed, retrying in ${backoff}ms: ${(err as Error).message}`,
       );
       await resetPostgresClient();

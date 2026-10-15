@@ -1,5 +1,7 @@
 // `[tag]` macros expanded at render time — port of oboext lib/shortcodes.ts.
 import { applyFilters, HOOKS } from "./hooks.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("shortcodes");
 
 export type ShortcodeAttrs = Record<string, string>;
 
@@ -130,7 +132,7 @@ export async function renderShortcodes(
         try {
           replacement = await def.render(parseAttrs(item.attrs), item.inner, ctx);
         } catch (err) {
-          console.error(`[shortcode] "${item.name}" failed:`, err);
+          log.error(`[shortcode] "${item.name}" failed:`, err);
           replacement = "";
         }
       }

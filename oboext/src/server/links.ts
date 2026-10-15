@@ -5,6 +5,8 @@ import { setOption } from "./options.js";
 import { memoStrict, memoQuery, invalidate, SIDEBAR_TTL } from "./cache.js";
 import type { PostRow } from "./queries.js";
 import type { Category, Tag, Page } from "./schema.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("links");
 
 export type PostLinkMode = "slug" | "id" | "pinyin" | "initial" | "custom";
 
@@ -76,7 +78,7 @@ export async function getPermalinkConfig(): Promise<PermalinkConfig> {
     });
   } catch (e) {
     // A failed read must NOT be cached.
-    console.warn(
+    log.warn(
       `[links] permalink config read failed, using defaults for this request: ${
         e instanceof Error ? e.message : String(e)
       }`,

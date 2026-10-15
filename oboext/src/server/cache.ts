@@ -1,3 +1,5 @@
+import { createLogger } from "./logger.js";
+const log = createLogger("cache");
 // In-process SWR memo for read queries — the data-layer half of oboext's caching story.
 const store = new Map<
   string,
@@ -59,7 +61,7 @@ async function memo<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<
           })
           .catch((e) => {
             // Refresh failed: keep serving the stale value until the next window; drop the in-flight marker so a later read retries.
-            console.warn(
+            log.warn(
               `[cache] background refresh failed for ${key}: ${
                 e instanceof Error ? e.message : String(e)
               }`,

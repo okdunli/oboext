@@ -1,6 +1,8 @@
 <script>
   // Oboext request interceptor (runs once per request on the Node server).
   import { checkCsrf, needsCsrf, isSafeMethod, selfHealCsrfCookie } from "@server/csrf";
+  import { createLogger } from "@server/logger";
+  const log = createLogger("middleware");
 
   export async function handle(request) {
     const reg = globalThis.__oboeLoaders;
@@ -29,7 +31,7 @@
       // Two steps, not one: needsCsrf() scopes the check to requests that actually carry a session cookie, and checkCsrf() then judges it.
       const verdict = checkCsrf(request);
       if (!verdict.ok) {
-        console.warn(`[csrf] rejected ${request.method} ${p} (${verdict.reason})`);
+        log.warn(`[csrf] rejected ${request.method} ${p} (${verdict.reason})`);
         const heal = selfHealCsrfCookie(request);
         const headers: Record<string, string> = {
           "content-type": "application/json; charset=utf-8",

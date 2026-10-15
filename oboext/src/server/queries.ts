@@ -39,6 +39,8 @@ import { uploadExists } from "./storage.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ServiceError } from "./errors.js";
 import { invalidate, memoQuery, memoStrict, SIDEBAR_TTL } from "./cache.js";
+import { createLogger } from "./logger.js";
+const log = createLogger("queries");
 
 // Scheduled publishing (time gate): a `published` post whose publishedAt is in the future is "scheduled" and hidden from every public read.
 const publishedVisible = or(isNull(posts.publishedAt), lte(posts.publishedAt, sql`now()`));
@@ -62,7 +64,7 @@ function withUsableCover<T extends { featuredImage?: string | null }>(view: T): 
   if (view.featuredImage && !uploadExists(view.featuredImage)) {
     if (!warnedMissingCovers.has(view.featuredImage)) {
       warnedMissingCovers.add(view.featuredImage);
-      console.warn(
+      log.warn(
         `[queries] featured_image ${view.featuredImage} is missing on disk, rendering without a cover`,
       );
     }

@@ -24,11 +24,17 @@ import { fileURLToPath } from 'url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OBOEXT = join(ROOT, 'oboext');
+// The theme that owns the site-wide chrome. Its stylesheet and fonts ship from
+// inside the theme folder, so a theme is removable without touching site code.
 const CHROME_THEME = 'skyscraper';
 const THEME_DIR = join(ROOT, 'themes', CHROME_THEME);
 const PUBLIC = join(OBOEXT, 'public');
 mkdirSync(PUBLIC, { recursive: true });
 
+// --------------------------------------------------------- plugin entries
+// The server is one esbuild bundle: plugin entries must be statically
+// resolvable at build time. Scan plugins/<slug>/ and regenerate the entry
+// table so enabling a plugin can import its server code (plugin-entries.ts).
 {
   const ENTRY_CANDIDATES = ['index.ts', 'index.tsx', 'index.js', 'index.mjs'];
   const pluginsDir = join(ROOT, 'plugins');
@@ -55,6 +61,7 @@ ${entryLines.join('\n')}
   console.log(`[gen] plugin entries: ${entryLines.length}`);
 }
 
+// --------------------------------------------------------------- theme.css
 const themeCssPath = join(THEME_DIR, `${CHROME_THEME}.css`);
 if (!existsSync(themeCssPath)) {
   console.error(
@@ -76,6 +83,7 @@ for (const name of ['skyscraper-icons.woff2', 'passero-one.woff2']) {
     console.warn(`[gen] WARN: font missing themes/${CHROME_THEME}/assets/fonts/${name}`);
   }
 }
+// emoji picker structural baseline (theme only carries .sk-comments overrides)
 const emojiCss = join(THEME_DIR, 'assets', 'emoji-panel.css');
 if (existsSync(emojiCss)) themeCss += '\n' + readFileSync(emojiCss, 'utf8');
 for (let n = 1; n <= 4; n++) {
@@ -88,12 +96,14 @@ for (let n = 1; n <= 4; n++) {
 writeFileSync(join(OBOEXT, 'theme.css'), themeCss);
 copyFileSync(join(OBOEXT, 'theme.css'), join(PUBLIC, 'theme.css'));
 
+// --------------------------------------------------------------- images
 for (const name of ['avatar.png', 'avatar@2x.png']) {
   const fp = join(THEME_DIR, 'assets', name);
   if (existsSync(fp)) copyFileSync(fp, join(PUBLIC, name));
   else console.warn(`[gen] WARN: avatar missing themes/${CHROME_THEME}/assets/${name}`);
 }
 
+// --------------------------------------------------------------- noflash
 writeFileSync(
   join(PUBLIC, 'noflash.js'),
   '(function(){try{if(localStorage.getItem("skyscraper-color-scheme")==="dark"){document.documentElement.setAttribute("data-color-scheme","dark");}}catch(e){}})();\n',

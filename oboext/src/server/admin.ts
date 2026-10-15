@@ -32,6 +32,7 @@ import { hashPassword } from "./auth.js";
 import { HOOKS, applyAsyncFilters, doAction } from "./hooks.js";
 import { createLogger } from "./logger.js";
 import { passwordError } from "./password-policy.js";
+import { snapshotRevision } from "./revisions.js";
 import { decodeCursor, encodeCursor } from "./cursor.js";
 import { v, parseOrThrow } from "./validate.js";
 const log = createLogger("admin");
@@ -547,6 +548,7 @@ export async function createPost(user: SessionUser, input: PostInput) {
     .returning();
   await setTaxonomies(row.id, normIds(input.categoryIds), normIds(input.tagIds));
   if (input.metas) await setPostMetas(row.id, normMetas(input.metas));
+  await snapshotRevision("post", row.id, authorId, row);
   invalidateContentCaches();
   return adminGetPost(user, row.id);
 }
@@ -554,6 +556,7 @@ export async function createPost(user: SessionUser, input: PostInput) {
 export async function updatePost(user: SessionUser, id: number, input: Partial<PostInput>) {
   const existing = await adminGetPost(user, id); // 404 + ownership
   checkPostShape(input);
+  await snapshotRevision("post", id, user.id, existing);
   let slug = existing.slug;
   if (input.slug && input.slug !== existing.slug) {
     const base = slugify(input.slug);

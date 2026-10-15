@@ -1451,3 +1451,12 @@ input[type="radio"]:checked::after {
   color: #e4e4e7;
   text-decoration: underline;
 }
+
+/* Content revision history (R27) */
+.adm-rev-list{display:flex;flex-direction:column;gap:0}
+.adm-rev-row{display:flex;align-items:center;gap:12px;padding:10px 2px;border-bottom:1px solid var(--adm-line,rgba(127,127,127,.18));font-size:13px;flex-wrap:wrap}
+.adm-rev-row:last-child{border-bottom:none}
+.adm-rev-time{font-variant-numeric:tabular-nums;color:var(--adm-muted,#888);min-width:96px}
+.adm-rev-title{flex:1;min-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.adm-rev-status{font-size:12px;padding:1px 8px;border-radius:999px;border:1px solid var(--adm-line,rgba(127,127,127,.25));color:var(--adm-muted,#888)}
+.adm-rev-row .adm-btn{flex:none}

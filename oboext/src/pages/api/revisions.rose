@@ -1,0 +1,50 @@
+<script>
+  // /api/revisions — content version history. GET lists the snapshots of one
+  // post/page (newest first, cursor by id); POST restores one snapshot.
+  // Ownership is enforced inside the service via adminGetPost/adminGetPage.
+  import { apiGate, readBody } from "@server/admin";
+  import { listRevisions, restoreRevision } from "@server/revisions";
+  import { parseOrThrow, v } from "@server/validate";
+
+  const ID = v.int({ coerce: true, min: 1 });
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const url = new URL(request.url);
+      const q = Object.fromEntries(url.searchParams.entries());
+      const parsed = parseOrThrow(
+        v.object({
+          kind: v.enum(["post", "page"] as const),
+          targetId: ID,
+          limit: v.optional(ID),
+          before: v.optional(ID),
+        }),
+        q,
+      );
+      return listRevisions(getContext().user, parsed.kind, parsed.targetId, {
+        limit: parsed.limit,
+        before: parsed.before,
+      });
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const parsed = parseOrThrow(
+        v.object({
+          kind: v.enum(["post", "page"] as const),
+          targetId: ID,
+          revisionId: ID,
+        }),
+        body,
+      );
+      return restoreRevision(
+        getContext().user,
+        parsed.kind,
+        parsed.targetId,
+        parsed.revisionId,
+      );
+    });
+  }
+</script>

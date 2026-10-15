@@ -1,10 +1,5 @@
 <script>
-  // Page editor (new + existing), same blocks editor as posts. The route
-  // segment :id is seeded as state before render; "new" loads an empty form.
-  // Pages have no author/categories/tags/pinned; they carry a parent id and
-  // custom fields (page_metas) instead. Everything saves through /api/pages
-  // via admin.js — no content is ever baked.
-  // The :id segment is seeded into a signal named exactly "id" before render.
+  // Page editor (new + existing), same blocks editor as posts.
   let id = $state("");
   let d = $data(() => __rvLoad("admin.page", { id: id() }));
 
@@ -36,6 +31,86 @@
   }
   function pageDataAttr() {
     return JSON.stringify(d());
+  }
+  if (typeof document !== "undefined") {
+    const revBox = document.querySelector('[data-adm-revisions="page"]');
+    if (revBox) {
+      const targetId = Number(revBox.getAttribute("data-adm-rev-id"));
+      const list = revBox.querySelector("[data-adm-rev-list]");
+      let before = null;
+      const fmt = (iso) => {
+        const dt = new Date(iso);
+        if (Number.isNaN(dt.getTime())) return "";
+        const pad = (n) => String(n).padStart(2, "0");
+        return pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes());
+      };
+      const statusLabel = (s) => (s === "published" ? "已发布" : s === "draft" ? "草稿" : s === "archived" ? "归档" : s);
+      async function load() {
+        const qs = new URLSearchParams({ kind: "page", targetId: String(targetId) });
+        if (before) qs.set("before", String(before));
+        const r = await fetch("/api/revisions?" + qs.toString(), { credentials: "same-origin" });
+        if (!r.ok) {
+          list.innerHTML = '<div class="adm-hint">历史版本加载失败（' + r.status + "）</div>";
+          return;
+        }
+        const data = await r.json();
+        if (!data.items.length && !list.querySelector(".adm-rev-row")) {
+          list.innerHTML = '<div class="adm-hint">暂无历史版本，保存后自动生成</div>';
+          return;
+        }
+        for (const it of data.items) {
+          const row = document.createElement("div");
+          row.className = "adm-rev-row";
+          const time = document.createElement("span");
+          time.className = "adm-rev-time";
+          time.textContent = fmt(it.createdAt);
+          const title = document.createElement("span");
+          title.className = "adm-rev-title";
+          title.textContent = it.title || "（无标题）";
+          const st = document.createElement("span");
+          st.className = "adm-rev-status";
+          st.textContent = statusLabel(it.status);
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "adm-btn adm-btn-ghost adm-btn-sm";
+          btn.textContent = "回滚到此版本";
+          btn.addEventListener("click", async () => {
+            if (!confirm("回滚到「" + (it.title || "无标题") + "」（" + fmt(it.createdAt) + "）？当前版本会先自动留存，可再次回滚。")) return;
+            btn.disabled = true;
+            const pr = await fetch("/api/revisions", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ kind: "page", targetId, revisionId: it.id }),
+            });
+            if (!pr.ok) {
+              alert("回滚失败：" + (await pr.text()).slice(0, 160));
+              btn.disabled = false;
+              return;
+            }
+            location.reload();
+          });
+          row.appendChild(time);
+          row.appendChild(title);
+          row.appendChild(st);
+          row.appendChild(btn);
+          list.appendChild(row);
+        }
+        before = data.nextBefore;
+        if (before) {
+          const more = document.createElement("button");
+          more.type = "button";
+          more.className = "adm-btn adm-btn-sm";
+          more.textContent = "加载更早版本";
+          more.addEventListener("click", () => {
+            more.remove();
+            load();
+          });
+          list.appendChild(more);
+        }
+      }
+      load();
+    }
   }
 </script>
 
@@ -170,3 +245,12 @@
     </div>
   </div>
 </form>
+
+{#if !isNew()}
+<div class="adm-card" style="margin-top:16px" data-adm-revisions="page" data-adm-rev-id={pg().id}>
+  <div class="adm-card-hd"><strong>历史版本</strong><span class="adm-hint" style="margin-left:auto">每次保存自动留存，可回滚；回滚前会先保存当前版本</span></div>
+  <div class="adm-card-bd">
+    <div class="adm-rev-list" data-adm-rev-list></div>
+  </div>
+</div>
+{/if}

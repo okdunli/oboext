@@ -288,6 +288,28 @@ export const postCategories = pgTable(
   (t) => ({ pk: uniqueIndex("post_categories_pk").on(t.postId, t.categoryId) }),
 );
 
+// Content revision history: one pre-update snapshot per save of a post/page,
+// written by revisions.ts from inside create/update (never from the route
+// layer, so the admin editor, the server-side autosave and restore itself all
+// produce history). Retention is capped by pruneRevisions (OBOEXT_REVISION_KEEP).
+export const contentRevisions = pgTable(
+  "content_revisions",
+  {
+    id: serial("id").primaryKey(),
+    kind: text("kind").$type<"post" | "page">().notNull(),
+    targetId: integer("target_id").notNull(),
+    authorId: integer("author_id"),
+    title: text("title").notNull(),
+    excerpt: text("excerpt"),
+    content: jsonb("content").$type<Block[]>().notNull().default([]),
+    status: text("status").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    targetIdx: index("content_revisions_target_idx").on(t.kind, t.targetId, t.id),
+  }),
+);
+
 export const comments = pgTable(
   "comments",
   {

@@ -1,19 +1,4 @@
-/**
- * Skyscraper token bridge.
- *
- * theme.css paints almost everything from its private --sk-* scale (55
- * --sk-primary consumers, 38 --sk-surface, …) and only aliases the generic
- * panel tokens ONTO that scale (--accent: var(--sk-primary)). The appearance
- * panel saves generic tokens, so without this bridge saved colours change
- * nothing. We derive the private scale from the resolved generic config —
- * same mixWhite / hsl-step math as themes/skyscraper/ArtTint.tsx — and let
- * loaders.ts append the declarations inside rv-theme-vars (loaded after
- * theme.css, so the derived values win).
- *
- * Only tokens that differ from the manifest baseline are emitted, so a
- * fresh install renders exactly theme.css' static scales. Skyscraper-only
- * on purpose: every ported theme owns its own scale.
- */
+// Skyscraper token bridge.
 import type { ThemeConfig } from "./schema.js";
 
 type RGB = [number, number, number];
@@ -113,6 +98,7 @@ export function skyscraperBridgeRoot(
     if (strong) {
       const [h, s, l] = rgbToHsl(strong);
       d.push(`--sk-text-strong:${hsl(h, s + 10, l - 16)}`);
+      // Element shadows follow the text ramp (default scale uses gray-0).
       d.push(`--sk-go0:${rgba(strong, 0)}`);
       d.push(`--sk-go1:${rgba(strong, 0.1)}`);
       d.push(`--sk-go2:${rgba(strong, 0.2)}`);
@@ -189,4 +175,26 @@ export function skyscraperBridgeDark(
   if (d.length && norm(c.accent) !== norm(base.accent) && c.accent)
     d.push(`--accent:${c.accent}`);
   return d.join(";");
+}
+
+const rgbToHex = ([r, g, b]: RGB) =>
+  "#" + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+
+// Browser-UI tint for the resolved background token. Derived, never
+// hardcoded: HSL lightness <= 45% means a dark-only surface, so one
+// unprefixed meta is correct under either OS preference; a light background
+// means the theme ships a night mode, and the dark meta reuses the same
+// hue-preserving L16 derivation skyscraperBridgeDark() applies to --bg, so
+// tint and stylesheet agree by construction. Unparseable input yields "".
+export function themeColorMetas(bg: string | undefined | null): string {
+  const rgb = parseColor(bg);
+  if (!rgb) return "";
+  const light = rgbToHex(rgb);
+  const [h, s, l] = rgbToHsl(rgb);
+  if (l <= 45) return `<meta name="theme-color" content="${light}">`;
+  const dark = hsl(h, clamp(s, 12, 42), 16);
+  return (
+    `<meta name="theme-color" content="${light}" media="(prefers-color-scheme: light)">` +
+    `<meta name="theme-color" content="${dark}" media="(prefers-color-scheme: dark)">`
+  );
 }

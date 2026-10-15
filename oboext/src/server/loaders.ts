@@ -35,7 +35,7 @@ import { getMenuByLocation } from "./menus.js";
 import { getAreaWidgets } from "./widgets.js";
 import { getActiveThemeSlug, getActiveThemeRenderConfig, getActiveThemeSettings, getThemeManifest } from "./themes.js";
 import { themeToCss, resolveThemeConfig } from "./theme-tokens.js";
-import { skyscraperBridgeRoot, skyscraperBridgeDark } from "./theme-bridge.js";
+import { skyscraperBridgeRoot, skyscraperBridgeDark, themeColorMetas } from "./theme-bridge.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { getNotFoundSettings } from "./not-found-config.js";
@@ -311,6 +311,7 @@ async function chromeData(pathname: string) {
     siteDescription: settings.siteDescription ?? "",
     varsHtml,
     siteHead: verificationMetaHtml(settings.verifications),
+    themeColorHtml: themeColorMetas(renderConfig.background),
     siteBodyOpen,
     siteBodyEnd,
     themeSlug,
@@ -371,6 +372,7 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
 
     siteUrl: origin,
     siteHead: isAdmin ? "" : d.siteHead,
+    themeColorHtml: d.themeColorHtml,
     themeHead: d.varsHtml + d.headExtra,
     themeSlug: d.themeSlug,
     cssHref: d.cssHref,
@@ -2031,6 +2033,9 @@ export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unk
       siteDescription: "",
       siteUrl: "",
       themeHead: "",
+      // Admin is dark-only (body carries bg-zinc-950 = #09090b), so a single
+      // unprefixed tint is correct under either OS preference.
+      themeColorHtml: '<meta name="theme-color" content="#09090b">',
       nav: "",
       aside: "",
       footer: "",

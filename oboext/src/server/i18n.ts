@@ -139,6 +139,7 @@ export const zhCatalog: Record<string, string> = {
   "list.all": "全部文章",
   "list.sub": "共 {n} 篇 · 第 {page}/{total} 页",
   "list.category_title": "分类：{name}",
+  "list.tag_title": "标签：#{name}",
   "search.title": "搜索",
   "search.title_q": "搜索：“{q}”",
   "search.title_bm": "搜索 “{q}” · {n} 篇",
@@ -332,6 +333,7 @@ export const enCatalog: Record<string, string> = {
   "list.all": "All posts",
   "list.sub": "{n} posts · page {page} of {total}",
   "list.category_title": "Category: {name}",
+  "list.tag_title": "Tag: #{name}",
   "search.title": "Search",
   "search.title_q": "Search: “{q}”",
   "search.title_bm": "Search “{q}” · {n} posts",
@@ -464,21 +466,6 @@ export function parseAcceptLanguage(header: unknown): Locale[] {
   }
   if (wildcard && !out.includes(DEFAULT_LOCALE)) out.push(DEFAULT_LOCALE);
   return out;
-}
-
-/**
- * Resolve the locale for a request. URL prefix wins (it is the only signal
- * the client can reproduce, which keeps hydration deterministic); the
- * Accept-Language list is consulted next; the default closes the list.
- */
-export function pickLocale(input: {
-  url?: unknown;
-  accept?: unknown;
-}): Locale {
-  const fromUrl = normalizeLocale(input.url);
-  if (fromUrl) return fromUrl;
-  for (const cand of parseAcceptLanguage(input.accept)) return cand;
-  return DEFAULT_LOCALE;
 }
 
 // --------------------------------------------------------------------- paths

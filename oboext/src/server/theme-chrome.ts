@@ -145,6 +145,15 @@ export type ListParts = {
   total?: number;
 
   query?: string;
+
+  /**
+   * The breadcrumb's last item, locale-neutral. The loaders compose the
+   * page title from a translated template ("分类：{name}" / "Category:
+   * {name}"), so stripping the prefix back off with a regex would have to
+   * know every locale's wording; passing the raw term name instead keeps
+   * the crumb correct under any catalog.
+   */
+  crumbLast?: string;
 };
 
 export type PostPageParts = {
@@ -1224,7 +1233,7 @@ function defaultListPage(parts: ListParts): string {
   if (isSearch && (parts.query ?? "").trim()) {
     crumbItems.push({ label: (parts.query ?? "").trim() });
   } else {
-    crumbItems.push({ label: parts.title.replace(/^(分类|标签|搜索)[：:]\s*/, "") || parts.title });
+    crumbItems.push({ label: parts.crumbLast ?? parts.title });
   }
   const backLink =
     `<div class="mb-6">` +

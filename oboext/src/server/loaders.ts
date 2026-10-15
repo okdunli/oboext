@@ -19,6 +19,7 @@ import {
   randomPosts,
   relatedPosts,
   relatedByTaxonomy,
+  getAdjacentPosts,
   searchSingleHit,
   type PostView,
   type PostRow,
@@ -30,6 +31,7 @@ import { resolveVirtualRoute, type VirtualSiteRoute } from "./virtual-routes.js"
 import { resolveCommentConfig } from "./comments-config.js";
 import { getPublishedPageRow, hydrate as hydratePage, listPublishedPages } from "./pages.js";
 import * as R from "./render.js";
+import { adjacentHtml, adjacentKeyOf, adjacentRelLinks } from "./adjacent.js";
 import * as admin from "./admin-loaders.js";
 import { getMenuByLocation } from "./menus.js";
 import { getAreaWidgets } from "./widgets.js";
@@ -1104,6 +1106,10 @@ async function postDetail(
   if (!row) return { notFound: true };
   const themeSlug = await themeSlugP;
   const postId = row.post.id;
+  // 上一篇/下一篇: one UNION ALL statement for both neighbours, issued inside
+  // the reads wave (the key comes off the raw row, so nothing gates it).
+  // adjacentKeyOf mirrors the SQL's coalesce(published_at, created_at).
+  const adjacentP = safe(getAdjacentPosts(postId, adjacentKeyOf(row.post)));
 
   const relatedN = themeSlug === "codeman" || themeSlug === "pseudolinear" ? 5 : 4;
   // Only three themes render `related` (bluemix / pseudolinear / codeman);
@@ -1180,6 +1186,7 @@ async function postDetail(
     bottomItems,
     sideItems,
     sidebarData,
+    adjacent,
   ] = await Promise.all([
     hydratedP,
     bodyHtmlP,
@@ -1198,6 +1205,7 @@ async function postDetail(
       ? getAreaWidgets(themeSlug, "sidebar")
       : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),
     sideDataP ?? Promise.resolve(undefined),
+    adjacentP,
     viewsWrite,
   ]);
   const config = resolveCommentConfig(settings);
@@ -1287,6 +1295,7 @@ async function postDetail(
       tagsHtml,
       defTagsHtml,
       shareHtml,
+      adjacentHtml: adjacentHtml(adjacent),
       blogIndex: blogIndexUrlFor(cfg),
       widgets,
       postBottom,
@@ -1298,6 +1307,9 @@ async function postDetail(
     }),
     head:
       R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl, { wordCount: readWordCount, minutes: readMinutes }) +
+      // rel=prev/next for the reading order (chronological neighbours). Only
+      // present directions are emitted, so edge posts keep the head untouched.
+      adjacentRelLinks(adjacent) +
       pluginHead,
   };
 }

@@ -2,7 +2,13 @@ import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";
 import { setOption } from "./options.js";
-import { memoStrict, memoQuery, invalidate, SIDEBAR_TTL } from "./cache.js";
+import {
+  memoStrict,
+  memoQuery,
+  invalidate,
+  invalidateContentCaches,
+  SIDEBAR_TTL,
+} from "./cache.js";
 import type { PostRow } from "./queries.js";
 import type { Category, Tag, Page } from "./schema.js";
 import { createLogger } from "./logger.js";
@@ -98,6 +104,11 @@ export async function savePermalinkConfig(
   const cfg = normalizePermalinkConfig(input);
   await setOption(OPTION_KEY, cfg);
   invalidatePermalinkConfig();
+  // A base change rewrites every content URL: URLs under the new base that
+  // 404'd before the change are pinned in the path-miss memo for 60s, and
+  // every listing/sidebar/widget render still advertises the old base for
+  // its own TTL. One drop covers both — same cost as a content write.
+  invalidateContentCaches();
   return cfg;
 }
 

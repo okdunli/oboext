@@ -44,3 +44,4 @@ function syncLocaleSwitch(){
 if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",syncLocaleSwitch);}else{syncLocaleSwitch();}
 document.addEventListener("rv:nav",syncLocaleSwitch);
 })();
+(function(){"use strict";function stampLocaleCookie(ev){var a=ev.target;while(a&&a.nodeType===1&&!a.hasAttribute("data-locale-switch"))a=a.parentElement;if(!a)return;var en=/^\/en(?=\/|$)/.test(location.pathname||"/");document.cookie="oboext_locale="+(en?"zh-CN":"en")+"; path=/; max-age=31536000; samesite=lax";}document.addEventListener("click",stampLocaleCookie,true);})();

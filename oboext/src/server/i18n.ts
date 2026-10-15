@@ -535,6 +535,76 @@ export function htmlLangOf(locale: Locale): string {
   return locale === "en" ? "en" : "zh-CN";
 }
 
+// ------------------------------------------------------------ locale memory
+
+/**
+ * Cookie remembering an explicit language choice. The URL prefix stays the
+ * only RENDER signal (SSR and hydration must agree without a round-trip);
+ * this cookie only decides where a prefix-free URL should LAND: a visitor
+ * who picked English is sent to /en once per session instead of silently
+ * falling back to the default locale. A stale or foreign value is ignored,
+ * so the cookie can never poison the resolution below the URL prefix.
+ */
+export const LOCALE_COOKIE = "oboext_locale";
+
+/** One year, in seconds — long enough to outlive a browser restart. */
+const LOCALE_COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
+
+/** Set-Cookie VALUE recording the locale. Written by the switcher (client)
+ * and by the middleware redirect (server), so both paths stay in sync. */
+export function localeCookieValue(locale: Locale): string {
+  return [
+    `${LOCALE_COOKIE}=${locale}`,
+    "SameSite=Lax",
+    "Path=/",
+    `Max-Age=${LOCALE_COOKIE_MAX_AGE}`,
+    ...(process.env.NODE_ENV === "production" ? ["Secure"] : []),
+  ].join("; ");
+}
+
+/**
+ * The remembered locale from a raw Cookie header, or null. Tolerates the
+ * whole header (other cookies ride along), surrounding whitespace, and
+ * percent-encoding; an unknown value yields null so callers fall through
+ * to the next signal.
+ */
+export function localeFromCookieHeader(header: unknown): Locale | null {
+  if (typeof header !== "string" || !header) return null;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() !== LOCALE_COOKIE) continue;
+    let raw = part.slice(eq + 1).trim();
+    try {
+      raw = decodeURIComponent(raw);
+    } catch (e) {
+      /* keep the raw bytes; normalizeLocale rejects anything unknown */
+    }
+    return normalizeLocale(raw);
+  }
+  return null;
+}
+
+/**
+ * Resolve the locale for a request: the URL prefix wins (it is what the
+ * visitor sees and shares), then an explicit cookie choice, then the
+ * browser's Accept-Language, then the default. The prefixed locales are
+ * the only ones worth remembering — the default is already prefix-free,
+ * so remembering it changes nothing.
+ */
+export function resolveLocale(input: {
+  url?: unknown;
+  cookie?: unknown;
+  accept?: unknown;
+}): Locale {
+  const fromUrl = splitLocalePath(input.url);
+  if (fromUrl.prefixed) return fromUrl.locale;
+  const fromCookie = localeFromCookieHeader(input.cookie);
+  if (fromCookie && fromCookie !== DEFAULT_LOCALE) return fromCookie;
+  for (const cand of parseAcceptLanguage(input.accept)) return cand;
+  return DEFAULT_LOCALE;
+}
+
 // ------------------------------------------------------------------ rendering
 
 export type Translate = (key: string, vars?: Record<string, string | number>) => string;

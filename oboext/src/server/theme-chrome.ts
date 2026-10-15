@@ -945,7 +945,7 @@ function defaultPostCard(p: PostView, idx: number): string {
   const author = esc(p.author?.name ?? "未知作者");
   return `<article class="group flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] transition hover:-translate-y-0.5 hover:border-[var(--accent)]">` +
     (p.featuredImage
-      ? `<a href="${esc(p.url)}" class="block aspect-[16/9] overflow-hidden"><img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105" loading="lazy"></a>`
+      ? `<a href="${esc(p.url)}" class="block aspect-[16/9] overflow-hidden"><img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105"${R.imgPerfAttrs(p.featuredImage, { lazy: true, srcset: true })}></a>`
       : "") +
     `<div class="flex flex-1 flex-col p-5">` +
     (cats ? `<div class="mb-2 flex flex-wrap gap-2 text-xs">${cats}</div>` : "") +
@@ -976,7 +976,7 @@ function defaultHome(parts: HomeParts): string {
     const cats = ((featured.categories || []).slice(0, 3).map(defaultCatPill)).join("");
     featuredHtml = `<article class="group overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--surface)]">` +
       (featured.featuredImage
-        ? `<a href="${esc(featured.url)}" class="block aspect-[21/9] overflow-hidden"><img src="${esc(featured.featuredImage)}" alt="${esc(featured.title)}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105" loading="lazy"></a>`
+        ? `<a href="${esc(featured.url)}" class="block aspect-[21/9] overflow-hidden"><img src="${esc(featured.featuredImage)}" alt="${esc(featured.title)}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105"${R.imgPerfAttrs(featured.featuredImage, { lazy: true, srcset: true })}></a>`
         : "") +
       `<div class="p-6">${cats ? `<div class="mb-2 flex flex-wrap gap-2 text-xs">${cats}</div>` : ""}` +
       `<h2 class="text-2xl font-bold leading-snug text-[var(--text)]"><a href="${esc(featured.url)}" class="transition group-hover:text-[var(--accent)]">${esc(featured.title)}</a></h2>` +
@@ -1354,7 +1354,7 @@ function defaultPostPage(parts: PostPageParts): string {
     `<span class="df-meta-item" data-views-post="${p.id}">${lucideSvg("eye", 14)}<span data-views-count>${p.views}</span> 阅读</span>` +
     (p.commentsCount > 0 ? `<span class="df-meta-item">${lucideSvg("message-circle", 14)}${p.commentsCount} 评论</span>` : "") +
     `</div>${meta}</header>` +
-    (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="mb-6 w-full rounded-2xl border border-[var(--border)] object-cover">` : "") +
+    (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="mb-6 w-full rounded-2xl border border-[var(--border)] object-cover"${R.imgPerfAttrs(p.featuredImage, { high: true, srcset: true })}>` : "") +
     tocHtml +
     `<div class="prose-cms">${parts.bodyHtml}</div>` +
     (tags || "") +
@@ -2401,7 +2401,7 @@ function bmixHeroScene(p: PostView, i: number): string {
   const darkCls = t.dark ? " is-dark" : "";
   const role = i === 0 ? "current" : i === 1 ? "future-0" : i === 2 ? "future-1" : i === 3 ? "past-0" : "past-1";
   const img = p.featuredImage
-    ? `<img class="bg" src="${esc(p.featuredImage)}" alt="${esc(title1)}" loading="eager">`
+    ? `<img class="bg" src="${esc(p.featuredImage)}" alt="${esc(title1)}"${R.imgPerfAttrs(p.featuredImage, { high: true, srcset: true })}>`
     : "";
   const meta = `<div class="metas"><span>${bmixIc("heart", 12)} ${p.likes ?? 0}</span>` +
     `<span class="ml-8">${bmixIc("comments", 12)} ${p.commentsCount ?? 0}</span>` +
@@ -2415,7 +2415,7 @@ function bmixHeroScene(p: PostView, i: number): string {
     `<div class="main-title ${title2 ? "type-2" : "type-1 truncate"}"><span class="block truncate">${esc(title1)}</span>` +
     (title2 ? `<span class="block truncate">${esc(title2)}</span>` : "") +
     `</div>${meta}</div>` +
-    (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="">` : "") +
+    (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt=""${R.imgPerfAttrs(p.featuredImage, { srcset: true })}>` : "") +
     `</div></div></a></div>`;
 }
 

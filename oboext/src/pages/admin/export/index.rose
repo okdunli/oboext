@@ -40,3 +40,79 @@
     <button class="adm-btn" type="submit"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/download.svg)"></span>开始导出</button>
   </div>
 </form>
+
+<div class="adm-card" style="margin-top:16px;" data-adm-import>
+  <div class="adm-card-hd"><strong style="font-size:14px;">内容导入</strong><span class="adm-hint" style="margin-left:auto">支持本站导出的 JSON，或 Markdown（<code>## 标题</code> + <code>- 别名：</code> 元信息，与导出一致）</span></div>
+  <div class="adm-card-bd" style="display:grid;gap:10px;">
+    <input type="file" id="imp-file" accept=".json,.md,.markdown,.txt">
+    <label class="adm-switch" style="margin:0;"><span><span class="t">跳过已存在</span><span class="d">别名已存在时保留线上版本，只导入新条目</span></span><input type="radio" name="imp-policy" value="skip" checked></label>
+    <label class="adm-switch" style="margin:0;"><span><span class="t">覆盖已存在</span><span class="d">别名已存在时用导入内容覆盖（覆盖前会自动留存历史版本）</span></span><input type="radio" name="imp-policy" value="overwrite"></label>
+    <p class="adm-hint" style="margin:0;">导入范围仅标题/别名/状态/摘要/正文/发布时间；分类、标签与评论请用「备份恢复」或重新配置。建议先「预演导入」核对数量与冲突。</p>
+    <div class="adm-toolbar">
+      <span style="flex:1"></span>
+      <button class="adm-btn adm-btn-ghost" type="button" id="imp-dry">预演导入</button>
+      <button class="adm-btn" type="button" id="imp-run">执行导入</button>
+    </div>
+    <div class="adm-hint" id="imp-out" style="margin:0;white-space:pre-wrap;"></div>
+  </div>
+</div>
+
+<script>
+  (function () {
+    var box = document.querySelector("[data-adm-import]");
+    if (!box || box.__impBound) return;
+    box.__impBound = true;
+    var out = box.querySelector("#imp-out");
+    var fileInput = box.querySelector("#imp-file");
+    function policy() {
+      var r = box.querySelector('input[name="imp-policy"]:checked');
+      return r ? r.value : "skip";
+    }
+    function say(text) {
+      out.textContent = text;
+    }
+    function describe(data) {
+      var lines = [];
+      var p = data.posts || {}, g = data.pages || {};
+      lines.push("格式：" + (data.format === "markdown" ? "Markdown" : "JSON"));
+      lines.push("文章：共 " + p.total + " 条，可新建 " + p.creates + " 条，冲突 " + p.conflicts + " 条，无效 " + p.issues + " 条");
+      if (g.total) lines.push("页面：共 " + g.total + " 条，可新建 " + g.creates + " 条，冲突 " + g.conflicts + " 条，无效 " + g.issues + " 条");
+      if (data.applied) {
+        var a = data.applied;
+        lines.push("已执行：文章 新建 " + a.posts.created + " / 覆盖 " + a.posts.updated + " / 跳过 " + a.posts.skipped +
+          (g.total ? "；页面 新建 " + a.pages.created + " / 覆盖 " + a.pages.updated + " / 跳过 " + a.pages.skipped : ""));
+        if (a.errors && a.errors.length) lines.push("失败 " + a.errors.length + " 条：" + a.errors.slice(0, 5).join("；"));
+      }
+      if (data.issues && data.issues.length) {
+        lines.push("无效条目：" + data.issues.slice(0, 5).map(function (i) {
+          return (i.title || "#" + i.index) + "（" + i.reason + "）";
+        }).join("；"));
+      }
+      return lines.join("\n");
+    }
+    async function run(dry) {
+      var f = fileInput.files && fileInput.files[0];
+      if (!f) { say("请先选择文件"); return; }
+      if (!dry && !confirm("确认执行导入？此操作会写入内容，可用历史版本回滚。")) return;
+      var fd = new FormData();
+      fd.append("file", f);
+      fd.append("policy", policy());
+      if (dry) fd.append("dryRun", "1");
+      say("处理中…");
+      try {
+        var r = await fetch("/api/admin/import", { method: "POST", credentials: "same-origin", body: fd });
+        var data = null;
+        try { data = await r.json(); } catch (e) {}
+        if (!r.ok) {
+          say("导入失败（" + r.status + "）：" + ((data && data.error) || "未知错误"));
+          return;
+        }
+        say(describe(data));
+      } catch (e) {
+        say("导入请求失败：" + String(e));
+      }
+    }
+    box.querySelector("#imp-dry").addEventListener("click", function () { run(true); });
+    box.querySelector("#imp-run").addEventListener("click", function () { run(false); });
+  })();
+</script>

@@ -570,23 +570,32 @@ export type PostRow = {
   authorId: number | null;
 };
 
-export async function hydrate(row: PostRow): Promise<PostView> {
-  const [cfg, tax, metas] = await Promise.all([
-    getPermalinkConfig(),
-    attachTaxonomies([row.post.id]),
-    getPostMetas(row.post.id),
-  ]);
-  const item: PostView = withUsableCover({
-    ...row.post,
-    url: postUrlFor(cfg, row.post),
-    author: row.authorId
-      ? { id: row.authorId, name: row.authorName!, email: row.authorEmail! }
-      : null,
-    categories: (tax.categories[row.post.id] ?? []).map((c) => ({ ...c, url: categoryUrlFor(cfg, c) })),
-    tags: (tax.tags[row.post.id] ?? []).map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
-    metas,
+/**
+ * Hydrate a raw post row into a public view (taxonomies + metas + author +
+ * url). Memoized (SWR, SIDEBAR_TTL) under `hydr:` — the two reads it joins are
+ * per-render cost on every cold post view, and the row it starts from is
+ * already memoized at `rp:`. `preview` is part of the key: a draft hydrated
+ * for its author must never be served to a public reader from the same entry.
+ */
+export async function hydrate(row: PostRow, opts: { preview?: boolean } = {}): Promise<PostView> {
+  return memoQuery(`hydr:${row.post.id}:${opts.preview ? 1 : 0}`, SIDEBAR_TTL, async () => {
+    const [cfg, tax, metas] = await Promise.all([
+      getPermalinkConfig(),
+      attachTaxonomies([row.post.id]),
+      getPostMetas(row.post.id),
+    ]);
+    const item: PostView = withUsableCover({
+      ...row.post,
+      url: postUrlFor(cfg, row.post),
+      author: row.authorId
+        ? { id: row.authorId, name: row.authorName!, email: row.authorEmail! }
+        : null,
+      categories: (tax.categories[row.post.id] ?? []).map((c) => ({ ...c, url: categoryUrlFor(cfg, c) })),
+      tags: (tax.tags[row.post.id] ?? []).map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
+      metas,
+    });
+    return item;
   });
-  return item;
 }
 
 /**
@@ -643,7 +652,7 @@ export async function getPostRow(tail: string, opts: { preview?: boolean } = {})
  *  getPostRow + hydrate directly so the hydration reads ride its wave. */
 export async function getPost(tail: string, opts: { preview?: boolean } = {}): Promise<PostView | null> {
   const row = await getPostRow(tail, opts);
-  return row ? hydrate(row) : null;
+  return row ? hydrate(row, opts) : null;
 }
 
 /** Public single-post read by numeric id (published only); null when absent

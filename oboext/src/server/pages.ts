@@ -149,8 +149,14 @@ async function takenSlugs(base: string): Promise<Set<string>> {
 }
 
 export async function hydrate(row: Page): Promise<PageView> {
-  const [metas, cfg] = await Promise.all([getPageMetas(row.id), getPermalinkConfig()]);
-  return { ...row, url: pageUrlFor(cfg, row), metas };
+  // Memoized (SWR, SIDEBAR_TTL) under `pgh:` for the same reason the post
+  // hydrate is: the metas read is per-render cost on every cold page view.
+  // The status is part of the key — adminGetPage hydrates drafts, and a draft
+  // must never be served to a public reader from a shared entry.
+  return memoQuery(`pgh:${row.id}:${row.status}`, SIDEBAR_TTL, async () => {
+    const [metas, cfg] = await Promise.all([getPageMetas(row.id), getPermalinkConfig()]);
+    return { ...row, url: pageUrlFor(cfg, row), metas };
+  });
 }
 
 // ------------------------------------------------------------------- public

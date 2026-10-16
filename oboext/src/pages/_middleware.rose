@@ -50,8 +50,16 @@
     // Browser-side loader fetches hit /api/data from whatever admin page the
     // user is on; x-rv-url carries THAT page's URL so the loader context
     // (active nav, pathname gates) is correct. Server-side calls dispatch in
-    // process and never send the header.
-    const rv = request.headers.get("x-rv-url");
+    // process and never send the header. On the data endpoint the same value
+    // also rides the query as ?rv= (the client sends both): the prod hot cache
+    // keys on pathname+query+cookie only (BUG.md AB), so the page URL must be
+    // INSIDE the key or one page's loader fragment is replayed to another.
+    // The query wins when both exist - it is the dimension the cache key
+    // actually uses, so the key and the render signal can never diverge.
+    const rv =
+      (p === "/api/data" && u.searchParams.get("rv")) ||
+      request.headers.get("x-rv-url") ||
+      "";
     let real = u;
     if (rv) {
       try {

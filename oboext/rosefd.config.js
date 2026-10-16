@@ -6,7 +6,11 @@
  *     - esc(): standard interpolation escape for hand-written calls inside
  *       component scripts (template expressions go through the runtime esc);
  *     - __rvLoad: server -> server loader registry (globalThis, populated by
- *       pages/api/data.rose), browser -> GET /api/data JSON;
+ *       pages/api/data.rose), browser -> GET /api/data JSON. The browser URL
+ *       carries the page as BOTH the x-rv-url header and the ?rv= query: the
+ *       prod hot cache keys on pathname+query+cookie only (BUG.md AB), so the
+ *       page URL must be inside the key or one page's loader fragment is
+ *       replayed to another (stale nav highlight, stale chrome context).;
  *     - __rvQs: server -> $query() (per-request query set by setQuery before
  *       each render; reliable under isolated render/ALS), browser -> $query()
  *       (parses location.search). Never read getContext().query: that bag is
@@ -47,7 +51,7 @@ function __rvQs() {
 function __rvLoad(key, payload) {
   return typeof window !== "undefined"
     ? fetch(
-        "/api/data?r=" + encodeURIComponent(key) + "&d=" + encodeURIComponent(JSON.stringify(payload || {})),
+        "/api/data?r=" + encodeURIComponent(key) + "&d=" + encodeURIComponent(JSON.stringify(payload || {})) + "&rv=" + encodeURIComponent(window.location.pathname + window.location.search),
         {
           headers: {
             accept: "application/json",

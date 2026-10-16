@@ -1718,7 +1718,14 @@ function escXml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-async function feed(ctx: Ctx): Promise<string> {
+/**
+ * The RSS feed for a locale. The channel identity (title/description) is site
+ * data and stays as configured; what changes per locale is the <language>, the
+ * channel link and every item link — an English subscriber must not receive
+ * links back into the zh tree.
+ */
+async function feed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
+  const en = locale === "en";
   const settings = await getSettings();
   const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
   // feedContent=full ships the body: listPosts strips content by default, so
@@ -1742,10 +1749,13 @@ async function feed(ctx: Ctx): Promise<string> {
         const cats = "author" in p && p.tags?.length
           ? p.tags.map((t) => `\n      <category>${escXml(t.name)}</category>`).join("")
           : "";
+        // Item links are locale-aware: the en feed points at /en pages, so an
+        // English subscriber never gets links back into the zh tree.
+        const itemUrl = `${escXml(ctx.origin)}${escXml(canonicalPath(p.url, locale))}`;
         const media = p.featuredImage ? `\n      ${R.mediaImageTag(p.featuredImage, ctx.origin)}` : "";
         return (
-          `    <item>\n      <title>${escXml(p.title)}</title>\n      <link>${escXml(ctx.origin)}${escXml(p.url)}</link>` +
-          `\n      <guid>${escXml(ctx.origin)}${escXml(p.url)}</guid>` +
+          `    <item>\n      <title>${escXml(p.title)}</title>\n      <link>${itemUrl}</link>` +
+          `\n      <guid>${itemUrl}</guid>` +
           `\n      <pubDate>${(p.publishedAt ? new Date(p.publishedAt) : new Date()).toUTCString()}</pubDate>` +
           `\n      <description>${escXml(p.excerpt ?? "")}</description>${media}${cats}${extra}\n    </item>`
         );
@@ -1756,9 +1766,9 @@ async function feed(ctx: Ctx): Promise<string> {
 <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:media="http://search.yahoo.com/mrss/">
   <channel>
     <title>${escXml(settings.siteTitle ?? "")}</title>
-    <link>${escXml(ctx.origin)}</link>
+    <link>${escXml(ctx.origin)}${escXml(canonicalPath("/", locale))}</link>
     <description>${escXml(settings.siteDescription ?? "")}</description>
-    <language>zh-CN</language>
+    <language>${en ? "en" : "zh-CN"}</language>
 ${xmlItems}
   </channel>
 </rss>`;

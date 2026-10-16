@@ -1,4 +1,7 @@
 <script>
+  // The bundle mode is per-app: 0.1.8 requires the declaration in the root
+  // layout (it used to sit in the catch-all page).
+  export const bundle = 'split';
   // Theme-aware chrome shell. rosezm memoizes $data by the loader function's source text, so distinct loader calls memoize independently.
   let chrome = $data(() => __rvLoad("chrome", { admin: adminPath() }));
 

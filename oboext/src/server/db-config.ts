@@ -1,7 +1,7 @@
 // Installer database/storage configuration — ported from app/api/db-config/route.ts.
 import fs from "fs";
 import path from "path";
-import { ensureMigrations, reconfigureDatabase } from "./db.js";
+import { ensureMigrations, reconfigureDatabase, importDriver } from "./db.js";
 import { invalidateOptionCache } from "./options.js";
 import { invalidateAll } from "./cache.js";
 import { invalidateSettings } from "./queries.js";
@@ -12,7 +12,7 @@ const ENV_CONFIG = path.resolve(process.cwd(), ".env.local");
 
 async function verifyPostgres(url: string): Promise<string | null> {
   // Non-literal specifier keeps `postgres` out of the esbuild bundle.
-  const postgres = (await import("post" + "gres")).default;
+  const postgres = (await importDriver("post" + "gres")).default;
   const client = postgres(url, { max: 1, connect_timeout: 5 });
   try {
     await client`select version()`;

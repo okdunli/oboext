@@ -29,6 +29,6 @@
           "set-cookie": `${CAPTCHA_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`,
         },
       });
-    });
+    }, t);
   }
 </script>

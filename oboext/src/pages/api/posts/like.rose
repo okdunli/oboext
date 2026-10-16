@@ -12,6 +12,6 @@
       if (!Number.isInteger(id) || id <= 0) return jsonFail(t("api.bad_request"), 422);
       const likes = await likePost(id);
       return { likes };
-    });
+    }, t);
   }
 </script>

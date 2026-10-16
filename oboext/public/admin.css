@@ -401,6 +401,8 @@ a.adm-stat:hover { border-color: var(--adm-accent); background: var(--adm-panel-
 .adm-table .title { font-weight: 600; }
 .adm-table .sub { color: var(--adm-faint); font-size: 12px; margin-top: 2px; }
 .adm-table .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.adm-mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: #818cf8; }
+.adm-icons-grid .adm-ic { width: 18px; height: 18px; }
 .adm-iconbtn {
   display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   white-space: nowrap; flex: 0 0 auto;

@@ -1,24 +1,18 @@
 <script>
-  // POST /api/auth/logout — clears cms_session and its CSRF token. Safe to
-  // call while unsigned: with no session cookie there is nothing to forge, so
-  // the middleware lets this through without a token (see csrf.ts).
+  // POST /api/auth/logout — clears cms_session and its CSRF token.
   import { apiGate } from "@server/admin";
   import { clearCookiePair } from "@server/csrf";
 
   export async function POST() {
-    return apiGate(
-      async () =>
-        new Response("{}", {
-          status: 200,
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-            // Both cookies, as an array. Leaving cms_csrf behind would be
-            // harmless in itself (it is derived from the session, so a stale
-            // value simply fails to verify), but a token that outlives its
-            // session is the kind of thing that later looks like a bug.
-            "set-cookie": clearCookiePair(),
-          },
-        }),
-    );
+    return apiGate(async () => {
+      // Both cookies must go as separate headers - a collapsed array leaves
+      // one of them behind (BUG.md entry Y).
+      const res = new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+      for (const v of clearCookiePair()) res.headers.append("set-cookie", v);
+      return res;
+    });
   }
 </script>

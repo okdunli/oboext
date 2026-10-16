@@ -1,95 +1,91 @@
 <script>
-  // First-run installer (pixel-port of app/admin/setup/page.tsx): database
-  // driver + image storage radio cards, site info, first admin. The submit
-  // flow (admin.js, data-adm-form="setup") POSTs /api/db-config first, then
-  // /api/setup. Shown only while the users table is empty — the middleware
-  // redirects /admin/setup away afterwards.
-  // The session binding keeps this route dynamic (per-request render, never
-  // prerendered at build time where there is no request context).
-  let session = $data(() => __rvLoad("admin.session", {}));
+  // First-run installer (pixel-port of app/admin/setup/page.tsx): database driver + image storage radio cards, site info, first admin.
+  // Every string comes from the admin.setup loader, which renders in the
+  // browser's language (Accept-Language - no site preference exists yet).
+  let su = $data(() => __rvLoad("admin.setup", {}));
 </script>
 
 <head>
-  <title>初始化 - Oboext</title>
+  <title>{su().s.docTitle}</title>
 </head>
 
 <div class="su-wrap">
-  <form class="su-card" data-adm-form="setup" novalidate>
-    <h1 class="su-title">初始化 Oboext</h1>
-    <p class="su-lead">检测到系统尚未配置，请创建管理员账号并填写站点信息。</p>
+  <form class="su-card" data-adm-form="setup" data-su-locale="{su().locale}" novalidate>
+    <h1 class="su-title">{su().s.title}</h1><div id="dbg-al" style="display:none">{su().acceptLanguageDbg}</div>
+    <p class="su-lead">{su().s.lead}</p>
 
     <fieldset class="su-group">
-      <legend>数据库</legend>
+      <legend>{su().s.db}</legend>
       <div class="su-radios">
         <label class="su-radio is-on" data-su-card="driver-pglite">
           <input type="radio" name="driver" value="pglite" checked data-su="driver">
-          本地内置 (PGlite)
+          {su().s.dbPglite}
         </label>
         <label class="su-radio" data-su-card="driver-postgres">
           <input type="radio" name="driver" value="postgres" data-su="driver">
-          远程数据库
+          {su().s.dbPostgres}
         </label>
       </div>
       <div class="su-panel" data-su-panel="driver-pglite">
-        <p class="su-hint">推荐：零配置、无需外部服务，数据保存在本地 .data 目录。</p>
+        <p class="su-hint">{su().s.dbPgliteHint}</p>
       </div>
       <div class="su-panel" data-su-panel="driver-postgres" hidden>
         <code class="su-code">postgresql://user:pass@host:5432/dbname?sslmode=require</code>
-        <label class="su-label">连接串</label>
+        <label class="su-label">{su().s.dbUrl}</label>
         <input class="adm-input su-input" name="dbUrl" placeholder="postgresql://…" spellcheck="false">
       </div>
     </fieldset>
 
     <fieldset class="su-group">
-      <legend>图片存储</legend>
+      <legend>{su().s.storage}</legend>
       <div class="su-radios">
         <label class="su-radio is-on" data-su-card="storage-local">
           <input type="radio" name="storage" value="local" checked data-su="storage">
-          本地 (方案 A)
+          {su().s.storageLocal}
         </label>
         <label class="su-radio" data-su-card="storage-vercel-blob">
           <input type="radio" name="storage" value="vercel-blob" data-su="storage">
-          Vercel Blob (方案 B)
+          {su().s.storageBlob}
         </label>
       </div>
       <div class="su-panel" data-su-panel="storage-local">
-        <p class="su-hint">图片写入 content/uploads 并随 Git 提交，由 Vercel 构建部署。适合静态、少量图片。</p>
+        <p class="su-hint">{su().s.storageLocalHint}</p>
       </div>
       <div class="su-panel" data-su-panel="storage-vercel-blob" hidden>
-        <p class="su-hint">后台传图自动上云，无需手动 Git 提交，适合频繁传图。免费额度内够用，超量后按量计费。令牌在 Vercel 面板的 Storage → Blob 中创建：</p>
-        <label class="su-label">BLOB_READ_WRITE_TOKEN</label>
+        <p class="su-hint">{su().s.storageBlobHint}</p>
+        <label class="su-label">{su().s.blobToken}</label>
         <input class="adm-input su-input" name="blobToken" placeholder="vercel_blob_rw_…" spellcheck="false">
       </div>
     </fieldset>
 
     <fieldset class="su-group">
-      <legend>站点信息</legend>
-      <label class="su-label">站点名称</label>
+      <legend>{su().s.site}</legend>
+      <label class="su-label">{su().s.siteTitle}</label>
       <input class="adm-input su-input" name="siteTitle" value="Oboext" required>
-      <label class="su-label">站点描述</label>
-      <input class="adm-input su-input" name="siteDescription" value="致力于极致性能的开源博客系统">
-      <label class="su-label">副标题 / 标语</label>
+      <label class="su-label">{su().s.siteDesc}</label>
+      <input class="adm-input su-input" name="siteDescription" value="{su().s.siteDescDefault}">
+      <label class="su-label">{su().s.tagline}</label>
       <input class="adm-input su-input" name="tagline">
-      <label class="su-label">页脚文字</label>
+      <label class="su-label">{su().s.footer}</label>
       <input class="adm-input su-input" name="footerText">
     </fieldset>
 
     <fieldset class="su-group su-group-last">
-      <legend>管理员账号</legend>
-      <label class="su-label">登录邮箱</label>
+      <legend>{su().s.admin}</legend>
+      <label class="su-label">{su().s.email}</label>
       <input class="adm-input su-input" type="email" name="email" autocomplete="username" placeholder="you@example.com" required autofocus>
-      <label class="su-label">用户昵称</label>
-      <input class="adm-input su-input" name="name" autocomplete="nickname" placeholder="用于后台与文章署名">
-      <label class="su-label">登录密码（至少 8 位）</label>
+      <label class="su-label">{su().s.name}</label>
+      <input class="adm-input su-input" name="name" autocomplete="nickname" placeholder="{su().s.namePh}">
+      <label class="su-label">{su().s.password}</label>
       <input class="adm-input su-input" type="password" name="password" autocomplete="new-password" minlength="8" required>
     </fieldset>
 
     <p class="su-error" data-setup-error hidden></p>
 
     <button class="adm-btn adm-btn-block su-submit" type="submit">
-      <span data-setup-label>完成初始化</span>
+      <span data-setup-label>{su().s.submit}</span>
     </button>
 
-    <p class="su-back"><a href="/" style="display:inline-flex;align-items:center;gap:5px"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-left.svg)"></span>返回站点首页</a></p>
+    <p class="su-back"><a href="/" style="display:inline-flex;align-items:center;gap:5px"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-left.svg)"></span>{su().s.back}</a></p>
   </form>
 </div>

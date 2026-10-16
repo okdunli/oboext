@@ -1,17 +1,18 @@
 <script>
-  // Installer-only database/storage configuration (ported from
-  // app/api/db-config/route.ts): verifies a remote Postgres, merges
-  // .env.local, hot-swaps the running DB. Refuses once setup is complete.
+  // Installer-only database/storage configuration (ported from app/api/db-config/route.ts): verifies a remote Postgres.
   import { apiGate, jsonFail, readBody } from "@server/admin";
   import { applyDbConfig } from "@server/db-config";
   import { hasAnyUser } from "@server/auth";
+  import { makeT, headerLocale } from "@server/i18n";
 
   export async function POST(request) {
+    // Installer surface: same x-locale contract as /api/setup.
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
-      if (await hasAnyUser()) return jsonFail("系统已初始化", 403);
+      if (await hasAnyUser()) return jsonFail(t("api.setup_already"), 403);
       const body = await readBody(request);
       const result = await applyDbConfig(body);
       return Response.json(result);
-    });
+    }, t);
   }
 </script>

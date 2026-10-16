@@ -1,11 +1,10 @@
 <script>
-  // First-run setup: GET reports whether the instance still needs its first
-  // admin; POST creates that admin, bootstraps site info, and immediately
-  // opens the session. Only valid while the users table is empty
-  // (createFirstAdmin enforces it). Mirrors app/api/setup/route.ts.
+  // First-run setup: GET reports whether the instance still needs its first admin; POST creates that admin, bootstraps site info.
   import { apiGate, jsonFail, readBody, bootstrapSiteSettings } from "@server/admin";
   import { hasAnyUser, createFirstAdmin } from "@server/auth";
-  import { sessionCookiePair } from "@server/csrf";
+  import { passwordError } from "@server/password-policy";
+  import { sessionCookiePair, withCookies } from "@server/csrf";
+  import { makeT, headerLocale } from "@server/i18n";
 
   export async function GET() {
     return apiGate(async () => {
@@ -17,8 +16,12 @@
   }
 
   export async function POST(request) {
+    // The installer is the ONE anonymous surface with no locale cookie yet:
+    // the request translator comes from the x-locale header the installer
+    // stamps (its own language was detected from Accept-Language).
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
-      if (await hasAnyUser()) return jsonFail("系统已初始化", 403);
+      if (await hasAnyUser()) return jsonFail(t("api.setup_already"), 403);
       const body = await readBody(request);
       const email = String(body.email || "").trim();
       const name = String(body.name || "").trim();
@@ -28,25 +31,26 @@
       const tagline = String(body.tagline || "").trim();
       const footerText = String(body.footerText || "").trim();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-        return jsonFail("请输入合法邮箱", 422);
-      if (password.length < 8) return jsonFail("密码至少 8 位", 422);
-      // The display name is optional in the installer: the email IS the login,
-      // and a first-run owner should not have to invent a handle to get going.
-      // Fall back to the mailbox's local part so the admin list, the article
-      // signature and the session cookie all still carry something readable.
+        return jsonFail(t("api.email_invalid"), 422);
+      // The full password policy, with its keyed violations, instead of a
+      // bare length check - createFirstAdmin applies the same rules a moment
+      // later, and the keys are what let an English install read them.
+      const pwErr = passwordError(password, { email, name });
+      if (pwErr) return jsonFail(t(pwErr.key, pwErr.params), 422);
+      // The display name is optional in the installer: the email IS the login, and a first-run owner should not have to invent a handle to get going.
       const user = await createFirstAdmin({
         email,
         name: name || email.split("@")[0],
         password,
       });
       await bootstrapSiteSettings({ siteTitle, siteDescription, tagline, footerText });
-      return new Response(JSON.stringify({ user }), {
-        status: 201,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "set-cookie": await sessionCookiePair(user),
-        },
-      });
-    });
+      return withCookies(
+        new Response(JSON.stringify({ user }), {
+          status: 201,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        }),
+        await sessionCookiePair(user),
+      );
+    }, t);
   }
 </script>

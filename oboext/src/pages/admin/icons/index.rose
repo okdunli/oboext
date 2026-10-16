@@ -5,6 +5,7 @@
   function pascal(k) {
     return k.split("-").map((s) => (s ? s.slice(0, 1).toUpperCase() + s.slice(1) : "")).join("");
   }
+  function head() { return names().slice(0, 48); }
   function count() { return names().length; }
 </script>
 
@@ -23,18 +24,19 @@
   <input class="adm-input" data-ic-search placeholder="搜索标识符或名称…" style="max-width:260px;" spellcheck="false" autocomplete="off">
 </div>
 
-<div class="adm-card adm-table-wrap">
+<div class="adm-card adm-table-wrap adm-icons-grid adm-icons-scroll">
   <table class="adm-table" data-ic-table>
+    <colgroup><col style="width:64px"><col><col><col style="width:80px"></colgroup>
     <thead>
       <tr>
-        <th style="width:64px">图标</th>
+        <th>图标</th>
         <th>标识符</th>
         <th>组件名</th>
-        <th style="width:80px"></th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
-      {#each names() as k}
+      {#each head() as k}
       <tr data-ic-row>
         <td><span class="adm-ic" style="--i:url(/public/icons/{k}.svg);"></span></td>
         <td class="adm-mono">{k}</td>

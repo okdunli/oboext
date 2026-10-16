@@ -2,10 +2,15 @@
 
   import { apiGate, jsonFail } from "@server/admin";
   import { getAdminSecurity, isEntryReferer } from "@server/security";
-  import { makeT, apiLocale } from "@server/i18n";
+  import { makeT, headerLocale } from "@server/i18n";
+
+  // The 404 body is localized on the client-stamped x-locale header, and this
+  // response is storable, so the header has to be a cache-key dimension or the
+  // first caller's language wins the shared entry (BUG.md AB).
+  export const hotVary = ["x-locale"];
 
   export async function GET(request) {
-    const t = makeT(apiLocale(request));
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const sec = await getAdminSecurity();
       if (!isEntryReferer(request, sec)) return jsonFail(t("api.no_entry"), 404);

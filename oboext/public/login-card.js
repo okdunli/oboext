@@ -126,7 +126,7 @@ function refreshCaptcha(){
   if(form.captcha)form.captcha.value="";
   if(form.captchaToken)form.captchaToken.value="";
 }
-api("GET","/api/captcha?l="+encodeURIComponent(loc(root)),undefined,root).then(function(cfg){
+api("GET","/api/captcha",undefined,root).then(function(cfg){
   st.captchaOn=!!cfg.enabled;
   var box=root.querySelector("[data-login-captcha]");
   if(!box||!st.captchaOn)return;

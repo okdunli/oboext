@@ -14,6 +14,16 @@
   import { createLogger } from "@server/logger";
   const log = createLogger("data-api");
 
+  // The fragment a loader answers depends on the page it was requested for -
+  // the browser stamps it on the x-rv-url header and the middleware turns it
+  // into ctx.pathname (admin nav highlight, chrome locale hrefs). That makes
+  // it a negotiation dimension of a storable response, so it has to ride the
+  // cache key (BUG.md AB). The response also carries no-store, which the
+  // store refuses today; the declaration is what keeps it correct if that is
+  // ever relaxed, and the client's &rv= tag stays as the fallback for a
+  // request that arrives without the header.
+  export const hotVary = ["x-rv-url"];
+
   // Lazy: the framework's build imports dist/server.js for route analysis; touching the DB at module top level would make builds require a DB.
   let readyPromise;
   // WithDbRetry, not a bare call: a serverless Postgres drops the connection of a suspended compute during the TLS handshake.

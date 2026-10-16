@@ -1085,13 +1085,35 @@ export function prefixLocaleUrls(html: string, locale: Locale): string {
 }
 
 /**
+ * The self-referencing canonical path for a page in a given locale: the
+ * default locale keeps the bare path, a prefixed locale gets it back.
+ *
+ * This is what makes the English tree indexable in its own right. Canonicalising
+ * /en/* to the zh-CN URL tells a crawler the English pages are duplicates of the
+ * Chinese ones, which drops them from the index entirely — they are
+ * TRANSLATIONS, not duplicates, so the canonical must be self-referencing and
+ * the hreflang cluster (see hreflangLinks) does the pairing.
+ *
+ * The result is the FINAL url: "/" becomes "/en" rather than "/en/", because
+ * the trailing-slash form answers a 308 — a canonical or an hreflang that
+ * redirects is a wasted hop and a weaker signal.
+ */
+export function canonicalPath(path: string, locale: Locale): string {
+  if (locale === DEFAULT_LOCALE) return path;
+  const p = path === "/" ? "" : path;
+  return `/${locale}${p}`;
+}
+
+/**
  * hreflang alternates for the document head: both locales plus x-default.
- * Canonical stays the bare (default-locale) path, so this is additive SEO
- * metadata rather than a competing canonical.
+ * The paths are the FINAL ones (no trailing slash), so a crawler reaches each
+ * alternate without a redirect hop; the canonical is self-referencing per
+ * locale (see canonicalPath), which is what pairs a translation with its
+ * original instead of declaring it a duplicate.
  */
 export function hreflangLinks(origin: string, path: string): string {
   const base = `${origin || ""}${path}`;
-  const en = `${origin || ""}${localeHref(path, "en")}`;
+  const en = `${origin || ""}${canonicalPath(path, "en")}`;
   // Head blocks dedupe by name|property|rel|charset (first wins), so three
   // bare rel="alternate" links would collapse into one and could evict the
   // RSS alternate from the same head. A distinct name per link keeps them.

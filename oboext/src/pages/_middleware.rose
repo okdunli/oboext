@@ -3,6 +3,7 @@
   import { checkCsrf, needsCsrf, isSafeMethod, selfHealCsrfCookie } from "@server/csrf";
   import { createLogger } from "@server/logger";
   import { splitLocalePath, localeFromCookieHeader, localeHref, headerLocale, makeT, acceptLanguageLocale } from "@server/i18n";
+  import { resolveOrigin } from "@server/site-origin";
   import { warmReadWave } from "@server/loaders";
   const log = createLogger("middleware");
 
@@ -69,7 +70,16 @@
 
     const ctx = getContext();
     ctx.pathname = real.pathname;
-    ctx.origin = real.origin;
+    // Canonical, og:url, sitemap/feed URLs and friends are negotiated bytes:
+    // the prod hot cache keys on pathname+query+cookie only (BUG.md AB), so an
+    // origin taken from x-forwarded-host/host let one spoofed-header request
+    // poison the shared key - and the framework's own hot refetch (no Host
+    // header at all) rendered http://localhost canonicals into every warmed
+    // entry. resolveOrigin centralizes the policy: OBOEXT_SITE_ORIGIN wins,
+    // otherwise the request headers decide and a hostless synthetic request
+    // falls back to the remembered real origin. Redirects below keep using
+    // real.origin - they must stay on the host the visitor arrived on.
+    ctx.origin = resolveOrigin(request.headers);
     ctx.query = real.searchParams;
     ctx.ua = request.headers.get("user-agent") || "";
     ctx.ip =

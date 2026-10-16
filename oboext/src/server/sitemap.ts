@@ -4,6 +4,7 @@ import { listPublishedPages } from "./pages.js";
 import { getPermalinkConfig, blogIndexUrlFor } from "./links.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { canonicalPath } from "./i18n.js";
+import { resolveOrigin } from "./site-origin.js";
 
 export type SitemapChangefreq =
   | "always"
@@ -70,16 +71,13 @@ const CHANGEFREQS: ReadonlySet<string> = new Set([
   "never",
 ]);
 
+// Delegates to the shared resolver (BUG.md AB): the sitemap is a cacheable 200
+// document whose <loc> bytes are negotiated on the host/forwarding headers, so
+// it must follow the exact same origin policy as every page's canonical - one
+// spoofed-header request used to poison the shared key with the attacker's
+// URLs. See site-origin.ts for the policy.
 export function originFromRequest(req: Request): string {
-  const host =
-    req.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
-    req.headers.get("host") ||
-    "localhost:3000";
-  const isLocal = /^(localhost|127\.0\.0\.1)(:|$)/.test(host);
-  const proto =
-    req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
-    (isLocal ? "http" : "https");
-  return `${proto}://${host}`;
+  return resolveOrigin(req.headers);
 }
 
 function esc(s: string): string {

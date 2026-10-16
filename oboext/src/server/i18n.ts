@@ -1131,6 +1131,29 @@ export function headerLocale(req: {
 }
 
 /**
+ * Request locale for CACHEABLE GET /api/* bodies. The hot cache keys on
+ * pathname+query+cookie (BUG.md AB), so a locale negotiated on the x-locale
+ * header is replayed across languages: the first request's error message wins
+ * for the whole TTL, in either direction. The bilingual clients therefore
+ * stamp the locale into the query as well (?l=), which IS part of the key; a
+ * request without it gets the default locale deterministically instead of
+ * whatever the first caller happened to send. POST bodies are never cached and
+ * keep reading the header (headerLocale).
+ */
+export function apiLocale(req: {
+  url: string;
+  headers: { get(name: string): string | null };
+}): Locale {
+  let tag = "";
+  try {
+    tag = new URL(req.url).searchParams.get("l") || "";
+  } catch {
+    tag = "";
+  }
+  return ctxLocale({ locale: tag.trim() });
+}
+
+/**
  * Locale from an Accept-Language header. The first-run installer has no URL
  * prefix and no locale cookie to read, so the browser's preference is the
  * only signal that can exist at that point.

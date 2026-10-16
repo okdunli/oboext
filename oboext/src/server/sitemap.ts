@@ -1,10 +1,9 @@
-
-
 import { applyAsyncFilters, applyFilters, HOOKS } from "./hooks.js";
 import { listPosts, listCategories, listTags, getSettings } from "./queries.js";
 import { listPublishedPages } from "./pages.js";
 import { getPermalinkConfig, blogIndexUrlFor } from "./links.js";
 import { ensurePluginsLoaded } from "./plugins.js";
+import { canonicalPath } from "./i18n.js";
 
 export type SitemapChangefreq =
   | "always"
@@ -25,6 +24,11 @@ export type SitemapEntry = {
   priority?: string;
 
   images?: string[];
+
+  /** The hreflang cluster this URL belongs to. Present on every locale
+   *  variant of the same page, so a crawler pairs the translations
+   *  directly from the sitemap instead of relying on link crawling. */
+  alternates?: { hreflang: string; href: string }[];
 };
 
 type CategoryItem = Awaited<ReturnType<typeof listCategories>>[number];
@@ -158,8 +162,35 @@ async function buildEntries(base: string): Promise<SitemapPayload> {
     });
   }
 
+  // Bilingual discovery: the sitemap is how a crawler finds the English
+  // tree at all - it is not going to crawl its way to /en/* by following
+  // zh links. Every locale variant of every URL is listed, and each entry
+  // carries the full hreflang cluster so the pairing is explicit.
+  const expanded: SitemapEntry[] = [];
+  for (const e of entries) {
+    const path = e.loc.slice(base.length) || "/";
+    const enPath = canonicalPath(path, "en");
+    const alternates = [
+      { hreflang: "zh-CN", href: `${base}${path}` },
+      { hreflang: "x-default", href: `${base}${path}` },
+      { hreflang: "en", href: `${base}${enPath}` },
+    ];
+    // Images stay on the default-locale entry only: they describe the
+    // same content and would otherwise be counted twice.
+    expanded.push({ ...e, alternates, images: e.images });
+    if (enPath !== path) {
+      expanded.push({
+        loc: `${base}${enPath}`,
+        lastmod: e.lastmod,
+        changefreq: e.changefreq,
+        priority: e.priority,
+        alternates,
+      });
+    }
+  }
+
   return {
-    entries,
+    entries: expanded,
     base,
     posts: posts.items,
     pages: pages.items,
@@ -178,6 +209,11 @@ export function renderSitemapEntry(e: SitemapEntry): string {
   if (e.priority && /^(0(\.\d)?|1(\.0)?)$/.test(e.priority)) {
     parts.push(`<priority>${e.priority}</priority>`);
   }
+  for (const alt of e.alternates ?? []) {
+    parts.push(
+      `<xhtml:link rel="alternate" hreflang="${esc(alt.hreflang)}" href="${esc(alt.href)}" />`,
+    );
+  }
   for (const img of e.images ?? []) {
 
     if (/^https?:\/\//i.test(img)) {
@@ -191,9 +227,10 @@ export function renderSitemapEntry(e: SitemapEntry): string {
 
 export function renderSitemapUrlset(entries: SitemapEntry[]): string {
   const hasImages = entries.some((e) => (e.images?.length ?? 0) > 0);
-  const ns = hasImages
-    ? ' xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"'
-    : "";
+  const hasAlternates = entries.some((e) => (e.alternates?.length ?? 0) > 0);
+  const ns =
+    (hasImages ? ' xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"' : "") +
+    (hasAlternates ? ' xmlns:xhtml="http://www.w3.org/1999/xhtml"' : "");
   const body = entries.map((e) => renderSitemapEntry(e)).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"${ns}>

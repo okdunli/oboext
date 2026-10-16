@@ -4,10 +4,10 @@
   import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { getMemberSettings, isRegisterReferer } from "@server/members";
   import { CAPTCHA_COOKIE, captchaSvg, generateCaptchaCode, signCaptchaToken } from "@server/captcha";
-  import { makeT, headerLocale } from "@server/i18n";
+  import { makeT, apiLocale } from "@server/i18n";
 
   export async function GET(request) {
-    const t = makeT(headerLocale(request));
+    const t = makeT(apiLocale(request));
     return apiGate(async () => {
       const [sec, member] = await Promise.all([getAdminSecurity(), getMemberSettings()]);
       if (!isEntryReferer(request, sec) && !isRegisterReferer(request, member)) {

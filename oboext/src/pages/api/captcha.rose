@@ -2,10 +2,10 @@
 
   import { apiGate, jsonFail } from "@server/admin";
   import { getAdminSecurity, isEntryReferer } from "@server/security";
-  import { makeT, headerLocale } from "@server/i18n";
+  import { makeT, apiLocale } from "@server/i18n";
 
   export async function GET(request) {
-    const t = makeT(headerLocale(request));
+    const t = makeT(apiLocale(request));
     return apiGate(async () => {
       const sec = await getAdminSecurity();
       if (!isEntryReferer(request, sec)) return jsonFail(t("api.no_entry"), 404);

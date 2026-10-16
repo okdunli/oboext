@@ -130,6 +130,47 @@ export function invalidateAll(): void {
   store.clear();
 }
 
+// The framework KV (globalThis.__rosefdKvApi.kv) offers get/set/del/has but no
+// prefix scan, and the loaders key it with DYNAMIC names
+// (cat:<slug>:<page>:<theme>, archives:<year>:<month>, ...). The loader
+// comments used to claim "an admin write invalidates by TTL" - nothing ever
+// deleted these entries, so a freshly published post stayed off the home page
+// for a full TTL. Every set is therefore REGISTERED here, and a content write
+// drops them all.
+const kvKeys = new Set<string>();
+
+type KvApi = {
+  get(key: string): unknown;
+  set(key: string, value: unknown, ttlSeconds?: number): void;
+  del(key: string): void;
+  has(key: string): boolean;
+};
+
+function kvApi(): KvApi | undefined {
+  return (globalThis as Record<string, unknown>).__rosefdKvApi as
+    | { kv?: KvApi }
+    | undefined;
+}
+
+/** Read a loader KV entry (undefined when the framework shipped no KV). */
+export function kvGet<T>(key: string): T | undefined {
+  return kvApi()?.kv.get(key) as T | undefined;
+}
+
+/** Write a loader KV entry; the key is registered for content-write invalidation. */
+export function kvSet(key: string, value: unknown, ttlSeconds: number): void {
+  kvKeys.add(key);
+  kvApi()?.kv.set(key, value, ttlSeconds);
+}
+
+/** Drop every loader KV entry - the KV half of a content write. */
+export function invalidateKvContent(): void {
+  const kv = kvApi()?.kv;
+  if (!kv) return;
+  for (const k of kvKeys) kv.del(k);
+  kvKeys.clear();
+}
+
 /**
  * Drop every entry a content write can stale: taxonomies, counts, the archive
  * timeline, popular/recent lists, generic post listings, widget data and the
@@ -156,6 +197,17 @@ export function invalidateContentCaches(): void {
   invalidatePrefix("pgh:");
   invalidatePrefix("hydr:");
   invalidatePrefix("rp:");
+  // The loader KV entries (home bundle, sidebars, category lists, archives)
+  // are content-derived too - drop them in the same breath.
+  invalidateKvContent();
+  // BUG.md W: the response caches (rosefd prod-server hotCache + render
+  // cache) invalidate at request boundaries, which leaves a window where an
+  // in-flight warm render stores pre-mutation bytes. This function runs at
+  // the COMMIT POINT of every content write, so it is the one place that can
+  // tell the server "the world changed NOW". The hook is installed by the
+  // build-time patch of dist/prod.mjs; absent (dev server) it is a no-op.
+  const invalidateHot = (globalThis as Record<string, unknown>).__oboextHotInvalidate;
+  if (typeof invalidateHot === "function") (invalidateHot as () => void)();
 }
 
 /**

@@ -1,6 +1,8 @@
 // Dual-driver lazy database client — ported from the original app (db/index.ts), adapted for rosefd's server bundle.
 import fs from "fs";
 import path from "path";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import { sql, type SQL } from "drizzle-orm";
 // Type-only: a value import would pull the driver into the esbuild bundle.
 import type { PgliteDatabase } from "drizzle-orm/pglite";
@@ -24,6 +26,31 @@ function onPgliteShutdown(fn: () => Promise<void>): () => void {
 
 /** The driver-agnostic handle shape both drivers satisfy for our call sites. */
 export type Db = PgliteDatabase<typeof schema>;
+
+// The dev server imports the built bundle from a TEMP directory (rosefd dev
+// copies dist/server.js to os.tmpdir()/rosefd-dev-<pid>/server-N.mjs so the
+// tsx loader sees a fresh path per rebuild), and a bare specifier no longer
+// resolves there: Node walks up from the temp dir and never reaches the
+// project's node_modules. The driver specifiers below are deliberately
+// COMPUTED (a literal import would be inlined into every bundle, the edge
+// adapter included), so runtime resolution falls back to the project root -
+// the servers are started from the project root by convention. Production
+// imports dist/server.js in place and always takes the fast path. Framework
+// root cause + suggested fix: rosefd BUG.md (dev temp-copy vs bare
+// specifiers).
+export async function importDriver(spec: string): Promise<any> {
+  try {
+    return await import(spec);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ERR_MODULE_NOT_FOUND') throw err;
+    try {
+      const req = createRequire(path.join(process.cwd(), 'package.json'));
+      return import(pathToFileURL(req.resolve(spec)).href);
+    } catch {
+      throw err;
+    }
+  }
+}
 
 type Driver = "pglite" | "postgres";
 
@@ -360,7 +387,7 @@ async function createDb(): Promise<any> {
     // Non-literal specifiers keep these out of the esbuild bundle.
     const pgPkg = "post" + "gres";
     const drvPkg = "drizzle-orm/postgres" + "-js";
-    const [pgMod, drvMod] = await Promise.all([import(pgPkg), import(drvPkg)]);
+    const [pgMod, drvMod] = await Promise.all([importDriver(pgPkg), importDriver(drvPkg)]);
     const client = pgMod.default(connectionString, {
       // >1 so the 30~50 queries a single page render fans out do not all queue
       // on a single connection. A suspended compute amplifies the latency of
@@ -395,7 +422,7 @@ async function createDb(): Promise<any> {
 
   const pglitePkg = "@electric-sql/" + "pglite";
   const drvPkg = "drizzle-orm/" + "pglite";
-  const [pgMod, drvPkgMod] = await Promise.all([import(pglitePkg), import(drvPkg)]);
+  const [pgMod, drvPkgMod] = await Promise.all([importDriver(pglitePkg), importDriver(drvPkg)]);
 
   currentDataDir = dir;
   // Open, and if the directory is unreadable, try to recover it from the
@@ -887,8 +914,8 @@ export function ensureMigrations(): Promise<void> {
       await withDbRetry(async () => {
         if (postgresClient) {
           const drvPkg = "drizzle-orm/postgres" + "-js";
-          const { migrate } = await import(drvPkg + "/migrator");
-          const drvMod = await import(drvPkg);
+          const { migrate } = await importDriver(drvPkg + "/migrator");
+          const drvMod = await importDriver(drvPkg);
           // Reuse the already-connected runtime pool for migrations instead of
           // opening a second connection: a cold Neon start pays one fewer TLS
           // handshake, and the pool (max>1) handles a single migration run
@@ -900,7 +927,7 @@ export function ensureMigrations(): Promise<void> {
           await migrate(drvMod.drizzle(migrateClient, { schema }), { migrationsFolder: folder });
         } else if (pgliteClient) {
           const drvPkg = "drizzle-orm/" + "pglite";
-          const { migrate } = await import(drvPkg + "/migrator");
+          const { migrate } = await importDriver(drvPkg + "/migrator");
           await migrate(globalForDb.__oboeDb, { migrationsFolder: folder });
         }
       });

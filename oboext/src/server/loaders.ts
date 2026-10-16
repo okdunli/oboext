@@ -42,7 +42,7 @@ import { skyscraperBridgeRoot, skyscraperBridgeDark, themeColorMetas } from "./t
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { getNotFoundSettings } from "./not-found-config.js";
-import { memoQuery, peekMemo } from "./cache.js";
+import { memoQuery, peekMemo, kvGet, kvSet } from "./cache.js";
 import { getPublicRegisterConfig } from "./members.js";
 import { maintenanceGate, type MaintenanceSettings } from "./maintenance.js";
 import { renderUserCenter, renderUserCenterGuest } from "./account.js";
@@ -479,22 +479,20 @@ function sideWidgetsHtml(
 async function bmixDrawerPosts(themeSlug: string): Promise<PostView[] | undefined> {
   const layout = themeLayout(themeSlug);
   if (layout !== "bluemix") return undefined;
-  // Sidebar reads run on every page: memoize 60s (new posts surface on the
-  // next refresh, and the drawer is not a feed).
-  const kvD = (globalThis as any).__rosefdKvApi?.kv;
+  // Sidebar reads run on every page: memoize 60s. A content write drops the
+  // entry (kvSet registers the key), so a new post shows up immediately.
   const key = "sidebar:drawer";
-  const hit = kvD?.get(key) as PostView[] | undefined;
+  const hit = kvGet<PostView[]>(key);
   if (hit) return hit;
   const { items } = await listPosts({ status: "published", limit: 8 });
-  kvD?.set(key, items, 60);
+  kvSet(key, items, 60);
   return items;
 }
 
 async function defaultSidebarData(want: boolean, showCatIcons = false): Promise<{ posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons: boolean; catCounts: Map<number, number> } | undefined> {
   if (!want) return undefined;
-  const kvS = (globalThis as any).__rosefdKvApi?.kv;
   const sKey = `sidebar:default:${showCatIcons}`;
-  const sHit = kvS?.get(sKey) as { items: PostView[]; tagRows: TaxRef[]; catRows: TaxRef[]; cfg: any; catCounts: Map<number, number> } | undefined;
+  const sHit = kvGet<{ items: PostView[]; tagRows: TaxRef[]; catRows: TaxRef[]; cfg: any; catCounts: Map<number, number> }>(sKey);
   if (sHit) {
     const { items, tagRows, catRows, cfg, catCounts } = sHit;
     return {
@@ -514,7 +512,7 @@ async function defaultSidebarData(want: boolean, showCatIcons = false): Promise<
     getPermalinkConfig(),
     categoryPostCounts(),
   ]);
-  kvS?.set(sKey, { items, tagRows, catRows, cfg, catCounts }, 60);
+  kvSet(sKey, { items, tagRows, catRows, cfg, catCounts }, 60);
   return {
     posts: items,
     tags: tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) })),
@@ -581,8 +579,7 @@ async function home(ctx?: Ctx) {
   // The bundle (lists + categories + shuffle pool) is theme-independent and
   // memoized through the framework KV primitive for 60s - a shuffle that
   // changes once a minute is still a shuffle to any visitor.
-  const kv = (globalThis as any).__rosefdKvApi?.kv;
-  const cachedHome = kv?.get("home:bundle") as HomeBundle | undefined;
+  const cachedHome = kvGet<HomeBundle>("home:bundle");
   // Widget area chains off the themeSlug read: the re-read rides the opening
   // wave, and for themes that render sidebar widgets (codeman, pseudolinear)
   // the area query issues mid-wave instead of after it. Returns "" without
@@ -605,7 +602,7 @@ async function home(ctx?: Ctx) {
     ]);
   // The chrome LAYOUT dialect this theme declares (see theme-api).
   const layout = themeLayout(themeSlug);
-  if (!cachedHome) kv?.set("home:bundle", { all, popular, catRows, random }, 60);
+  if (!cachedHome) kvSet("home:bundle", { all, popular, catRows, random }, 60);
   const homeLimit = dialectProfile(layout).homeLimit;
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const items = all.items.slice(0, homeLimit);
@@ -865,8 +862,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
   // Category listing: memoize the page's post window for 2 minutes (a new
   // post surfaces on refresh or an admin write invalidates by TTL).
   const catKey = `cat:${payload.slug}:${page}:${themeSlug}`;
-  const kvCat = (globalThis as any).__rosefdKvApi?.kv;
-  const cachedCat = kvCat?.get(catKey) as { items: any[]; total: number } | undefined;
+  const cachedCat = kvGet<{ items: any[]; total: number }>(catKey);
   const { items, total } = cachedCat ?? await listPosts({
     status: "published",
     categorySlug: payload.slug,
@@ -874,7 +870,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     offset: isSk ? (page - 1) * catPerPage : 0,
     ...(isSk ? {} : { page }),
   });
-  if (!cachedCat) kvCat?.set(catKey, { items, total }, 120);
+  if (!cachedCat) kvSet(catKey, { items, total }, 120);
   const totalPages = Math.max(1, Math.ceil(total / catPerPage));
   const catUrl = categoryUrlFor(cfg, category);
   const pluginHead = await pluginHeadHtml({
@@ -1570,10 +1566,7 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
   // set for 5 minutes (archives change rarely, and a new post shows up on the
   // next refresh or an admin write).
   const archKey = `archives:${year}:${month}`;
-  const kv = (globalThis as any).__rosefdKvApi?.kv;
-  const cached = kv?.get(archKey) as
-    | { settings: any; index: any; total: number; items: any[] }
-    | undefined;
+  const cached = kvGet<{ settings: any; index: any; total: number; items: any[] }>(archKey);
   let settings: any;
   let index: { year: number; months: { month: number; count: number }[]; total: number }[];
   let total: number;
@@ -1598,7 +1591,7 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
         limit: 1000,
       }),
     ]);
-    kv?.set(archKey, { settings, index, total, items }, 300);
+    kvSet(archKey, { settings, index, total, items }, 300);
   }
   const filtered = !!(year || month);
 

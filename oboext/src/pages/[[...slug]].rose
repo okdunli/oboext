@@ -1,5 +1,6 @@
 <script>
-  export const bundle = 'split';
+  // `export const bundle = 'split'` lives in _layout.rose: the mode is
+  // per-app, and 0.1.8 rejects it anywhere else.
   // The single public content entry point (original parity: app/(site)/[[...slug]]/page.tsx).
 
   // // An unresolvable path throws notFound(): the framework answers with the app's own 404 route and a real 404 status (the nearest segment's //).

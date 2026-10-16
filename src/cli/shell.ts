@@ -1,13 +1,15 @@
-// HTML shell - the document wrapper for every rosefd page.
+
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as esbuild from 'esbuild';
 import { createHash } from 'crypto';
+import { fnv1a32 } from '../hash.js';
 
 const OUT_DIR = path.join(process.cwd(), 'dist');
 
 let clientCache: { mtimeMs: number; source: string } | null = null;
+
 
 let splitMode = false;
 export function setBundleMode(mode: string): void {
@@ -17,6 +19,7 @@ export function setBundleMode(mode: string): void {
 /** Read dist/client.js with an mtime-based cache (dev server rebuilds it). */
 export function getClientSource(): string | null {
   if (splitMode) return null;
+  
   const file = path.join(OUT_DIR, 'client.js');
   try {
     const st = fs.statSync(file);
@@ -27,6 +30,30 @@ export function getClientSource(): string | null {
   } catch {
     return null;
   }
+}
+
+// Content hash of dist/client.js for cache-busting the split-mode script URL.
+// The hash, not the mtime: deployment platforms normalize file mtimes, so an
+// mtime key would be identical across deploys and returning visitors would
+// keep executing the previous build's runtime.
+let clientVersionCache: { mtimeMs: number; v: string } | null = null;
+export function getClientVersion(): string {
+  try {
+    const file = path.join(OUT_DIR, 'client.js');
+    const st = fs.statSync(file);
+    if (!clientVersionCache || clientVersionCache.mtimeMs !== st.mtimeMs) {
+      clientVersionCache = { mtimeMs: st.mtimeMs, v: fnv1a32(fs.readFileSync(file)) };
+    }
+    return clientVersionCache.v;
+  } catch {
+    return '';
+  }
+}
+
+// The URL the document loads the split-mode runtime from: versioned when the bundle exists so a deploy is a new URL (fresh fetch, stale cache impossible), unversioned as the fallback.
+function clientSrcUrl(): string {
+  const v = getClientVersion();
+  return v ? `/client.js?v=${v}` : '/client.js';
 }
 
 let styleCache: { mtimeMs: number; source: string } | null = null;
@@ -45,6 +72,7 @@ export function getStyles(): string {
   }
 }
 
+// Bootstrap appended after the inlined bundle: client-side navigation. Distinct names avoid any collision with minified bundle identifiers.
 const BOOTSTRAP_SOURCE = `
 // shell = false: the document's SSR content sits directly in <body> - no
 // #app wrapper, no demo styles, so a real theme's CSS owns the document from
@@ -67,18 +95,39 @@ if (!__app) {
 }
 // Native View Transitions around client-side navigation (progressive:
 // browsers without the API navigate normally, no polyfill, no CSS required).
-function __navigate(pathname) {
-  const paint = () => start(__app, pathname);
+// F35: stash the CURRENT entry's scroll position into its history state
+// before a new push - the browser only restores scroll on full page loads; a
+// pjax swap would land wherever the swap left it.
+function __saveScroll() {
+  try {
+    const s = history.state || {};
+    history.replaceState(Object.assign({}, s, { __rosefdScroll: window.scrollY }), '');
+  } catch (e) { /* history state unavailable (file:// edge): best effort */ }
+}
+function __navigate(pathname, restore) {
+  const paint = () => {
+    const p = start(__app, pathname);
+    if (restore) {
+      // back/forward: restore the entry's scroll (top when it has none)
+      const s = history.state || {};
+      const y = typeof s.__rosefdScroll === 'number' ? s.__rosefdScroll : 0;
+      return Promise.resolve(p).then(() => { window.scrollTo(0, y); }, () => { window.scrollTo(0, y); });
+    }
+    // a fresh navigation starts at the top, like a full page load
+    window.scrollTo(0, 0);
+    return p;
+  };
   if (document.startViewTransition) {
     return document.startViewTransition(paint).updateCallbackDone;
   }
   return paint();
 }
-window.addEventListener('popstate', () => __navigate(window.location.pathname));
+window.addEventListener('popstate', () => __navigate(window.location.pathname, true));
 document.addEventListener('click', (e) => {
   const a = e.target.tagName === 'A' ? e.target : e.target.closest && e.target.closest('a');
   if (a && a.getAttribute('href') && a.getAttribute('href').startsWith('/')) {
     e.preventDefault();
+    __saveScroll();
     history.pushState(null, '', a.getAttribute('href'));
     __navigate(window.location.pathname);
   }
@@ -94,7 +143,7 @@ function __prefetchHandler(e) {
 document.addEventListener('mouseover', __prefetchHandler);
 document.addEventListener('focusin', __prefetchHandler);
 document.addEventListener('touchstart', __prefetchHandler, { passive: true });
-// Viewport + idle prefetch: once a link scrolls into view and the
+// Viewport + idle prefetch (viewport-triggered): once a link scrolls into view and the
 // browser is idle, its route renders ahead of any interaction. trade-off: both
 // APIs are feature-detected; without them the hover/focus/touch path above
 // still covers every link.
@@ -164,14 +213,24 @@ if (__state.__notFound) {
 } else if (__resumed) {
   start(__app, window.location.pathname);
 } else if (__state.__route === window.location.pathname) {
-  start(__app, window.location.pathname, true);
+  // Lazy hydration (opt-in via export const lazyHydration = true in the root
+  // layout): defer the initial wire() until the browser is idle so the SSR
+  // paint is interactive-to-paint without blocking on the event wiring. Falls
+  // back to eager wiring where requestIdleCallback is unavailable.
+  if (window.__rosefdLazy && typeof requestIdleCallback === 'function') {
+    requestIdleCallback(() => start(__app, window.location.pathname, true));
+  } else {
+    start(__app, window.location.pathname, true);
+  }
 } else {
   start(__app, window.location.pathname);
 }
 `;
+// Lazy + best-effort: the transform runs on first use, not at module load - the bundled prod server (dist/prod.mjs) boots without esbuild's worker.
 let BOOTSTRAP_CACHE: string | null = null;
 function bootstrap(): string {
   if (BOOTSTRAP_CACHE === null) {
+    // The bundled prod server (dist/prod.mjs) sets the skip flag: esbuild's transformSync spawns a worker thread whose entry is the bundle itself.
     if ((globalThis as any).__ROSEFD_SKIP_MINIFY) {
       BOOTSTRAP_CACHE = BOOTSTRAP_SOURCE;
     } else {
@@ -185,22 +244,35 @@ function bootstrap(): string {
   return BOOTSTRAP_CACHE;
 }
 
+
 const CSP_TAIL = `style-src 'unsafe-inline'; img-src 'self' data: https://fastly.picsum.photos; font-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'`;
 
-// The non-CSP half of the document's security headers.
+
 const BASELINE_SECURITY_HEADERS: Record<string, string> = {
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
   'referrer-policy': 'strict-origin-when-cross-origin',
-  'permissions-policy': 'accelerometer=(), ambient-light-sensor=(), autoplay=(), battery=(), camera=(), display-capture=(), document-domain=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), xr-spatial-tracking=()',
+  'permissions-policy': 'accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), xr-spatial-tracking=()',
 };
-let cspCache: { for: string | null; value: string } | null = null;
-let EXTERNAL_BOOTSTRAP_CACHE: string | null = null;
+
+let cspCache: { for: string | null; v: string; value: string } | null = null;
+// The exact bytes between the external bootstrap's script tags - the single source of truth shared by the tag and the CSP hash.
+let EXTERNAL_BOOTSTRAP_CACHE: { v: string; s: string } | null = null;
 function externalBootstrap(): string {
-  if (EXTERNAL_BOOTSTRAP_CACHE === null) EXTERNAL_BOOTSTRAP_CACHE = `\nimport { start, startNotFound, prefetch, postForm, prefetchStats, serializeState } from '/client.js';\n${bootstrap()}`;
-  return EXTERNAL_BOOTSTRAP_CACHE;
+  const v = getClientVersion();
+  if (EXTERNAL_BOOTSTRAP_CACHE === null || EXTERNAL_BOOTSTRAP_CACHE.v !== v) {
+    EXTERNAL_BOOTSTRAP_CACHE = { v, s: `\nimport { start, startNotFound, prefetch, postForm, prefetchStats, serializeState } from '${clientSrcUrl()}';\n${bootstrap()}` };
+  }
+  return EXTERNAL_BOOTSTRAP_CACHE.s;
 }
+// The inlined bundle is byte-identical for every document of a build, so the
+// regex scan + slice + concat over the whole client.js is computed once and
+// reused: prerender paid it per route, and a per-request document paid it per
+// request. Keyed by the source string itself (getClientSource() hands back the
+// same instance while dist/client.js is unchanged).
+let inlineScriptCache: { for: string; out: string } | null = null;
 function inlineScript(client: string): string {
+  if (inlineScriptCache !== null && inlineScriptCache.for === client) return inlineScriptCache.out;
   const m = /\bexport\s*\{([^}]*)\}\s*;?\s*$/.exec(client);
   let body = client;
   let aliases = "";
@@ -215,7 +287,9 @@ function inlineScript(client: string): string {
       })
       .join("");
   }
-  return `\n${body}\n${aliases}\n${bootstrap()}`;
+  const out = `\n${body}\n${aliases}\n${bootstrap()}`;
+  inlineScriptCache = { for: client, out };
+  return out;
 }
 /**
  * A fresh CSP nonce: 128 bits from the platform RNG, base64 - the syntax the
@@ -255,12 +329,13 @@ export function securityHeaders(client: string | null, nonce = ''): Record<strin
     headers['Content-Security-Policy'] = `script-src 'nonce-${nonce}' 'strict-dynamic'; ${CSP_TAIL}`;
     return headers;
   }
-  if (!cspCache || cspCache.for !== client) {
+  if (!cspCache || cspCache.for !== client || cspCache.v !== (client ? '' : getClientVersion())) {
     const scriptSrc = client
       ? `'sha256-${createHash('sha256').update(inlineScript(client), 'utf-8').digest('base64')}'`
       : `'self' 'sha256-${createHash('sha256').update(externalBootstrap(), 'utf-8').digest('base64')}'`;
     cspCache = {
       for: client,
+      v: client ? '' : getClientVersion(),
       value: `script-src ${scriptSrc}; ${CSP_TAIL}`,
     };
   }
@@ -348,9 +423,19 @@ function mergeHeadBlocks(blocks: string[]): string {
  */
 export function clientScriptTag(client: string | null, nonce = ''): string {
   const n = nonce ? ` nonce="${nonce}"` : '';
-  return client
-    ? `<script type="module"${n}>${inlineScript(client)}</script>`
-    : `<script type="module"${n} src="/client.js"></script>\n<script type="module"${n}>${externalBootstrap()}</script>`;
+  if (client) {
+    return `<script type="module"${n}>${inlineScript(client)}</script>`;
+  }
+  // Split / external path: the framework runtime is a separate module fetch.
+  // modulepreload (+ crossorigin, matching the module's CORS mode) starts it
+  // early, and fetchpriority=high lets it jump the image/style queue so the
+  // interactive layer lands before the browser would otherwise schedule it.
+  // The URL carries the bundle's content hash: a deploy changes the hash, the
+  // browser sees a new URL, and yesterday's cached runtime can never execute
+  // against today's documents.
+  const src = clientSrcUrl();
+  const preload = `<link rel="modulepreload" href="${src}" crossorigin>`;
+  return `${preload}\n<script type="module"${n} src="${src}" fetchpriority="high"></script>\n<script type="module"${n}>${externalBootstrap()}</script>`;
 }
 
 /**
@@ -380,8 +465,6 @@ export function shellOpen(styles: string = getStyles(), lang = 'en', dir = '', s
 
 /** Build the document from an explicit client source (edge runtimes have no fs). */
 export function buildShell(ssrHtml: string, stateJson: string, client: string | null, head: string[] = [], styles: string = getStyles(), js = true, lang = 'en', dir = '', nonce = '', shell = true): string {
-  const clientTag = clientScriptTag(client, nonce);
-
   const mergedHead = mergeHeadBlocks(head);
   const headStamped = nonce
     ? mergedHead.replace(/<script\b([^>]*)>/gi, (m, attrs: string) => (/\bnonce=/.test(attrs) ? m : `<script${attrs} nonce="${nonce}">`))
@@ -389,18 +472,21 @@ export function buildShell(ssrHtml: string, stateJson: string, client: string | 
   let htmlAttrs = ` lang="${lang}"${dir ? ` dir="${dir}"` : ''}`;
   let bodyAttrs = '';
   const headClean = headStamped.replace(/<(html|body)\b([^>]*)>/gi, (_m, tag: string, attrs: string) => {
+    // mergeHeadBlocks stamps every passthrough element with its key; the
     const clean = attrs.replace(/\s*data-rosefd-head="[^"]*"/, '');
     if (tag === 'html') htmlAttrs = clean;
     else bodyAttrs = clean;
     return '';
   });
+  
   const titleTag = /<title>/i.test(mergedHead) ? '' : '<title>Rose Frame Driver</title>';
+  
   const iconTag = /rel=["']?icon/i.test(mergedHead) ? '' : `\n  ${FAVICON}`;
   const headTags = headClean ? `\n  ${headClean}` : '';
   const styleTag = styles ? `\n  <style>${styles}</style>` : '';
   const stateSafe = stateJson.replace(/</g, '\\u003c');
   const jsTail = js
-    ? `\n  <script type="application/json" id="__rosefd_state">${stateSafe}</script>\n  ${clientTag}`
+    ? `\n  <script type="application/json" id="__rosefd_state">${stateSafe}</script>\n  ${clientScriptTag(client, nonce)}`
     : '';
   const open = js && shell ? '<div id="app">' : '';
   const close = js && shell ? '</div>' : '';

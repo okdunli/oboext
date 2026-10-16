@@ -1,29 +1,52 @@
-// Rose Frame Driver CLI - simplest possible SSR + static server
 
+// Rose Frame Driver CLI - simplest possible SSR + static server
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import * as zlib from 'zlib';
 import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import { pathToFileURL, fileURLToPath } from 'url';
-import { buildProject, scanRoseFiles, scanComponentFiles, scriptOf, extractExports, loadPlugins, RoseError, errorInfo, type RouteInfo } from '../compiler/index.js';
+import { promisify } from 'util';
+import { AsyncLocalStorage } from 'async_hooks';
+import { buildProject, scanRoseFiles, scanComponentFiles, scriptOf, extractExports, loadPlugins, loadConfig, RoseError, errorInfo, codeFrame, type RouteInfo } from '../compiler/index.js';
+import { prunePrerendered, rmTreeParallel } from '../compiler/rm-fast.js';
 import { getHtmlShell, getClientSource, getStyles, shellOpen, clientScriptTag, securityHeaders, mintNonce, setBundleMode } from './shell.js';
+import { generatePWA, injectPwaHead, type PwaOptions } from '../pwa.js';
 import { AI_PROMPT } from './prompt.js';
 import { Readable } from 'stream';
 import { createEdgeHandler } from './edge.js';
 import { runShutdownHooks } from './shutdown.js';
 import { requestOrigin } from './origin.js';
+
 import type * as ts from 'typescript';
 
+// --- wire performance: compression + conditional caching (stdlib only) --- The Go binary already compresses; the Node server must match.
 type Encoding = 'br' | 'gzip' | 'deflate';
 
 function pickEncoding(req: any): Encoding | null {
   const ae: string = req.headers['accept-encoding'] || '';
+  // Trade-off: substring match, no q-value parsing - every browser that sends
   if (ae.includes('br')) return 'br';
   if (ae.includes('gzip')) return 'gzip';
   if (ae.includes('deflate')) return 'deflate';
   return null;
+
 }
+
+// Vary is a list header, and two independent parties write it: the framework
+// negotiates the body on Accept-Encoding, and the app may declare its own
+// dimensions (an i18n redirect varies on Accept-Language). res.setHeader
+// replaces by name, so a naive write on either side silently drops the
+// other - merge, deduped case-insensitively.
+function addVary(res: any, dim: string): void {
+  const have = res.getHeader('vary');
+  const raw = have == null ? '' : Array.isArray(have) ? have.join(', ') : String(have);
+  const parts = raw.split(',').map((s: string) => s.trim()).filter(Boolean);
+  if (!parts.some((p: string) => p.toLowerCase() === dim.toLowerCase())) parts.push(dim);
+  res.setHeader('Vary', parts.join(', '));
+}
+
 
 const brotliFast = { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 };
 
@@ -31,29 +54,66 @@ function compress(enc: Encoding, data: string | Buffer): Buffer {
   if (enc === 'br') return zlib.brotliCompressSync(data, { params: brotliFast });
   if (enc === 'gzip') return zlib.gzipSync(data);
   return zlib.deflateSync(data);
+  
 }
 
 function createCompressor(enc: Encoding): zlib.Gzip | zlib.Deflate | zlib.BrotliCompress {
   if (enc === 'br') return zlib.createBrotliCompress({ params: brotliFast });
   if (enc === 'gzip') return zlib.createGzip();
   return zlib.createDeflate();
+        /* a warm-up failure just means that route renders cold */
 }
 
-/** Send a full HTML document, compressed when the client accepts it. */
-function sendHtml(req: any, res: any, status: number, html: string, extraHeaders?: Record<string, string>): void {
+// Formats that are already compressed.
+const NO_COMPRESS_EXT = new Set([
+  '.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.ico',
+  '.woff', '.woff2', '.mp4', '.webm', '.mp3', '.pdf', '.zip', '.gz', '.br',
+]);
+
+// Extensions a vanished watch target must carry to count as a deleted source
+// (the dev watcher's catch-up heuristic; scratch files have none).
+const SOURCE_EXT = new Set(['.rose', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.css', '.json', '.html', '.svg']);
+
+// The static layer's brotli form, built on demand and memoised on the cache entry: a client that only speaks gzip never pays a brotli pass.
+function encodedFile(entry: { raw: Buffer; br?: Buffer; gzip?: Buffer }, enc: 'br' | 'gzip'): Buffer {
+  if (enc === 'br') return (entry.br ??= zlib.brotliCompressSync(entry.raw, { params: brotliFast }));
+  return (entry.gzip ??= zlib.gzipSync(entry.raw));
+}
+
+function prebuiltBro(filePath: string, rawMtimeMs: number): Buffer | null {
+  try {
+    const brPath = filePath + '.br';
+    const s = fs.statSync(brPath);
+    if (!s.isFile() || s.mtimeMs < rawMtimeMs) return null;
+    return fs.readFileSync(brPath);
+  } catch {
+    return null;
+  }
+}
+
+const gzipAsync = promisify(zlib.gzip);
+const deflateAsync = promisify(zlib.deflate);
+// The same compression off the event loop.
+async function compressAsync(enc: Encoding, data: string | Buffer): Promise<Buffer> {
+  if (enc === 'br') return brotliAsync(data, { params: brotliFast });
+  if (enc === 'gzip') return gzipAsync(data);
+  return deflateAsync(data);
+}
+
+// Send a full HTML document, compressed when the client accepts it. Async because the compression is - see compressAsync.
+async function sendHtml(req: any, res: any, status: number, html: string, extraHeaders?: Record<string, string>): Promise<void> {
   res.statusCode = status;
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Vary', 'Accept-Encoding');
+  // 'no-cache', not 'no-store': the document MAY be stored, but it must be revalidated before every reuse - which is exactly what the weak ETag below.
   if (!Object.keys(extraHeaders || {}).some((k) => k.toLowerCase() === 'cache-control')) {
     res.setHeader('Cache-Control', 'no-cache');
   }
   if (extraHeaders) for (const [k, v] of Object.entries(extraHeaders)) res.setHeader(k, v);
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < html.length; i++) {
-    hash ^= html.charCodeAt(i);
-    hash = (hash * 0x01000193) >>> 0;
-  }
-  const etag = `W/"${html.length}-${hash.toString(16)}"`;
+  // After the app's headers: a route may carry its own Vary, and the body
+  // below is still content-negotiated - both dimensions must survive.
+  addVary(res, 'Accept-Encoding');
+  // A weak ETag over the rendered bytes: revalidation answers a bodiless 304 for dynamic renders too (a middleware makes every page route dynamic).
+  const etag = 'W/"' + createHash('sha1').update(html, 'utf8').digest('base64url').slice(0, 24) + '"';
   if (req.headers['if-none-match'] === etag) {
     res.statusCode = 304;
     res.end();
@@ -63,20 +123,23 @@ function sendHtml(req: any, res: any, status: number, html: string, extraHeaders
   const enc = devMode ? null : pickEncoding(req);
   if (enc) {
     res.setHeader('Content-Encoding', enc);
-    res.end(compress(enc, html));
+    res.end(await compressAsync(enc, html));
   } else {
     res.end(html);
   }
 }
+
 
 function writeWebHeaders(web: any, res: any): void {
   const cookies = web.headers.getSetCookie?.() ?? [];
   web.headers.forEach((v: string, k: string) => {
     if (cookies.length && k.toLowerCase() === 'set-cookie') return;
     res.setHeader(k, v);
+    
   });
   if (cookies.length) res.setHeader('set-cookie', cookies);
 }
+
 
 async function sendWebResponse(web: any, res: any): Promise<void> {
   writeWebHeaders(web, res);
@@ -85,8 +148,27 @@ async function sendWebResponse(web: any, res: any): Promise<void> {
 }
 
 // Send a rendered page document - through onResponse first .
+function pjaxFragment(html: string): string {
+  const mi = html.indexOf('<main id="sk-main"');
+  if (mi < 0) return html;
+  const me = html.indexOf('</main>', mi);
+  if (me < 0) return html;
+  const main = html.slice(mi, me + '</main>'.length);
+  const tm = html.match(/<title>([\s\S]*?)<\/title>/i);
+  const title = tm ? tm[0] : '';
+  return title + main;
+}
+
+function pjaxRequested(req: any): boolean {
+  const h = req.headers;
+  if (!h) return false;
+  const v = typeof h.get === 'function' ? h.get('x-pjax') : h['x-pjax'];
+  return !!v;
+}
+
 async function sendPage(req: any, res: any, ssrModule: any, hookCtx: any, page: any, routePath: string): Promise<void> {
   let status = page.status ?? 200;
+  // The control-flow pair: a page (or one of its actions) called redirect() - the render threw the signal and the server bundle turned.
   if (page.redirect) {
     const body = `<!DOCTYPE html><title>Redirecting</title><p>Redirecting to <a href="${page.redirect}">${page.redirect}</a>.</p>`;
     let headers: Record<string, any> = pageHeaders(ssrModule, routePath, '');
@@ -106,22 +188,28 @@ async function sendPage(req: any, res: any, ssrModule: any, hookCtx: any, page: 
     res.end(body);
     return;
   }
+ // Page.lang/page.dir are the locale the render used: the document's <html> attributes follow the route's [lang] segment.
   const nonce = nonceFor(ssrModule, routePath);
+  // A nonce route is dynamic by construction (the compiler put it in dynamicRoutes)
   let html = getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, nonce, page.shell !== false);
+  if (pjaxRequested(req)) html = pjaxFragment(html);
   let headers: Record<string, any> = pageHeaders(ssrModule, routePath, nonce);
   if (hookCtx) {
+    // P0-3: the document's content-type travels WITH the Response.
     const out = await ssrModule.runResponseHooks(hookCtx, new Response(html, {
       status,
       headers: { 'content-type': 'text/html; charset=utf-8', ...headers },
     }));
     status = out.status;
     headers = webHeadersToNode(out);
+    // P0-4: a hook that READ the body and returned the same Response cannot have it read again (TypeError: body already used) - and that throw used.
     html = out.bodyUsed ? html : await out.text();
   }
-  sendHtml(req, res, status, html, headers);
+  await sendHtml(req, res, status, html, headers);
 }
 
-const fileCache = new Map<string, { mtimeMs: number; raw: Buffer; br: Buffer; gzip: Buffer; etag: string }>();
+// Static files: raw + whichever compressed form was asked for, cached per mtime (dev rebuilds change mtime; preview never does).
+const fileCache = new Map<string, { mtimeMs: number; raw: Buffer; br?: Buffer; gzip?: Buffer; compressible: boolean; etag: string }>();
 
 const __portArg = process.argv.find((a) => a === '--port' || a.startsWith('--port='));
 if (__portArg) {
@@ -129,8 +217,11 @@ if (__portArg) {
   if (__v && Number(__v) > 0) process.env.PORT = __v;
 }
 
+
 const SRC_DIR = process.argv[3] && !process.argv[3].startsWith('-') ? path.resolve(process.argv[3]) : process.cwd();
+// The deploy dir is ./dist of the directory the command ran from - a documented contract (tests/test-cli.mjs asserts it): building a project.
 const OUT_DIR = path.join(process.cwd(), 'dist');
+
 const PORT = Number(process.env.PORT) || 3000;
 
 // Import dist/server.js, cached until the file changes on disk. Preview and serve never rebuild, so they import dist/server.js itself.
@@ -138,6 +229,7 @@ let serverModule: any = null;
 let serverMtime = -1;
 let serverVersion = 0;
 
+// Zero-dependency .env loading: KEY=VALUE lines from the project's .env.
 function loadDotEnv(dir: string): void {
   try {
     const raw = fs.readFileSync(path.join(dir, '.env'), 'utf-8');
@@ -151,7 +243,7 @@ function loadDotEnv(dir: string): void {
       if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
       if (!(k in process.env)) process.env[k] = v;
     }
-  } catch { /* no .env: fine */ }
+  } catch {  }
 }
 loadDotEnv(process.cwd());
 
@@ -161,31 +253,66 @@ async function loadServer(): Promise<any> {
   if (!serverModule || mtimeMs !== serverMtime) {
     serverMtime = mtimeMs;
     serverVersion++;
-    let target = file;
+    // A fresh FILE per version, not a ?v= query: the tsx loader (how the CLI
+    // runs) caches by resolved path and would serve a stale module for a
+    // query-busted URL. The copy lives in tmp so dist stays free of
+    // intermediates; only the newest version is kept.
+    let target = pathToFileURL(file).href;
     if (devMode) {
-      target = path.join(OUT_DIR, '.build', `server-${serverVersion}.mjs`);
-      await fs.promises.mkdir(path.dirname(target), { recursive: true });
-      await fs.promises.copyFile(file, target);
+      const dir = path.join(os.tmpdir(), `rosefd-dev-${process.pid}`);
+      const copy = path.join(dir, `server-${serverVersion}.mjs`);
+      // Write the new version, then drop the previous one: an rm -rf + mkdir
+      // per rebuild measured 2.5x the cost of copy+unlink on Windows, and the
+      // import cache is keyed by path - only the newest file has to exist.
+      await fs.promises.mkdir(dir, { recursive: true });
+      await fs.promises.copyFile(file, copy);
+      await fs.promises.rm(path.join(dir, `server-${serverVersion - 1}.mjs`), { force: true });
+      target = pathToFileURL(copy).href;
     }
-    serverModule = await import(pathToFileURL(target).href);
+    serverModule = await import(target);
   }
   return serverModule;
 }
 
+/** Write only when the bytes differ: an unchanged file keeps its mtime, so writeBrotli's freshness check skips it and the server's prebuiltBro stays valid. */
+async function writeIfChanged(file: string, content: string): Promise<void> {
+  let prev: string | null = null;
+  try { prev = await fs.promises.readFile(file, 'utf-8'); } catch { /* new file: always write */ }
+  if (prev !== content) await fs.promises.writeFile(file, content);
+}
+
 async function build(): Promise<void> {
- process.env.ROSEFD_BUILDING = '1';
- const { routes, bundle } = await buildProject(SRC_DIR, OUT_DIR);
-  await clearPrerendered(OUT_DIR);
+  const minify = !devMode && !argv.includes('--no-minify');
+  const { routes, bundle, config } = await buildProject(SRC_DIR, OUT_DIR, { minify, incremental: devMode });
+  // dist/server.js is ESM in a .js file. Node >= 22.7 detects the syntax, but
+  // engines allow 22.0-22.6 (where it parses as CJS and fails on import), and
+  // external tooling loading dist/server.js has no such detection at all. A
+  // marker file makes the module kind explicit for every consumer.
+  await writeIfChanged(path.join(OUT_DIR, 'package.json'), '{"type":"module"}\n');
   setBundleMode(bundle);
-  const skipped = await prerender(routes);
-  await fs.promises.writeFile(path.join(OUT_DIR, 'broken.json'), JSON.stringify(skipped));
+  // Dev serves documents on demand (renderPage per request) so a save only has
+  // to recompile, never re-render every route - the prerender/writeBrotli/analyze
+  // passes are pure waste in the edit loop and, here, also dodge a sandbox that
+  // blocks .br writes. Production (and --static verification) keeps them.
+  const skipped = devMode ? [] : await prerender(routes);
+  await writeIfChanged(path.join(OUT_DIR, 'broken.json'), JSON.stringify(skipped));
   const ssrModule = await loadServer();
-  await fs.promises.writeFile(path.join(OUT_DIR, 'headers.json'), JSON.stringify({
+  await writeIfChanged(path.join(OUT_DIR, 'headers.json'), JSON.stringify({
     default: securityHeaders(getClientSource()),
     routes: ssrModule.routeHeaders ?? [],
   }));
-  await writeBrotli(OUT_DIR);
-  await analyze(OUT_DIR, (ssrModule.dynamicRoutes as string[] | undefined) ?? []);
+  if (!devMode) await writeBrotli(OUT_DIR);
+  if (!devMode) await analyze(OUT_DIR, (ssrModule.dynamicRoutes as string[] | undefined) ?? []);
+
+  if (config.pwa) {
+    try {
+      await generatePWA(OUT_DIR, config.pwa);
+      await injectPwaIntoHtml(OUT_DIR, config.pwa);
+      await writeBrotli(OUT_DIR);
+    } catch (e) {
+      console.error('Rose Frame Driver: PWA generation failed:', e instanceof Error ? e.message : String(e));
+    }
+  }
 
   if (argv.includes('--static')) {
     const dyn = (ssrModule.dynamicRoutes as string[] | undefined) ?? [];
@@ -213,15 +340,52 @@ async function build(): Promise<void> {
  * compresses in ~10 ms at build time, once, forever.
  */
 const BROTLI_EXT = new Set(['.html', '.js', '.css', '.json', '.svg', '.txt']);
+const brotliAsync = promisify(zlib.brotliCompress);
+const BROTLI_PARALLEL = 8;
 async function writeBrotli(dir: string): Promise<void> {
-  for (const e of await fs.promises.readdir(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      await writeBrotli(p);
-      continue;
+  const targets: string[] = [];
+  const walk = async (d: string): Promise<void> => {
+    for (const e of await fs.promises.readdir(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) await walk(p);
+      else if (BROTLI_EXT.has(path.extname(e.name).toLowerCase())) targets.push(p);
     }
-    if (!BROTLI_EXT.has(path.extname(e.name).toLowerCase())) continue;
-    await fs.promises.writeFile(p + '.br', zlib.brotliCompressSync(await fs.promises.readFile(p)));
+  };
+  await walk(dir);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < targets.length) {
+      const p = targets[next++];
+      const br = p + '.br';
+      try {
+        // Freshness by mtime (the same rule the server's prebuiltBro uses): a
+        // .br at least as new as its raw was compressed from these exact
+        // bytes. Skipping it keeps a rebuild from re-paying brotli q11 on
+        // files nothing touched.
+        const [rst, bst] = await Promise.all([fs.promises.stat(p), fs.promises.stat(br)]);
+        if (bst.mtimeMs >= rst.mtimeMs) continue;
+      } catch { /* no .br yet (or the raw vanished mid-walk): compress below */ }
+      const raw = await fs.promises.readFile(p);
+      await fs.promises.writeFile(br, await brotliAsync(raw));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(BROTLI_PARALLEL, targets.length) }, worker));
+}
+
+async function injectPwaIntoHtml(dir: string, opts: PwaOptions): Promise<void> {
+  const targets: string[] = [];
+  const walk = async (d: string): Promise<void> => {
+    for (const e of await fs.promises.readdir(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) await walk(p);
+      else if (e.name.endsWith('.html') && !e.name.endsWith('.br')) targets.push(p);
+    }
+  };
+  await walk(dir);
+  for (const p of targets) {
+    const html = await fs.promises.readFile(p, 'utf8');
+    const next = injectPwaHead(html, opts);
+    if (next !== html) await fs.promises.writeFile(p, next);
   }
 }
 
@@ -229,12 +393,9 @@ async function writeBrotli(dir: string): Promise<void> {
  * The build analysis. The zero-JS report says
  * WHICH routes ship no runtime; this says what every route costs on the
  * wire, measured from the files this build just wrote - never from a number
- * quoted from memory. Brotli is the `.br` sibling the build already wrote
  * (the exact bytes the Go binary serves); gzip is computed here because the
  * Node server compresses per request and gzip is the fallback every proxy
  * eventually falls back to. Dynamic routes are not baked, so they are
- * LISTED, not measured: their numbers come from `npm run benchmark`, which
- * renders them live against `rosefd serve`.
  */
 async function analyze(outDir: string, dynamic: string[]): Promise<void> {
   const rows: Array<{ route: string; raw: number; gzip: number; br: number; js: boolean }> = [];
@@ -275,112 +436,131 @@ async function analyze(outDir: string, dynamic: string[]): Promise<void> {
 }
 
 /**
- * Delete the prerendered output of a previous build: HTML documents and
- * baked API bodies, with their brotli siblings. Everything else in dist/
- * (the bundles, styles) was just rewritten by buildProject.
- *
- * Trade-off: Windows hands out transient EPERM/EBUSY when an antivirus or
- * the search indexer holds a just-written file, so a couple of retries
- * per file - a build that fails because a scanner blinked is the worst
- * kind of flake.
- */
-async function clearPrerendered(dir: string, depth = 0): Promise<void> {
-  for (const e of await fs.promises.readdir(dir, { withFileTypes: true })) {
-    if (depth === 0 && e.name === 'locales' && e.isDirectory()) continue;
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      await clearPrerendered(p, depth + 1);
-      continue;
-    }
-    if (!/\.(?:html|json)(?:\.br)?$/.test(e.name)) continue;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await fs.promises.rm(p, { force: true });
-        break;
-      } catch (err) {
-        if (attempt >= 2 || !/EPERM|EBUSY|EACCES/.test(String(err))) throw err;
-        await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
-      }
-    }
-  }
-}
-
-/**
  * Prerender every static route to dist/<route>/index.html at build time.
  * Those files are served straight from disk: zero server work, instant TTFB.
- * Dynamic routes with an exported `params` map (e.g. blog posts) are
- * enumerated and prerendered per value; params without `params` keep
- * rendering on demand. A route exporting `revalidate = N` is baked like
  * any other and then kept fresh by the preview server's stale-while-
  * revalidate pass (ISR).
  */
+const PRERENDER_CONCURRENCY = 4;
+
+const requestAls = new AsyncLocalStorage<Record<string, unknown>>();
+
+function installContextStore(ssrModule: any): void {
+  ssrModule.installContextStore?.({
+    getStore: () => requestAls.getStore(),
+    run: (store: Record<string, unknown>, fn: () => unknown) => requestAls.run(store, fn),
+  });
+}
+
+async function runPool(tasks: Array<() => Promise<void>>, limit: number): Promise<void> {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+    while (next < tasks.length) {
+      await tasks[next++]();
+    }
+  }));
+}
+
 async function prerender(routes: RouteInfo[]): Promise<string[]> {
   const ssrModule = await loadServer();
+  installContextStore(ssrModule);
   const skipped: string[] = [];
-  const write = async (routePath: string) => {
-    const mw = await ssrModule.runMiddleware({ method: 'GET', url: routePath, headers: {} });
-    if (mw) {
-      console.error(`prerender skipped for ${routePath}: the middleware short-circuits at build time`);
-      skipped.push(routePath);
-      return;
-    }
-    ssrModule.setQuery?.({});
-    const page = await ssrModule.renderPage(routePath);
-    if (page.status === 500) {
-      console.error(`prerender skipped for ${routePath}: render failed, the error page rendered`);
-      skipped.push(routePath);
-      return;
-    }
-    const routeDir = routePath === '/' ? OUT_DIR : path.join(OUT_DIR, routePath.slice(1));
-    await fs.promises.mkdir(routeDir, { recursive: true });
-    await fs.promises.writeFile(path.join(routeDir, 'index.html'), getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, '', page.shell !== false));
-    console.log(`prerendered ${routePath} -> ${path.relative(process.cwd(), path.join(routeDir, 'index.html'))}`);
-  };
 
+  // First pass: the exact files this prerender will write. The prune below
+  // then deletes only prerendered files OUTSIDE that set (routes that
+  // vanished), so a steady-state rebuild deletes nothing - the old
+  // prune-everything pass paid a full unlink tax on files the write pass was
+  // about to recreate with identical bytes.
+  const targetFile = (routePath: string): string =>
+    routePath === '/' ? path.join(OUT_DIR, 'index.html') : path.join(OUT_DIR, routePath.slice(1), 'index.html');
+  const planned: Array<{ routePath: string; file: string }> = [];
   for (const info of routes) {
     if (((ssrModule.prerenderSkipRoutes as string[]) ?? []).includes(info.routePath)) {
       console.log(`dynamic route ${info.routePath}: per-request state (getContext/$store), rendered on demand`);
       continue;
     }
     if (info.paramNames.length === 0) {
-      try {
-        await write(info.routePath);
-      } catch (err) {
-        console.error(`prerender skipped for ${info.routePath}: ${err instanceof Error ? err.message : err}`);
-        skipped.push(info.routePath);
-      }
+      planned.push({ routePath: info.routePath, file: targetFile(info.routePath) });
       continue;
     }
     try {
       const paramsExport = (ssrModule.routeParams as Record<string, unknown>)?.[info.routePath];
       const raw = typeof paramsExport === 'function' ? await (paramsExport as () => unknown)() : paramsExport;
       const paths = enumerateParams(info.pattern, info.paramNames, (raw ?? {}) as Record<string, unknown>);
-      for (const p of paths) await write(p);
+      for (const p of paths) planned.push({ routePath: p, file: targetFile(p) });
       if (paths.length === 0) console.log(`dynamic route ${info.routePath}: no params export, rendered on demand`);
     } catch (err) {
       console.error(`prerender skipped for ${info.routePath}: ${err instanceof Error ? err.message : err}`);
       skipped.push(info.routePath);
     }
   }
-
+  const keep = new Set(planned.map(({ file }) => file));
   const apiPrerender = (ssrModule.apiPrerender as Record<string, boolean>) ?? {};
-  for (const [routePath, on] of Object.entries(apiPrerender)) {
-    if (!on) continue;
-    try {
-      const res = await ssrModule.handleApi('GET', routePath, new Request('http://localhost' + routePath));
-      if (res.status !== 200) {
-        console.error(`api prerender skipped for ${routePath}: GET answered ${res.status}`);
-        continue;
+  const apiPlanned = Object.entries(apiPrerender).filter(([, on]) => on).map(([routePath]) => routePath);
+  for (const routePath of apiPlanned) keep.add(path.join(OUT_DIR, routePath.slice(1) + '.json'));
+  // Build-owned metadata, not route output: the prune below runs BEFORE this
+  // build writes them, so without this they were deleted (and their .br with
+  // them) only to be rewritten - and recompressed - seconds later.
+  keep.add(path.join(OUT_DIR, 'broken.json'));
+  keep.add(path.join(OUT_DIR, 'headers.json'));
+  keep.add(path.join(OUT_DIR, 'package.json'));
+  await prunePrerendered(OUT_DIR, keep);
+
+  const write = async (routePath: string, file: string) => {
+    await requestAls.run({}, async () => {
+      const mw = await ssrModule.runMiddleware({ method: 'GET', url: routePath, headers: {} });
+      if (mw) {
+        console.error(`prerender skipped for ${routePath}: the middleware short-circuits at build time`);
+        skipped.push(routePath);
+        await fs.promises.rm(file, { force: true });
+        return;
       }
-      const body = await res.text();
-      const outFile = path.join(OUT_DIR, routePath.slice(1) + '.json');
-      await fs.promises.mkdir(path.dirname(outFile), { recursive: true });
-      await fs.promises.writeFile(outFile, body);
-      console.log(`prerendered api ${routePath} -> ${path.relative(process.cwd(), outFile)}`);
+      ssrModule.setQuery?.({});
+      const page = await ssrModule.renderPage(routePath);
+      if (page.status === 500) {
+        console.error(`prerender skipped for ${routePath}: render failed, the error page rendered`);
+        skipped.push(routePath);
+        await fs.promises.rm(file, { force: true });
+        return;
+      }
+      const html = getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, '', page.shell !== false);
+      let prev: string | null = null;
+      try { prev = await fs.promises.readFile(file, 'utf-8'); } catch { /* new file: always write */ }
+      if (prev !== html) {
+        await fs.promises.mkdir(path.dirname(file), { recursive: true });
+        await fs.promises.writeFile(file, html);
+      }
+      console.log(`prerendered ${routePath} -> ${path.relative(process.cwd(), file)}`);
+    });
+  };
+
+  await runPool(planned.map(({ routePath, file }) => () => write(routePath, file).catch((err) => {
+    console.error(`prerender skipped for ${routePath}: ${err instanceof Error ? err.message : err}`);
+    skipped.push(routePath);
+  })), PRERENDER_CONCURRENCY);
+
+  await runPool(apiPlanned.map((routePath) => async () => {
+    try {
+      await requestAls.run({}, async () => {
+        const res = await ssrModule.handleApi('GET', routePath, new Request('http://localhost' + routePath));
+        if (res.status !== 200) {
+          console.error(`api prerender skipped for ${routePath}: GET answered ${res.status}`);
+          return;
+        }
+        const body = await res.text();
+        const outFile = path.join(OUT_DIR, routePath.slice(1) + '.json');
+        let prev: string | null = null;
+        try { prev = await fs.promises.readFile(outFile, 'utf-8'); } catch { /* new file: always write */ }
+        if (prev !== body) {
+          await fs.promises.mkdir(path.dirname(outFile), { recursive: true });
+          await fs.promises.writeFile(outFile, body);
+        }
+        console.log(`prerendered api ${routePath} -> ${path.relative(process.cwd(), outFile)}`);
+      });
     } catch (err) {
       console.error(`api prerender skipped for ${routePath}: ${err instanceof Error ? err.message : err}`);
     }
-  }
+  }), PRERENDER_CONCURRENCY);
   return skipped;
 }
 
@@ -416,7 +596,6 @@ function pageHeaders(ssrModule: any, pathname: string, nonce = ''): Record<strin
 
 /**
  * The nonce for one response, or '' when the route keeps the hashed policy
- * . Only the routes that exported `csp = { nonce: true }` ask for one,
  * so every other document is byte-for-byte what it was.
  */
 function nonceFor(ssrModule: any, pathname: string): string {
@@ -430,13 +609,16 @@ function revalidateInBackground(routePath: string, filePath: string): void {
   void (async () => {
     try {
       const ssrModule = await loadServer();
-      ssrModule.setQuery?.({});
-      const page = await ssrModule.renderPage(routePath);
-      if (page.status === 200) {
-        await fs.promises.writeFile(filePath, getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, '', page.shell !== false));
-        fileCache.delete(filePath);
-        console.log(`Rose Frame Driver: revalidated ${routePath} in the background`);
-      }
+      installContextStore(ssrModule);
+      await requestAls.run({}, async () => {
+        ssrModule.setQuery?.({});
+        const page = await ssrModule.renderPage(routePath);
+        if (page.status === 200) {
+          await fs.promises.writeFile(filePath, getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, '', page.shell !== false));
+          fileCache.delete(filePath);
+          console.log(`Rose Frame Driver: revalidated ${routePath} in the background`);
+        }
+      });
     } catch (err) {
       console.error('Rose Frame Driver: background revalidation failed for', routePath, err instanceof Error ? err.message : err);
     } finally {
@@ -504,15 +686,13 @@ function crossSiteWrite(req: any): { status: number; body: string } | null {
 
 /**
  * One access line per request on stdout - the same greppable shape the Go
- * binary writes (`ts method path status bytes duration`), with the worker id
  * in front when several workers share one stdout. Logged on the response's
  * finish, so a streamed route is recorded when it is actually done.
  */
 /**
  * The access line itself, shared by withAccessLog and the dynamic-render
- * branch of `serve` (which returns before baseHandler, so it never goes
  * through the wrapper). One formatter means both paths emit byte-identical
- * shapes - the greppable contract test-cli asserts on.
+ * shapes - the greppable contract tests/test-cli asserts on.
  */
 function writeAccessLine(req: any, res: any, bytes: number, tag?: string, startedNs?: bigint): void {
   const ms = Number(process.hrtime.bigint() - (startedNs ?? process.hrtime.bigint())) / 1e6;
@@ -556,7 +736,7 @@ async function hookContext(req: any): Promise<{
   for (const [k, v] of Object.entries(req.headers)) {
     if (v !== undefined) headers[k] = Array.isArray(v) ? v.join(', ') : String(v);
   }
-  const request = new Request(`http://${req.headers.host || 'localhost'}${req.url}`, {
+  const request = new Request(`http://${req.headers?.host || 'localhost'}${req.url}`, {
     method: req.method || 'GET',
     headers,
   });
@@ -576,9 +756,12 @@ function webHeadersToNode(web: any): Record<string, any> {
   return out;
 }
 
+// --- dev-only live reload + state bridge --- The dev server rebuilds on change; without a signal the browser keeps showing the previous document.
 const DEV_BRIDGE = `<script>(function(){var es=new EventSource('/__rosefd_reload');es.onmessage=function(m){if(m.data!=='rebuild')return;es.close();var s=window.__rosefd?window.__rosefd.state():null;if(s)fetch('/__rosefd_state',{method:'POST',body:s,headers:{'content-type':'application/json'}}).catch(function(){});setTimeout(function(){location.reload()},40)}})()</script>`;
+
 let devResume: string | null = null;
 const devClients = new Set<any>();
+
 let devMode = false;
 
 function devReload(req: any, res: any): void {
@@ -602,7 +785,8 @@ function devSaveState(req: any, res: any): void {
     try {
       JSON.parse(body);
       devResume = body;
-    } catch { /* a corrupt snapshot is dropped: the next render is simply fresh */ }
+    } catch {  }
+    /* a corrupt snapshot is dropped: the next render is simply fresh */
     res.writeHead(204).end();
   });
 }
@@ -618,21 +802,36 @@ function devNotify(): void {
   }
 }
 
+// Q2 (bug report): dev rebuild orchestration - one build at a time.
+// devDirty marks a change no started build has consumed yet; devDirtyMid marks
+// one that landed WHILE a build was running AND was written after that build
+// began (so the build may have read the old bytes). The running build's
+// completion consumes devDirtyMid with exactly one catch-up pass, so a burst
+// of watch events - or events racing the build - never costs more than one
+// extra rebuild, and never zero.
 let devBuild: Promise<void> | null = null;
-let devBuildPending = false;
+let devDirty = false;
+let devDirtyMid = false;
+let devBuildStartMs = 0;
 
 function startDevBuild(): Promise<void> {
   if (!devBuild) {
+    devDirty = false;
+    devBuildStartMs = Date.now();
     devBuild = (async () => {
       try {
         console.log('Rebuilding...');
         await build();
         devNotify();
+        devNotify();
       } catch (err) {
         console.error('Build failed (server still running):', err instanceof Error ? err.message : String(err));
       } finally {
         devBuild = null;
-        devBuildPending = false;
+        if (devDirtyMid) {
+          devDirtyMid = false;
+          startDevBuild();
+        }
       }
     })();
   }
@@ -641,12 +840,33 @@ function startDevBuild(): Promise<void> {
 
 /** Q2: the promise to await before routing, or null when nothing is building. */
 function settleDevBuild(): Promise<void> | null {
-  if (!devMode || (!devBuild && !devBuildPending)) return null;
+  if (!devMode || (!devBuild && !devDirty)) return null;
   return startDevBuild();
 }
 
-// Wrap a dev response so every HTML document carries the bridge (and the resumed state, once).
 let invalidateHook: (() => void) | null = null;
+
+// set by serve: clears the render memo
+function storeStream(req: any, res: any): void {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(': ok\n\n');
+  // A live SSE must outlive the server's request/socket timeouts (serve sets
+  // requestTimeout=30s); the 15s heartbeat keeps the socket from ever looking idle.
+  if (req.socket) req.socket.setTimeout(0);
+  // The client set is shared with the server bundle's __broadcastStore via globalThis,
+  // so a dev hot-re-import keeps pushing to the same live connections.
+  const clients: Set<any> = (globalThis as any).__rosefd_storeClients || ((globalThis as any).__rosefd_storeClients = new Set());
+  clients.add(res);
+  const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* connection gone */ } }, 15000);
+  const done = () => { clearInterval(hb); clients.delete(res); };
+  req.on('close', done);
+  res.on('close', done);
+}
 
 function devWrap(inner: (req: any, res: any) => void): (req: any, res: any) => void {
   devMode = true;
@@ -654,7 +874,9 @@ function devWrap(inner: (req: any, res: any) => void): (req: any, res: any) => v
     const url = req.url || '/';
     if (url.startsWith('/__rosefd_reload')) return devReload(req, res);
     if (url.startsWith('/__rosefd_state') && req.method === 'POST') return devSaveState(req, res);
+    if (url.startsWith('/__rosefd_store')) return storeStream(req, res);
     let injected = false;
+    // The resumed snapshot belongs to the NEXT request, whatever it turns out to be: a document that answers 304 (nothing changed) consumes it too.
     const seed = devResume;
     devResume = null;
     const isHtml = () => String(res.getHeader('content-type') || '').includes('text/html');
@@ -663,8 +885,9 @@ function devWrap(inner: (req: any, res: any) => void): (req: any, res: any) => v
       const s = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
       const at = s.indexOf('<head>');
       if (at < 0) return chunk;
+      
       injected = true;
-      const resume = seed ? `<script>window.__rosefd_resume=${seed.replace(/<\//g, '<\\/')}</script>` : '';
+      const resume = seed ? `<script>window.__rosefd_resume=${seed.replace(/<\/script>/g, '')}</script>` : '';
       const out = s.slice(0, at + 6) + resume + DEV_BRIDGE + s.slice(at + 6);
       return Buffer.isBuffer(chunk) ? Buffer.from(out, 'utf8') : out;
     };
@@ -681,6 +904,7 @@ function devWrap(inner: (req: any, res: any) => void): (req: any, res: any) => v
 
 function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any) => void {
   return (req, res) => {
+    // The origin guard runs before everything else - middleware, api dispatch.
     const blocked = crossSiteWrite(req);
     if (blocked) {
       res.statusCode = blocked.status;
@@ -688,6 +912,7 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
       res.end(blocked.body);
       return;
     }
+    // Q0 (bug report): one canonical URL per route.
     if (req.method === 'POST' && (req.url || '').startsWith('/__rosefd/revalidate')) {
       const token = process.env.ROSEFD_REVALIDATE_TOKEN || '';
       if (!token) { res.statusCode = 404; res.end(); return; }
@@ -713,7 +938,8 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
     const canonical = want.replace(/\/+$/, '') || '/';
     if (canonical !== want) {
       let search = '';
-      try { search = new URL(req.url || '/', 'http://localhost').search; } catch { /* keep it bare */ }
+      try { search = new URL(req.url || '/', 'http://localhost').search; } catch {  }
+      
       const to = canonical + search;
       res.statusCode = 308;
       res.setHeader('Location', to);
@@ -721,19 +947,25 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
       res.end(`<!DOCTYPE html><title>Redirecting</title><p>Redirecting to <a href="${to}">${to}</a>.</p>`);
       return;
     }
+    // Everything below needs the server module (API dispatch, POST actions, SSR)
     const settled = settleDevBuild();
     const ready = settled ? settled.then(() => loadServer()) : loadServer();
     ready.then(async (ssrModule: any) => {
+      installContextStore(ssrModule);
+      return requestAls.run({}, async () => {
+// Runtime hooks: onRequest runs after the origin guard and BEFORE middleware and routing.
       const hookCtx = ssrModule.hasRequestHooks === true || ssrModule.hasResponseHooks === true
         ? await hookContext(req)
         : null;
       if (hookCtx) {
         const short = await ssrModule.runRequestHooks(hookCtx);
         if (short) {
+          
           await sendWebResponse(await ssrModule.runResponseHooks(hookCtx, short), res);
           return;
         }
       }
+      
       const apiPath0 = pathnameOf(req.url);
       const isPagePost = req.method === 'POST' && !ssrModule.isApi(apiPath0);
       if (!isPagePost && ssrModule.middleware) {
@@ -743,6 +975,7 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
           return;
         }
       }
+      // API routes (pages/api/*.rose) dispatch FIRST: the /api namespace answers JSON.
       const apiPath = pathnameOf(req.url);
       if (ssrModule.isApi(apiPath)) {
         readBody(req, res, async (body) => {
@@ -816,7 +1049,10 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
 
       const isAsset = ASSET_EXT.has(path.extname(safe).toLowerCase());
       const isDynamic = !isAsset && (ssrModule.dynamicRoutes as string[] | undefined)?.includes(pathnameOf(req.url));
-      if (!isDynamic && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      // Dev renders documents on demand, so a stale prerendered file never wins
+      // over the freshly-recompiled server. Production still serves from disk.
+      const isDocInDev = devMode && path.extname(filePath).toLowerCase() === '.html';
+      if (!isDynamic && !isDocInDev && fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         const st = fs.statSync(filePath);
         const rev = isAsset ? undefined : ((ssrModule.revalidate as { pattern: string; seconds: number }[]) || [])
           .find((r) => ssrModule.matchRoute(r.pattern, pathnameOf(req.url)));
@@ -826,11 +1062,13 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
         let entry = fileCache.get(filePath);
         if (!entry || entry.mtimeMs !== st.mtimeMs) {
           const raw = fs.readFileSync(filePath);
+          const compressible = raw.length > 1024 && !NO_COMPRESS_EXT.has(path.extname(filePath).toLowerCase());
           entry = {
             mtimeMs: st.mtimeMs,
             raw,
-            br: zlib.brotliCompressSync(raw),
-            gzip: zlib.gzipSync(raw, { level: 9 }),
+            br: compressible ? (prebuiltBro(filePath, st.mtimeMs) ?? undefined) : undefined,
+            gzip: undefined,
+            compressible,
             etag: `W/"${st.size}-${st.mtimeMs}"`,
           };
           fileCache.set(filePath, entry);
@@ -848,7 +1086,6 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
           'Content-Type': types[ext] || 'application/octet-stream',
           'Cache-Control': devMode ? 'no-cache' : rev ? `public, max-age=0, stale-while-revalidate=${rev.seconds}` : 'public, max-age=3600',
           'ETag': entry.etag,
-          'Vary': 'Accept-Encoding',
         };
         if (ext === '.html') Object.assign(fileHeaders, pageHeaders(ssrModule, pathnameOf(req.url)));
         let status = 200;
@@ -859,16 +1096,20 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
         } else {
           for (const [k, v] of Object.entries(fileHeaders)) res.setHeader(k, v);
         }
+        // After the route headers and the response hooks: an app-declared
+        // Vary must not drop the negotiated-encoding dimension (and vice
+        // versa) - the body below is chosen by Accept-Encoding.
+        addVary(res, 'Accept-Encoding');
         if (req.headers['if-none-match'] === entry.etag) {
           res.statusCode = 304;
           res.end();
           return;
         }
-        const enc = devMode ? null : pickEncoding(req);
+        const enc = devMode ? null : entry.compressible ? pickEncoding(req) : null;
         res.statusCode = status;
         if (enc) {
           res.setHeader('Content-Encoding', enc);
-          res.end(enc === 'br' ? entry.br : enc === 'gzip' ? entry.gzip : compress('deflate', entry.raw));
+          res.end(enc === 'deflate' ? compress('deflate', entry.raw) : encodedFile(entry, enc));
         } else {
           res.end(entry.raw);
         }
@@ -893,8 +1134,11 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
         }
         res.statusCode = status;
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.setHeader('Vary', 'Accept-Encoding');
         for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
+        // After the route headers and the response hooks: an app-declared
+        // Vary must not drop the negotiated-encoding dimension (and vice
+        // versa) - the stream below is chosen by Accept-Encoding.
+        addVary(res, 'Accept-Encoding');
         let write: (chunk: string) => void;
         let done: () => void;
         if (enc) {
@@ -925,6 +1169,7 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
         ? await ssrModule.renderPageCached(safe2, String(req.headers.cookie || ''))
         : await ssrModule.renderPage(safe2);
       await sendPage(req, res, ssrModule, hookCtx, page, safe2);
+      });
     }).catch((err: unknown) => {
       console.error(`Rose Frame Driver: ${req.method} ${req.url} failed:`, err instanceof Error ? err.stack ?? err.message : err);
       if (res.headersSent) {
@@ -977,7 +1222,6 @@ function queryOf(url: string | undefined): Record<string, string> {
   return q;
 }
 
-/** Listen on `port`, hopping to the next free one on EADDRINUSE. */
 function listenFree(server: any, port: number, onReady: (port: number) => void): void {
   const attempt = (p: number): void => {
     const cleanup = (): void => {
@@ -1005,7 +1249,6 @@ function listenFree(server: any, port: number, onReady: (port: number) => void):
 }
 
 /**
- * P0-0 (bug report): the first free port at or after `from`, probed with a
  * throwaway socket. The cluster's primary needs this because the workers must
  * all land on the SAME port - letting each of them hop on its own would put
  * them on different ports and split the traffic between them. Racy by nature
@@ -1071,10 +1314,45 @@ async function dev(): Promise<void> {
   }
 
   let timeout: any;
-  fs.watch(SRC_DIR, { recursive: true }, () => {
-    devBuildPending = true;
+  fs.watch(SRC_DIR, { recursive: true }, (_ev, filename) => {
+    // Build output must not retrigger the build: dist/ (prerendered HTML,
+    // bundles), .rosefd-build/ (esbuild intermediates) and src/.rosefd/
+    // (generated route types) are all rewritten by every rebuild, and
+    // watching them turns one edit into an endless rebuild loop whose
+    // prune/prerender window serves stale documents. node_modules and .git
+    // are noise for the same reason.
+    if (filename) {
+      const segs = String(filename).replace(/\\/g, '/').split('/');
+      if (segs.some((s) => s === 'dist' || s === 'node_modules' || s === '.git' || s === '.rosefd' || s === '.rosefd-build')) return;
+    }
+    if (devBuild) {
+      // A change racing a running build. The build reads sources within its
+      // first instants, so a file last written BEFORE the build began is
+      // already in it; only a write that landed after (or a vanished SOURCE
+      // file - a route the build must drop) can have been missed and owes a
+      // catch-up. Editor/rename scratch files (sed's sedyXXXXXX, ~$ locks)
+      // carry no source extension and vanish by design: they are not deletions.
+      try {
+        const st = fs.statSync(path.join(SRC_DIR, filename));
+        if (st.mtimeMs > devBuildStartMs) devDirtyMid = true;
+      } catch {
+        // filename can be null (fs.watch omits it when unavailable): path.extname
+        // would throw on null, and an uncaught throw in this callback takes the
+        // whole dev server down.
+        const name = String(filename ?? '');
+        if (SOURCE_EXT.has(path.extname(name).toLowerCase())) devDirtyMid = true;
+      }
+      return;
+    }
+    devDirty = true;
     clearTimeout(timeout);
-    timeout = setTimeout(() => { void startDevBuild(); }, 200);
+    // A short window, not the classic 200ms: raw fs.watch delivers a save in
+    // ~5-10ms (measured), so an editor save's 1-3 events all land inside it,
+    // while the wait itself was pure added latency in the save->visible loop.
+    // A stream that outlasts it (format-on-save chains, a git checkout) just
+    // costs one extra rebuild per pause - the epoch logic in startDevBuild
+    // keeps that bounded.
+    timeout = setTimeout(() => { void startDevBuild(); }, 50);
   });
 
   const http = await import('http');
@@ -1091,11 +1369,10 @@ async function preview(): Promise<void> {
   const server = http.createServer(serveStatic(OUT_DIR, true));
 
   listenFree(server, PORT, (port) => {
-    console.log(`🌹 Rose Frame Driver v${version()}${projectTag()} preview at http://localhost:` + port);
+    console.log(`🌹 Rose Frame Driver v${version()}${projectTag()} preview at http://localhost:${port}`);
   });
 }
 
-// `rosefd serve`: runs what `build` produced, no rebuild.
 async function serve(): Promise<void> {
   if (!fs.existsSync(path.join(OUT_DIR, 'server.js'))) {
     console.error(`Rose Frame Driver: ${OUT_DIR} has no server.js - run rosefd build first`);
@@ -1125,38 +1402,52 @@ async function serve(): Promise<void> {
     console.log(`🌹 Rose Frame Driver v${version()}${projectTag()} serve: ${workers} worker${workers > 1 ? 's' : ''} on http://localhost:${port} (cluster, bounded bodies, graceful shutdown, access log on stdout)`);
     return;
   }
+  
   process.on('disconnect', () => process.exit(0));
+ 
   let servicePlugins: any[] = [];
   try {
     servicePlugins = (await loadPlugins(SRC_DIR)).filter((p) => p && p.onServe);
   } catch (err) {
     console.error('Rose Frame Driver: rosefd.config.js failed to load for the serve hooks:', err instanceof Error ? err.message : String(err));
   }
+ 
   const storeBridge = {
     install: (send: ((name: string, value: unknown) => void) | null) => {
-      try { serverModule?.__installStoreTransport?.(send); } catch { /* a stale dist: no bridge, no crash */ }
+      try { serverModule?.__installStoreTransport?.(send); } catch {  }
+      /* a stale dist: no bridge, no crash */
     },
     deliver: (name: string, value: unknown) => {
-      try { serverModule?.__deliverStorePatch?.(name, value); } catch { /* ditto */ }
+      try { serverModule?.__deliverStorePatch?.(name, value); } catch {  }
+      
     },
   };
   try {
     const hooksMod = await loadServer();
-    invalidateHook = () => { try { hooksMod.invalidateRenderCache(); } catch { /* worker without a memo */ } };
+    invalidateHook = () => { try { hooksMod.invalidateRenderCache(); } catch {  } };
+    // Serve-worker boot: bind every listener the app registered with $udp/$tcp/$listen.
+    try { (hooksMod as { __startNetwork?: () => void }).__startNetwork?.(); }
+    catch (err) { console.error('Rose Frame Driver: network listener start failed:', err instanceof Error ? err.message : String(err)); }
   } catch (err) {
     console.error('Rose Frame Driver: dist/server.js failed to load for the serve hooks:', err instanceof Error ? err.message : String(err));
   }
   const http = await import('node:http');
+  // T9: dynamic GET/HEAD rides the edge handler - the same compiled code the adapters run.
   const edgeReady = createEdgeHandler(OUT_DIR);
+  // Warm every fixed dynamic route once per worker: the render memo is per-worker.
   edgeReady.then(async (handle) => {
     await ready;
-    for (const r of (serverModule?.dynamicRoutes as string[] | undefined) || []) {
-      if (r.includes(':')) continue;
-      try {
-        const res = await handle(new Request('http://localhost' + r));
-        await res.arrayBuffer();
-      } catch { /* a warm-up failure just means that route renders cold */ }
-    }
+    const list = ((serverModule?.dynamicRoutes as string[] | undefined) || []).filter((r) => !r.includes(':'));
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, list.length) }, async () => {
+      while (next < list.length) {
+        const r = list[next++];
+        try {
+          const res = await handle(new Request('http://localhost' + r));
+          await res.arrayBuffer();
+        } catch {  }
+      }
+    }));
   }).catch(() => {});
   const baseHandler = withAccessLog(serveStatic(OUT_DIR, true), `w${process.pid}`);
   const earlyHintLinks: string[] = (() => {
@@ -1187,6 +1478,7 @@ async function serve(): Promise<void> {
   const server = http.createServer(async (req: any, res: any) => {
     let bytesWritten = 0;
     const started = process.hrtime.bigint();
+    if ((req.url || '').startsWith('/__rosefd_store')) return storeStream(req, res);
     try {
       if ((req.method === 'GET' || req.method === 'HEAD') && dynRoutesOf().has(pathnameOf(req.url || '/'))) {
         const handle = await edgeReady;
@@ -1198,6 +1490,12 @@ async function serve(): Promise<void> {
         const access = () => writeAccessLine(req, res, bytesWritten, `w${process.pid}`, started);
         res.statusCode = response.status;
         response.headers.forEach((v: string, k: string) => res.setHeader(k, v));
+        // The body below is content-negotiated on Accept-Encoding, so a cache
+        // must know the response varies by it - the same header the static and
+        // streamed branches set. Merged, not written: the edge response may
+        // carry the app's own dimensions (an i18n redirect varies on
+        // Accept-Language) and setHeader would drop them.
+        addVary(res, 'Accept-Encoding');
         const htmlDoc = (response.headers.get('content-type') ?? '').startsWith('text/html');
         const enc = htmlDoc && req.method === 'GET' ? pickEncoding(req) : null;
         if (response.body && enc) {
@@ -1210,7 +1508,7 @@ async function serve(): Promise<void> {
             access();
             return;
           }
-          const body = compress(enc, raw);
+          const body = await compressAsync(enc, raw);
           res.setHeader('ETag', etag);
           res.setHeader('Content-Encoding', enc);
           res.setHeader('Content-Length', String(body.length));
@@ -1248,6 +1546,9 @@ async function serve(): Promise<void> {
     }
   });
   const stop = () => {
+    // Close the app's network listeners ($udp/$tcp/$listen) before draining.
+    try { (serverModule as { __stopNetwork?: () => void } | null)?.__stopNetwork?.(); } catch { /* best-effort */ }
+    // onShutdown first: close what onServe opened, then drain. A throwing
     for (const p of servicePlugins) {
       if (!p.onShutdown) continue;
       try {
@@ -1258,6 +1559,7 @@ async function serve(): Promise<void> {
         console.error('Rose Frame Driver: plugin', p.name, 'onShutdown failed:', err instanceof Error ? err.message : err);
       }
     }
+    // App-registered hooks (an embedded database that must checkpoint and flush its WAL).
     server.close(() => {
       void runShutdownHooks('worker signal').finally(() => process.exit(0));
     });
@@ -1268,7 +1570,7 @@ async function serve(): Promise<void> {
   process.on('SIGINT', stop);
 }
 
-// The templates directory, in the two layouts the CLI ships in: the repo checkout (src/cli -> two up) and the installed package (dist-cli -> one up).
+
 function templatesDir(): string | null {
   for (const rel of ['../../templates', '../templates']) {
     const p = fileURLToPath(new URL(rel, import.meta.url));
@@ -1291,13 +1593,15 @@ function writeTypeScriptReady(dir: string): void {
       noEmit: true,
       skipLibCheck: true,
     },
+    // the env file first (it is what makes the globals visible), then any
     include: ['rosefd-env.d.ts', 'src/**/*.ts'],
   }, null, 2) + '\n');
 }
 
-// Copy a template into the new project and make it the developer's own: the name. A template's own build output and node_modules never ride along.
+
 function copyTemplate(dir: string, name: string, display: string): void {
   const base = templatesDir();
+  
   const shipped = base ? path.resolve(base, name) : '';
   const src = fs.existsSync(shipped) ? shipped : path.resolve(name);
   if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) {
@@ -1325,19 +1629,14 @@ function copyTemplate(dir: string, name: string, display: string): void {
 }
 
 /**
- * `rosefd new <name>` - a starting project. The smallest thing that builds
  * and runs and shows the syntax: one page (state, {#if}, {#each}, a scoped
  * style), one README naming the three commands. Not a second demo app - the
- * point is that a new developer's first `rosefd build` works in seconds.
  *
- * `rosefd new <name> --template <t>` - the
  * official templates (blog, api, admin, site) copied verbatim, with the
- * dependency rewritten to the published package. A name that is not a
  * shipped template is resolved as a PATH, so any project directory works as
  * a template (a team's own starter, a checkout's examples/).
  *
  * Trade-off: three files, written from strings. No template engine, no
- * dependency, no `npm install` run on the developer's behalf (they may use
  * pnpm/yarn/bun, and a surprise install is worse than a printed command).
  */
 async function scaffold(): Promise<void> {
@@ -1382,7 +1681,7 @@ async function scaffold(): Promise<void> {
   writeTypeScriptReady(dir);
 
   fs.writeFileSync(path.join(pages, 'index.rose'), `<script>
-  // One file per route: markup, script and styles together.
+  
   interface Item { label: string }
 
   let count = $state(0);
@@ -1391,8 +1690,7 @@ async function scaffold(): Promise<void> {
 
   function increment() { $setState('count', count() + 1); }
   function toggleList() { $setState('showList', !showList()); }
-  // typed server data: the body runs per request on the server (and ships
-  // to the client, where it re-runs on a client-side navigation)
+  
   let first: Item = $data((): Item => ({ label: items()[0] ?? 'nothing yet' }));
 </script>
 
@@ -1443,7 +1741,6 @@ runs before every request, \`src/pages/api/*.rose\` answers JSON.
 }
 
 /**
- * `rosefd check [dir]` - type-check every .rose script with the
  * PROJECT's own TypeScript.
  *
  * esbuild strips types without checking them, so a wrong argument type or a
@@ -1464,11 +1761,20 @@ async function check(): Promise<void> {
     process.exit(1);
   }
 
-  let tsMod: typeof ts;
-  try {
-    const req = createRequire(pathToFileURL(path.join(SRC_DIR, 'package.json')));
-    tsMod = await import(pathToFileURL(req.resolve('typescript')).href) as typeof ts;
-  } catch {
+  let tsMod: typeof ts | null = null;
+  // Two roots, in order: the framework's own installation (a dev checkout has
+  // typescript next to the compiler), then the project's. A project without
+  // typescript must not silently resolve some unrelated global copy whose
+  // entry file lacks the compiler API - the shape check below rejects those.
+  for (const root of [import.meta.url, pathToFileURL(path.join(SRC_DIR, 'package.json')).href]) {
+    try {
+      const req = createRequire(root);
+      const mod = await import(pathToFileURL(req.resolve('typescript')).href) as typeof ts & { default?: typeof ts };
+      const api = (mod && mod.ScriptTarget ? mod : mod.default) as typeof ts | undefined;
+      if (api && api.ScriptTarget && api.createProgram) { tsMod = api; break; }
+    } catch { /* try the next root */ }
+  }
+  if (!tsMod) {
     console.error(`Rose Frame Driver: type checking needs typescript in this project - npm i -D typescript`);
     process.exit(1);
   }
@@ -1493,7 +1799,12 @@ async function check(): Promise<void> {
     const wired = runtimeSource
       ? script.replace(/['"]\.\/runtime\.js['"]/g, JSON.stringify(runtimeSource.replace(/\\/g, '/')))
       : script;
-    virtual.set(norm(file), '\n'.repeat(tagLine - 1) + wired);
+    // Every .rose compiles to its own module, so a script with no import or
+    // export must still check as one: without the marker it lands in the
+    // program's shared global scope and its top-level `let`s collide with
+    // every other import-free script (TS2451 on names nothing redeclares).
+    // The marker goes last so the line-offset prefix above stays exact.
+    virtual.set(norm(file), '\n'.repeat(tagLine - 1) + wired + '\nexport {};');
     checked++;
   }
   if (checked === 0) {
@@ -1518,6 +1829,7 @@ async function check(): Promise<void> {
       if (target === file || declared.has(target)) continue;
       const targetSource = await fs.promises.readFile(target, 'utf-8').catch(() => null);
       if (targetSource === null) continue;
+      
       const props = extractExports(scriptOf(targetSource) ?? '').props;
       virtual.set(`${target}.d.ts`, [
         `declare function render(closes: unknown[], children: string, __props: { ${props.map((p) => `${p.name}?: ${propType(p.def)}`).join('; ')} }, __slots?: Record<string, unknown>): string;`,
@@ -1535,11 +1847,14 @@ async function check(): Promise<void> {
     module: tsMod.ModuleKind.ESNext,
     moduleResolution: tsMod.ModuleResolutionKind.Bundler,
     lib: ['lib.es2022.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts'],
+    // The virtual files are named after the .rose files (so a diagnostic points at the real path); without this TypeScript refuses them.
     allowNonTsExtensions: true,
+    
     allowImportingTsExtensions: true,
     skipLibCheck: true,
   };
   const host = tsMod.createCompilerHost(options);
+  // @types discovery starts at the project root, not the process cwd - the
   host.getCurrentDirectory = () => path.resolve(SRC_DIR);
   const realRead = host.readFile.bind(host);
   const realGet = host.getSourceFile.bind(host);
@@ -1550,7 +1865,9 @@ async function check(): Promise<void> {
     return src ? tsMod.createSourceFile(f, src, version, true) : realGet(f, version, onError, shouldCreate);
   };
 
+  // Rose Frame Driver's ambient globals as a program root: a global .d.ts contributes its declarations to every file in the program.
   const program = tsMod.createProgram([...virtual.keys(), typesFile], options, host);
+  // Only the project's own scripts: an error inside @types/node or inside rosefd's runtime source is not the user's bug (skipLibCheck already //).
   const diagnostics = tsMod.getPreEmitDiagnostics(program)
     .filter((d) => d.file && virtual.has(norm(d.file.fileName)));
   if (diagnostics.length === 0) {
@@ -1585,6 +1902,9 @@ function reportFailure(err: unknown): never {
   } else if (err instanceof RoseError) {
     console.error(`Rose Frame Driver: ${err.message}`);
     if (err.hint) console.error(`  hint: ${err.hint}`);
+    if (err.file && err.line) {
+      try { console.error(codeFrame(fs.readFileSync(err.file, 'utf-8'), err.line)); } catch {  }
+    }
     const at = err.file ? `${err.file}${err.line ? `:${err.line}` : ''}` : null;
     if (at) console.error(`  at ${at}`);
   } else {
@@ -1600,4 +1920,4 @@ else if (cmd === 'serve') void serve().catch(reportFailure);
 else if (cmd === 'new') void scaffold().catch(reportFailure);
 else if (cmd === 'check') void check().catch(reportFailure);
 else if (cmd === 'prompt') console.log(AI_PROMPT);
-else console.log('Usage: rosefd dev|build|preview|serve|new|check|prompt [dir] [--json] [--static]   (dir defaults to the current directory; dist/ is written there; --json prints build failures as machine-readable JSON; --static verifies the build is deployable with no server at all; `new <name> [--template blog|api|admin|site]` scaffolds a project)');
+else console.log('Usage: rosefd dev|build|preview|serve|new|check|prompt [dir] [--json] [--static] [--no-minify]   (dir defaults to the current directory; dist/ is written there; --json prints build failures as machine-readable JSON; --static verifies the build is deployable with no server at all; --no-minify keeps server.js/prod.mjs unminified for debugging; `new <name> [--template blog|api|admin|site]` scaffolds a project)');

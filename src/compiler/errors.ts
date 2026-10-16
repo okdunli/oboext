@@ -24,6 +24,8 @@ export class RoseError extends Error {
   }
 
   info(): RoseErrorInfo {
+    // code -> file -> line -> message -> hint: the order the prompt doc
+    // documents, so a reader parsing the envelope finds the location first
     const info = { code: this.code } as RoseErrorInfo;
     if (this.file !== undefined) info.file = this.file;
     if (this.line !== undefined) info.line = this.line;
@@ -52,4 +54,22 @@ export function lineAt(src: string, match?: RegExpMatchArray | null): number | u
 export function errorInfo(err: unknown): RoseErrorInfo {
   if (err instanceof RoseError) return err.info();
   return { code: 'E-UNKNOWN', message: err instanceof Error ? err.message : String(err) };
+}
+
+/** Numbered excerpt of `src` around 1-based `line`, caret at 1-based `column` when given. */
+export function codeFrame(src: string, line: number, opts: { column?: number; radius?: number } = {}): string {
+  const radius = Math.max(0, opts.radius ?? 1);
+  const lines = src.split('\n');
+  const from = Math.max(1, line - radius);
+  const to = Math.min(lines.length, line + radius);
+  const gutter = String(to).length;
+  const out: string[] = [];
+  for (let n = from; n <= to; n++) {
+    const text = lines[n - 1] ?? '';
+    out.push(`  ${String(n).padStart(gutter)} | ${text}`);
+    if (n === line && opts.column !== undefined) {
+      out.push(`  ${' '.repeat(gutter)} | ${' '.repeat(Math.max(0, opts.column - 1))}^`);
+    }
+  }
+  return out.join('\n');
 }

@@ -3,6 +3,7 @@
   import { checkCsrf, needsCsrf, isSafeMethod, selfHealCsrfCookie } from "@server/csrf";
   import { createLogger } from "@server/logger";
   import { splitLocalePath, localeFromCookieHeader, localeHref, headerLocale, makeT } from "@server/i18n";
+  import { warmReadWave } from "@server/loaders";
   const log = createLogger("middleware");
 
   export async function handle(request) {
@@ -118,6 +119,16 @@
     // route the loaders see, so /en/admin/login redirects to /admin/login
     // instead of falling through to page routing.
     const rp = ctx.pathname || real.pathname;
+
+    // Lambda cold start: there is no boot warm on serverless, so the FIRST
+    // visitor pays the whole read wave. Fire it once in the background
+    // (fire-and-forget: a failure costs nothing) so the instance-mates that
+    // follow hit warm memos. Non-Vercel boots warm at boot instead.
+    if (process.env.VERCEL && !globalThis.__oboextWaveWarmed) {
+      globalThis.__oboextWaveWarmed = true;
+      console.log("[oboext] cold-start read wave fired (vercel, background)");
+      void warmReadWave().catch(() => {});
+    }
 
     // ------------------------------------------- first-run wall (whole site)
     // A fresh install has no user, so every public page renders an empty blog

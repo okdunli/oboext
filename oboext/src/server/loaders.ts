@@ -2147,6 +2147,25 @@ async function loginBrand() {
  * registry as `warmUrls`. Every read here is memoized, so on a warm process
  * this costs nothing and returns stable paths.
  */
+/**
+ * Fire the shared read wave once (settings, taxonomies, lists, theme).
+ * Every read here is memoized, so this is a no-op on a warm process. On
+ * Vercel there is no boot warm, so the FIRST visitor pays this whole
+ * wave; calling it fire-and-forget on that first request moves the cost
+ * into the background and its instance-mates hit warm memos.
+ */
+export async function warmReadWave(): Promise<void> {
+  await Promise.all([
+    getSettings(),
+    getActiveThemeSlug(),
+    getActiveThemeSettings(),
+    getPermalinkConfig(),
+    listCategories(),
+    listTags(),
+    listPosts({ status: "published", limit: 12 }),
+  ]);
+}
+
 export async function warmEntityUrls(): Promise<string[]> {
   const [posts, cats, tags, cfg] = await Promise.all([
     listPosts({ status: "published", limit: 1 }),

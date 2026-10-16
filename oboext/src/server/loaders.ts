@@ -49,7 +49,7 @@ import { renderUserCenter, renderUserCenterGuest } from "./account.js";
 import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
 import { getAdminSecurity } from "./security.js";
 import { can } from "./admin.js";
-import { getThemeChrome, publicAssetHref, themeScriptTags, catIconName, type MenuItem } from "./theme-chrome.js";
+import { getThemeChrome, publicAssetHref, themeScriptTags, themeLayout, catIconName, type MenuItem } from "./theme-chrome.js";
 import { createLogger } from "./logger.js";
 import {
   DEFAULT_LOCALE,
@@ -454,9 +454,10 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
 // -------- bluemix home helpers (mirror themes/bluemix/HomePage.tsx logic) --------
 
 async function sideWidgetsFor(themeSlug: string, t?: Translate): Promise<string> {
+  const layout = themeLayout(themeSlug);
 
-  if (themeSlug !== "codeman" && themeSlug !== "pseudolinear") return "";
-  const wrap = themeSlug === "pseudolinear" ? "pl-side-stack" : "sk-widget-area";
+  if (layout !== "codeman" && layout !== "pseudolinear") return "";
+  const wrap = layout === "pseudolinear" ? "pl-side-stack" : "sk-widget-area";
   return R.widgetAreaHtml(await getAreaWidgets(themeSlug, "sidebar"), wrap, t);
 }
 
@@ -467,13 +468,15 @@ function sideWidgetsHtml(
   items: Awaited<ReturnType<typeof getAreaWidgets>>,
   t?: Translate,
 ): string {
-  if (themeSlug !== "codeman" && themeSlug !== "pseudolinear") return "";
-  const wrap = themeSlug === "pseudolinear" ? "pl-side-stack" : "sk-widget-area";
+  const layout = themeLayout(themeSlug);
+  if (layout !== "codeman" && layout !== "pseudolinear") return "";
+  const wrap = layout === "pseudolinear" ? "pl-side-stack" : "sk-widget-area";
   return R.widgetAreaHtml(items, wrap, t);
 }
 
 async function bmixDrawerPosts(themeSlug: string): Promise<PostView[] | undefined> {
-  if (themeSlug !== "bluemix") return undefined;
+  const layout = themeLayout(themeSlug);
+  if (layout !== "bluemix") return undefined;
   // Sidebar reads run on every page: memoize 60s (new posts surface on the
   // next refresh, and the drawer is not a feed).
   const kvD = (globalThis as any).__rosefdKvApi?.kv;
@@ -597,8 +600,10 @@ async function home(ctx?: Ctx) {
       cachedHome ? Promise.resolve(cachedHome.catRows) : listCategories(),
       cachedHome ? Promise.resolve(cachedHome.random) : randomPosts(20),
     ]);
+  // The chrome LAYOUT dialect this theme declares (see theme-api).
+  const layout = themeLayout(themeSlug);
   if (!cachedHome) kv?.set("home:bundle", { all, popular, catRows, random }, 60);
-  const homeLimit = themeSlug === "pseudolinear" ? 30 : 12;
+  const homeLimit = layout === "pseudolinear" ? 30 : 12;
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const items = all.items.slice(0, homeLimit);
   const tc = getThemeChrome(themeSlug);
@@ -631,7 +636,7 @@ async function home(ctx?: Ctx) {
         "query-input": "required name=search_term_string",
       },
     });
-  if (themeSlug !== "bluemix") {
+  if (layout !== "bluemix") {
     // tagRows/ts/catCounts ride the opening wave (see above); widgetsP was
     // issued alongside it.
     const widgets = await widgetsP;
@@ -640,8 +645,8 @@ async function home(ctx?: Ctx) {
       head: homeHead,
       main: tc.home({
 
-        hero: themeSlug === "pseudolinear" ? items : items.slice(0, 4),
-        latest: themeSlug === "pseudolinear" ? [] : items.slice(4, 12),
+        hero: layout === "pseudolinear" ? items : items.slice(0, 4),
+        latest: layout === "pseudolinear" ? [] : items.slice(4, 12),
         liked: popular.items,
         random,
         cats,
@@ -763,11 +768,13 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
     listPosts({ status: "published", limit: 5, orderBy: "views" }),
     tsP,
   ]);
+  // The chrome LAYOUT dialect this theme declares (see theme-api).
+  const layout = themeLayout(themeSlug);
 
   const perPage =
-    themeSlug === "bluemix"
+    layout === "bluemix"
       ? Math.min(100, Math.max(1, Number(settings.postsPerPage) || 10))
-      : themeSlug === "skyscraper"
+      : layout === "skyscraper"
         ? settings.postsPerPage || 10
         : settings.postsPerPage || 12;
   const page = pageNum(payload.page);
@@ -803,7 +810,7 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
       (settings.logoUrl ? `<meta name="twitter:image" content="${R.esc(settings.logoUrl)}">` : ""),
     main: tc.listPage({
 
-      title: themeSlug === "bluemix" ? t("list.latest_bm", { n: total }) : t("list.all"),
+      title: layout === "bluemix" ? t("list.latest_bm", { n: total }) : t("list.all"),
       sub: t("list.sub", { n: total, page, total: totalPages }),
       items,
       page,
@@ -842,9 +849,11 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     listCategories(),
     tsP,
   ]);
+  // The chrome LAYOUT dialect this theme declares (see theme-api).
+  const layout = themeLayout(themeSlug);
   if (!category) return { notFound: true };
-  const isSk = themeSlug === "skyscraper";
-  const catPerPage = isSk ? settings.postsPerPage || 10 : themeSlug === "codeman" || themeSlug === "pseudolinear" ? 30 : 12;
+  const isSk = layout === "skyscraper";
+  const catPerPage = isSk ? settings.postsPerPage || 10 : layout === "codeman" || layout === "pseudolinear" ? 30 : 12;
   // Category listing: memoize the page's post window for 2 minutes (a new
   // post surfaces on refresh or an admin write invalidates by TTL).
   const catKey = `cat:${payload.slug}:${page}:${themeSlug}`;
@@ -884,7 +893,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     pluginHead,
     main: tc.listPage({
       title:
-        themeSlug === "bluemix" || themeSlug === "codeman" || themeSlug === "pseudolinear"
+        layout === "bluemix" || layout === "codeman" || layout === "pseudolinear"
           ? category.name
           : t("list.category_title", { name: category.name }),
       crumbLast: category.name,
@@ -906,7 +915,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
       settings: { ...settings, t },
       themeSettings: ts,
 
-      titleIcon: themeSlug === "bluemix"
+      titleIcon: layout === "bluemix"
         ? (ts.useCustomIcons !== false ? catIconName(category) : null)
         : (ts.useCustomIcons === true ? catIconName(category) : null),
       titleDesc: category.description || "",
@@ -929,9 +938,11 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
     themeSlugP,
     tsP,
   ]);
+  // The chrome LAYOUT dialect this theme declares (see theme-api).
+  const layout = themeLayout(themeSlug);
   if (!tag) return { notFound: true };
 
-  const isSk = themeSlug === "skyscraper";
+  const isSk = layout === "skyscraper";
   const tagPerPage = isSk ? settings.postsPerPage || 10 : 12;
   const { items, total } = await listPosts({
     status: "published",
@@ -996,14 +1007,15 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default", t);
   const settings0 = await settingsP;
   const themeSlug = await themeSlugP;
+  const layout = themeLayout(themeSlug);
 
-  const isBm = themeSlug === "bluemix";
-  const isSk = themeSlug === "skyscraper";
+  const isBm = layout === "bluemix";
+  const isSk = layout === "skyscraper";
   const perPage = isBm
     ? Math.min(100, Math.max(1, Number(settings0.postsPerPage) || 10))
     : isSk
       ? 20
-      : themeSlug === "codeman" || themeSlug === "pseudolinear"
+      : layout === "codeman" || layout === "pseudolinear"
         ? 30
         : 20;
   const paged = isBm || isSk;
@@ -1070,7 +1082,7 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
           : t("search.title_q", { q: cleaned })
         : t("search.title"),
 
-      sub: isBm || themeSlug === "codeman" || themeSlug === "pseudolinear"
+      sub: isBm || layout === "codeman" || layout === "pseudolinear"
         ? ""
         : cleaned
           ? isSk
@@ -1169,26 +1181,27 @@ async function postDetail(
   const locale = localeOf(ctx);
   const t = makeT(locale);
   const themeSlug = await themeSlugP;
+  const layout = themeLayout(themeSlug);
   const postId = row.post.id;
   // 上一篇/下一篇: one UNION ALL statement for both neighbours, issued inside
   // the reads wave (the key comes off the raw row, so nothing gates it).
   // adjacentKeyOf mirrors the SQL's coalesce(published_at, created_at).
   const adjacentP = safe(getAdjacentPosts(postId, adjacentKeyOf(row.post)));
 
-  const relatedN = themeSlug === "codeman" || themeSlug === "pseudolinear" ? 5 : 4;
+  const relatedN = layout === "codeman" || layout === "pseudolinear" ? 5 : 4;
   // Only three themes render `related` (bluemix / pseudolinear / codeman);
   // the default theme's post page reads relatedTaxonomy alone and skyscraper
   // reads neither. Computing the date-based set unconditionally ran ~6
   // pointless queries per post view on every per-cookie render-cache miss.
-  const usesRelated = themeSlug === "bluemix" || themeSlug === "pseudolinear" || themeSlug === "codeman";
-  const highlight = themeSlug === "skyscraper" || themeSlug === "bluemix";
-  const isDefault = themeSlug === "default";
-  const isBluemix = themeSlug === "bluemix";
+  const usesRelated = layout === "bluemix" || layout === "pseudolinear" || layout === "codeman";
+  const highlight = layout === "skyscraper" || layout === "bluemix";
+  const isDefault = layout === "default";
+  const isBluemix = layout === "bluemix";
   // Bluemix renders both areas too (PostPage.tsx: sidebar after PostSidebar).
   // Every theme but skyscraper renders a sidebar area, so the sidebar read is
   // not gated on widgetAreas - codeman/pseudolinear paint it through `widgets`.
   const widgetAreas = isDefault || isBluemix;
-  const wantsSidebar = themeSlug !== "skyscraper";
+  const wantsSidebar = layout !== "skyscraper";
   // The view-count write used to be awaited AFTER the reads block — a whole
   // extra serial round trip on Neon (~550ms) tacked onto every render-cache
   // miss. It reads nothing the reads produce, so it rides the same wave and
@@ -1261,7 +1274,7 @@ async function postDetail(
     popularP,
     randomP,
     cfgP,
-    themeSlug === "default" ? relatedByTaxonomy(postId, 4) : Promise.resolve(undefined),
+    layout === "default" ? relatedByTaxonomy(postId, 4) : Promise.resolve(undefined),
     widgetAreas
       ? getAreaWidgets(themeSlug, "post-bottom")
       : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),

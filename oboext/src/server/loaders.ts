@@ -57,6 +57,7 @@ import {
   htmlLangOf,
   hreflangLinks,
   localeHref,
+  canonicalPath,
   otherLocale,
   prefixLocaleUrls,
   splitLocalePath,
@@ -564,7 +565,8 @@ type HomeBundle = {
 };
 
 async function home(ctx?: Ctx) {
-  const t = makeT(localeOf(ctx));
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
   // Everything home reads is independent of everything else it reads: the old
   // shape gated three waves behind each other (settings/themeSlug first, the
   // list queries second, the sidebar batch third), so a cold home paid ~3
@@ -614,7 +616,7 @@ async function home(ctx?: Ctx) {
   // WebSite JSON-LD rides the home head: SearchAction is only truthful here
   // (the /search route is the sitewide query target).
   const origin0 = ctx?.origin ?? "";
-  const homeCanonical = origin0 ? `${origin0}/` : "/";
+  const homeCanonical = `${origin0}${canonicalPath("/", locale)}`;
   const siteName = settings.siteTitle ?? "";
   const homeOgImage = settings.logoUrl ? R.esc(settings.logoUrl) : "";
   const homeHead =
@@ -754,7 +756,8 @@ async function home(ctx?: Ctx) {
 // ------------------------------------------------------------- list routing
 
 async function blogList(payload: { page?: number }, ctx?: Ctx) {
-  const t = makeT(localeOf(ctx));
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
   // Sidebar batch pre-issues off the themeSlug/themeSettings reads below, so
   // its queries overlap the pager window's wave instead of following it.
   const themeSlugP = safe(getActiveThemeSlug());
@@ -791,7 +794,7 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
 
   const siteTitle = settings.siteTitle ?? "";
   const seoTitle = t("list.seo_title", { site: siteTitle });
-  const blogUrl = `${ctx?.origin ?? ""}${blogIndex}`;
+  const blogUrl = `${ctx?.origin ?? ""}${canonicalPath(blogIndex, locale)}`;
   return {
     headTitle: seoTitle,
     head:
@@ -834,7 +837,8 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
 }
 
 async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) {
-  const t = makeT(localeOf(ctx));
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
   const page = pageNum(payload.page);
   // Sidebar batch pre-issues off the themeSlug/themeSettings reads below
   // (same pattern as blogList).
@@ -888,8 +892,13 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
   const sub = isSk
     ? `${category.description ? `<span>${category.description} · </span>` : ""}${t("list.sub", { n: total, page, total: totalPages })}`
     : "";
+  const catCanonical = `${ctx.origin ?? ""}${canonicalPath(catUrl, locale)}`;
   return {
     headTitle: `${t("list.category_title", { name: category.name })} - ${settings.siteTitle ?? ""}`,
+    head:
+      `<link rel="canonical" href="${R.esc(catCanonical)}">` +
+      `<meta name="description" content="${R.esc(category.description || settings.siteDescription || "")}">` +
+      `<meta name="robots" content="index, follow">`,
     pluginHead,
     main: tc.listPage({
       title:
@@ -924,7 +933,8 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
 }
 
 async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
-  const t = makeT(localeOf(ctx));
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
   const page = pageNum(payload.page);
   // Sidebar batch pre-issues off the themeSlug/themeSettings reads below
   // (same pattern as blogList/categoryList).
@@ -968,8 +978,13 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
   const tc = getThemeChrome(themeSlug);
 
   const contentTc = isSk ? tc : getThemeChrome("default");
+  const tagCanonical = `${ctx.origin ?? ""}${canonicalPath(tagUrl, locale)}`;
   return {
     headTitle: `${t("list.tag_title", { name: tag.name })} - ${settings.siteTitle ?? ""}`,
+    head:
+      `<link rel="canonical" href="${R.esc(tagCanonical)}">` +
+      `<meta name="description" content="${R.esc(settings.siteDescription || "")}">` +
+      `<meta name="robots" content="index, follow">`,
     pluginHead,
     main: contentTc.listPage({
       title: t("list.tag_title", { name: tag.name }),
@@ -993,7 +1008,8 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
 }
 
 async function search(payload: { q?: string; page?: number; all?: boolean }, ctx?: Ctx) {
-  const t = makeT(localeOf(ctx));
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
   const q = (payload.q ?? "").trim();
   const cleaned = q;
   const page = payload.page ?? 1;
@@ -1068,8 +1084,14 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
     `if(last<s.length)frag.appendChild(document.createTextNode(s.slice(last)));` +
     `if(n.parentNode)n.parentNode.replaceChild(frag,n);});}` +
     `if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run);else run();})();</script>`;
+  // A search-results page is a query view, not content: keep it out of the
+  // index but let the crawler follow its links, and self-canonicalise to the
+  // locale-aware /search path.
+  const searchCanonical = `${ctx?.origin ?? ""}${canonicalPath("/search", locale)}`;
   const searchHead =
-    `<meta property="og:url" content="${R.esc(ctx?.origin ?? "")}">` +
+    `<link rel="canonical" href="${R.esc(searchCanonical)}">` +
+    `<meta name="robots" content="noindex, follow">` +
+    `<meta property="og:url" content="${R.esc(searchCanonical)}">` +
     `<meta property="og:site_name" content="${R.esc(searchSiteTitle)}">` +
     searchHighlight;
   return {
@@ -1392,10 +1414,10 @@ async function postDetail(
 
       sidebarData,
       settings: { ...settings, t },
-      canonical: `${ctx.origin}${post.url}`,
+      canonical: `${ctx.origin}${canonicalPath(post.url, locale)}`,
     }),
     head:
-      R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl, { wordCount: readWordCount, minutes: readMinutes }) +
+      R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl, { wordCount: readWordCount, minutes: readMinutes, canonical: `${ctx.origin}${canonicalPath(post.url, locale)}` }) +
       // rel=prev/next for the reading order (chronological neighbours). Only
       // present directions are emitted, so edge posts keep the head untouched.
       adjacentRelLinks(adjacent) +
@@ -1499,7 +1521,7 @@ async function pageDetail(
       settings: { ...settings, t },
     }),
     head:
-      R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl, { wordCount: pgWordCount, minutes: pgMinutes }) +
+      R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl, { wordCount: pgWordCount, minutes: pgMinutes, canonical: `${ctx.origin}${canonicalPath(page.url, locale)}` }) +
       pluginHead,
   };
 }
@@ -1660,9 +1682,14 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
 
   const siteTitle = settings.siteTitle ?? "";
 
+  // Archives is indexable content (it is the site's own archive), so it needs
+  // the same locale-aware self-referencing canonical as every other page.
+  const archCanonical = `${ctx?.origin ?? ""}${canonicalPath("/archives", localeOf(ctx))}`;
   const head =
+    `<link rel="canonical" href="${esc(archCanonical)}">` +
     `<meta name="description" content="${esc(t("archives.desc", { site: siteTitle }))}">` +
-    `<meta property="og:url" content="${esc(ctx?.origin ?? "")}">` +
+    `<meta name="robots" content="index, follow">` +
+    `<meta property="og:url" content="${esc(archCanonical)}">` +
     `<meta property="og:site_name" content="${esc(siteTitle)}">`;
   return {
 
@@ -1860,7 +1887,7 @@ function virtualRouteView(route: VirtualSiteRoute, ctx: Ctx) {
   const title = route.seoTitle || route.title;
   const desc = route.seoDescription ?? "";
   const kw = route.seoKeywords ?? "";
-  const canonical = `${ctx.origin ?? ""}${route.path}`;
+  const canonical = `${ctx.origin ?? ""}${canonicalPath(route.path, localeOf(ctx))}`;
   const head =
     `<title>${R.esc(title)}</title>` +
     (desc ? `<meta name="description" content="${R.esc(desc)}">` : "") +
@@ -1880,7 +1907,7 @@ function virtualRouteView(route: VirtualSiteRoute, ctx: Ctx) {
 
 function userCenterView(route: VirtualSiteRoute, ctx: Ctx) {
   const title = route.seoTitle || route.title;
-  const canonical = `${ctx.origin ?? ""}${route.path}`;
+  const canonical = `${ctx.origin ?? ""}${canonicalPath(route.path, localeOf(ctx))}`;
   const head =
     `<title>${R.esc(title)}</title>` +
     `<meta name="robots" content="noindex, nofollow">` +
@@ -2049,7 +2076,10 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
   let out: Record<string, any>;
   switch (res.kind) {
     case "home":
-      out = await home();
+      // home() was the ONE loader called without the request context, which is
+      // why its canonical was always the bare "/" and its hreflang never saw
+      // the real origin. Every other case passes ctx; so does home now.
+      out = await home(ctx);
       break;
     case "post":
       out = await postDetail({ slug: res.post.post.slug, preloaded: res.post }, ctx);

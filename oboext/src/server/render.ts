@@ -754,11 +754,18 @@ export function postHead(
   /** Social-card fallback when the post has no cover: the site logo. */
   logoUrl?: string,
   /** Reading stats for BlogPosting JSON-LD (wordCount / timeRequired). */
-  read?: { wordCount: number; minutes: number },
+  read?: {
+    wordCount: number;
+    minutes: number;
+    /** Self-referencing canonical for the request's locale. Without it
+     *  the canonical is the bare path, which would tell a crawler an
+     *  /en page duplicates its zh-CN original. */
+    canonical?: string;
+  },
 ): string {
   const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
   const desc = p.seoDescription || p.excerpt || siteDescription;
-  const url = `${origin}${p.url}`;
+  const url = read?.canonical ?? `${origin}${p.url}`;
   const ogImage = p.featuredImage || logoUrl || "";
   const primaryCat = p.categories?.[0]?.name ?? "";
   const tagMetas = (p.tags ?? []).map((t) => `<meta property="article:tag" content="${esc(t.name)}">`).join("");
@@ -1146,11 +1153,16 @@ export function pageHead(
   /** Social-card fallback when the page has no cover: the site logo. */
   logoUrl?: string,
   /** Reading stats for the WebPage JSON-LD (wordCount / timeRequired). */
-  read?: { wordCount: number; minutes: number },
+  read?: {
+    wordCount: number;
+    minutes: number;
+    /** Self-referencing canonical for the request's locale. */
+    canonical?: string;
+  },
 ): string {
   const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
   const desc = p.seoDescription || p.excerpt || siteDescription;
-  const url = `${origin}${p.url}`;
+  const url = read?.canonical ?? `${origin}${p.url}`;
   const ogImage = p.featuredImage || logoUrl || "";
   return [
     `<title>${esc(fullTitle)}</title>`,

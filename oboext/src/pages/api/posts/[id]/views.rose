@@ -2,7 +2,14 @@
   // /api/posts/:id/views — public read of the current view count.
   import { apiGate, jsonOk, jsonFail } from "@server/admin";
   import { getPostViews } from "@server/queries";
-  import { makeT, apiLocale } from "@server/i18n";
+  import { makeT, headerLocale } from "@server/i18n";
+
+  // The localized 404 body is negotiated on the client-stamped x-locale header
+  // and this response is storable, so the header must ride the cache key -
+  // otherwise the first caller's language is replayed to everyone else
+  // (BUG.md AB). Declaring it is the framework-native alternative to tagging
+  // the URL with ?l=.
+  export const hotVary = ["x-locale"];
 
   function pathId(request) {
     const seg = new URL(request.url).pathname.split("/").filter(Boolean);
@@ -10,7 +17,7 @@
   }
 
   export async function GET(request) {
-    const t = makeT(apiLocale(request));
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const id = pathId(request);
       if (!Number.isInteger(id) || id <= 0) return jsonFail(t("api.post_missing"), 404);

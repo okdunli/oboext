@@ -2,7 +2,7 @@
   // Oboext request interceptor (runs once per request on the Node server).
   import { checkCsrf, needsCsrf, isSafeMethod, selfHealCsrfCookie } from "@server/csrf";
   import { createLogger } from "@server/logger";
-  import { splitLocalePath, localeFromCookieHeader, localeHref, headerLocale, makeT, acceptLanguageLocale } from "@server/i18n";
+  import { splitLocalePath, localeFromCookieHeader, localeHref, headerLocale, makeT } from "@server/i18n";
   import { resolveOrigin } from "@server/site-origin";
   import { warmReadWave } from "@server/loaders";
   const log = createLogger("middleware");
@@ -159,14 +159,15 @@
     // the first admin exists, not just /admin (which is where the wall used to
     // live, so the root path behaved differently from the admin path).
     //
-    // The target carries the browser's language as ?l= (BUG.md AB): the
-    // installer is the one first-run document whose bytes are negotiated on a
-    // request header, and the prod hot cache keys on pathname+cookie only, so
-    // an untagged URL would let the first visitor's render be replayed to
-    // every other language. The query is not part of the pathname, so route
-    // matching is untouched while the cache key is partitioned per language.
-    const installLang = acceptLanguageLocale(request.headers.get("accept-language") || "");
-    const setupHref = "/admin/setup?l=" + encodeURIComponent(installLang);
+    // The installer stays an untagged path. It used to carry the browser's
+    // language as ?l= (BUG.md AB) because the hot cache keyed on
+    // pathname+cookie only, so the first visitor's language won the shared
+    // entry; accept-language is now an unconditional key dimension (index 0 of
+    // hotVaryValues), so the negotiation is partitioned by the framework and
+    // the query tag - and the 302 bounce that kept the untagged key empty -
+    // are both gone. The language itself is read from the request inside the
+    // setup loader (adminSetup), which still honours an explicit ?l=.
+    const setupHref = "/admin/setup";
     //
     // Assets and APIs are exempt: the setup page itself pulls the admin bundle
     // and calls /api/data, and redirecting those would either 404 the
@@ -247,13 +248,6 @@
             new URL(user ? "/admin" : "/admin/login", real.origin),
             302,
           );
-        }
-        // First run, installer requested directly (typed URL, bookmark, or the
-        // boot warm's own fetch): bounce the untagged path to its ?l= form so
-        // every render - and every hot-cache entry - is language-partitioned
-        // (BUG.md AB). A 302 is never cached, so the untagged key stays empty.
-        if (!real.searchParams.get("l")) {
-          return Response.redirect(new URL(setupHref, real.origin), 302);
         }
       } else if (rp === "/admin/login") {
         if (user) return Response.redirect(new URL("/admin", real.origin), 302);

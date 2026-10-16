@@ -6,6 +6,13 @@
   import { CAPTCHA_COOKIE, captchaSvg, generateCaptchaCode, signCaptchaToken } from "@server/captcha";
   import { makeT, apiLocale } from "@server/i18n";
 
+  // Query-tagged, NOT header-negotiated, and that is not an oversight: this
+  // endpoint's only client is an <img src>, and a browser's image request
+  // carries no custom header - x-locale never arrives. The query is therefore
+  // the only channel that reaches it, and unlike a declared header it is
+  // already part of the cache key (relTarget keeps pathname+search). See
+  // /api/captcha for the same negotiation over a header, where a declaration
+  // does work because that one is fetched from script.
   export async function GET(request) {
     const t = makeT(apiLocale(request));
     return apiGate(async () => {

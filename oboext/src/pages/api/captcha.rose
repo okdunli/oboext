@@ -13,6 +13,6 @@
         enabled: sec.captchaEnabled,
         mode: sec.captchaEnabled ? sec.captchaMode : null,
       };
-    });
+    }, t);
   }
 </script>

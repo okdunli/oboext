@@ -15,6 +15,6 @@
       const id = pathId(request);
       if (!Number.isInteger(id) || id <= 0) return jsonFail(t("api.post_missing"), 404);
       return jsonOk({ views: await getPostViews(id) });
-    });
+    }, t);
   }
 </script>

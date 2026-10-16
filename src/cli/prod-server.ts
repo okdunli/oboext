@@ -351,6 +351,10 @@ async function refetchHot(pathname: string, cookieHeader: string, dims: string[]
   const cookies = response.headers.getSetCookie?.() ?? [];
   response.headers.forEach((v, k) => { if (k !== 'content-length' && k !== 'date' && k !== 'content-encoding') { if (cookies.length && k.toLowerCase() === 'set-cookie') return; head[k] = v; } });
   if (cookies.length) head['set-cookie'] = cookies;
+  // AC (BUG.md): same cross-visitor Set-Cookie leak on the warm path. The
+  // boot/refresh warm render carries no cookie, so its key is the anonymous
+  // slot - refuse to store any Set-Cookie it produces under that key.
+  if (!cookieHeader && cookies.length) { hotCache.delete(key); return; }
   const raw = Buffer.from(await response.arrayBuffer());
   // An invalidation landed while this render was in flight: the bytes may
   // predate it, and the cache was already cleared - storing them would
@@ -458,6 +462,12 @@ function fillHot(pathname: string, cookieHeader: string, dims: string[], names: 
   const cookies = response.headers.getSetCookie?.() ?? [];
   response.headers.forEach((v, k) => { if (k !== 'content-length' && k !== 'date' && k !== 'content-encoding') { if (cookies.length && k.toLowerCase() === 'set-cookie') return; head[k] = v; } });
   if (cookies.length) head['set-cookie'] = cookies;
+  // AC (BUG.md): a Set-Cookie replayed from the anonymous (empty-cookie) key
+  // is a cross-visitor leak - session fixation, or a shared, readable CSRF
+  // token. Set-Cookie is per-request state; the shared slot must not carry it.
+  // Authenticated keys already isolate by cookie, so only the anonymous slot
+  // is refused (the conservative variant the report proposed as the fallback).
+  if (!cookieHeader && cookies.length) return;
   hotCacheEvict();
   hotCache.set(hotKey(pathname, cookieHeader, dims), { ...memo, headers: head, etag, fetchedAt: Date.now(), status: response.status });
 }

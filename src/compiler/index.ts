@@ -1323,6 +1323,48 @@ async function compileComponentMemo(
   return result;
 }
 
+// `export const hotVary = ['x-rv-url']` - the request headers this route's
+// representation is negotiated on, beyond the two the server key already
+// carries (cookie and accept-language). The shared caches are keyed on URL +
+// cookie + language, so a route that reads a private header of its own had one
+// client's bytes replayed to another for a whole TTL (BUG.md AB) - and the
+// app's only exits were a query tag (?l=, ?rv=) or no-store, which switches
+// the cache off for the route entirely. Naming the header here folds it into
+// the key AND into the warm render that fills it: the cache keeps serving,
+// partitioned per value. Parsed identically for pages and api routes.
+function parseHotVary(rawScript: string, filePath: string): string[] | undefined {
+  const m = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+hotVary\s*=\s*\[([\s\S]*?)\]\s*;?/);
+  if (!m) return undefined;
+  const dims: string[] = [];
+  for (const part of m[1]!.split(',')) {
+    const token = part.trim().replace(/^['"`]|['"`]$/g, '');
+    if (!token) continue;
+    const dim = token.toLowerCase();
+    if (!/^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(dim)) {
+      throw new RoseError(
+        'E-EXPORT',
+        `${filePath}: export const hotVary must list request header names (got '${token}')`,
+        { file: filePath, line: lineAt(rawScript, m), hint: "hotVary is a list of the request headers this route negotiates on, e.g. export const hotVary = ['x-locale', 'x-rv-url']" },
+      );
+    }
+    // accept-encoding is negotiated per request from the stored raw bytes, so
+    // partitioning on it would only multiply identical entries.
+    if (dim === 'accept-encoding') {
+      throw new RoseError(
+        'E-EXPORT',
+        `${filePath}: hotVary must not name accept-encoding - the server stores raw bytes and re-negotiates the encoding on every request`,
+        { file: filePath, line: lineAt(rawScript, m), hint: 'drop accept-encoding from hotVary; it is already handled per request' },
+      );
+    }
+    // cookie and accept-language are already in the key; naming them is a no-op
+    // and is dropped rather than rejected, so the declaration can stay
+    // readable as the route's full negotiation surface.
+    if (dim === 'cookie' || dim === 'accept-language') continue;
+    if (!dims.includes(dim)) dims.push(dim);
+  }
+  return dims.length ? dims : undefined;
+}
+
 export async function compileComponent(filePath: string, publicDir: string, scopeKey: string, isApi = false, plugins: Plugin[] = [], registry: RoseRegistry = new Map()): Promise<CompileResult> {
   let source = await fs.promises.readFile(filePath, 'utf-8');
   for (const p of plugins) {
@@ -1367,6 +1409,7 @@ export async function compileComponent(filePath: string, publicDir: string, scop
       hasPrerender,
       usesContext,
       usesStore,
+      hotVary: parseHotVary(rawScript, filePath),
     };
   }
 
@@ -1421,46 +1464,7 @@ export async function compileComponent(filePath: string, publicDir: string, scop
   const revalidate = revalidateMatch ? Number(revalidateMatch[1]) : undefined;
   const cacheMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+cache\s*=\s*(\d+)\s*;?/);
   const cacheSeconds = cacheMatch ? Number(cacheMatch[1]) : undefined;
-  // hotVary: the request headers this route's representation is negotiated on,
-  // beyond the ones the server key already carries (cookie, accept-language).
-  // The shared caches are keyed on URL + cookie + language only, so a route
-  // that reads its own private header (x-locale, x-rv-url) would have one
-  // client's bytes replayed to another for a whole TTL - the app's only exits
-  // used to be a query tag (?l=, ?rv=) or declaring no-store, which switches
-  // the cache off for that route entirely. Naming the header here folds it
-  // into the key: the cache keeps serving, partitioned per value.
-  const hotVaryMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+hotVary\s*=\s*\[([\s\S]*?)\]\s*;?/);
-  let hotVary: string[] | undefined;
-  if (hotVaryMatch) {
-    const dims: string[] = [];
-    for (const part of hotVaryMatch[1]!.split(',')) {
-      const token = part.trim().replace(/^['"`]|['"`]$/g, '');
-      if (!token) continue;
-      const dim = token.toLowerCase();
-      if (!/^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(dim)) {
-        throw new RoseError(
-          'E-EXPORT',
-          `${filePath}: export const hotVary must list request header names (got '${token}')`,
-          { file: filePath, line: lineAt(rawScript, hotVaryMatch), hint: "hotVary is a list of the request headers this route negotiates on, e.g. export const hotVary = ['x-locale', 'x-rv-url']" },
-        );
-      }
-      // accept-encoding is negotiated per request from the stored raw bytes,
-      // so partitioning on it would only multiply identical entries.
-      if (dim === 'accept-encoding') {
-        throw new RoseError(
-          'E-EXPORT',
-          `${filePath}: hotVary must not name accept-encoding - the server stores raw bytes and re-negotiates the encoding on every request`,
-          { file: filePath, line: lineAt(rawScript, hotVaryMatch), hint: 'drop accept-encoding from hotVary; it is already handled per request' },
-        );
-      }
-      // cookie and accept-language are already in the key; naming them is a
-      // no-op and is dropped rather than rejected (the declaration stays
-      // readable as the route\'s full negotiation surface).
-      if (dim === 'cookie' || dim === 'accept-language') continue;
-      if (!dims.includes(dim)) dims.push(dim);
-    }
-    hotVary = dims.length ? dims : undefined;
-  }
+  const hotVary = parseHotVary(rawScript, filePath);
   const prefetchMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+prefetch\s*=\s*['"`](\w+)['"`]\s*;?/);
   const prefetch = prefetchMatch ? prefetchMatch[1] : undefined;
   if (prefetch && !['off', 'hover', 'viewport', 'all'].includes(prefetch)) {

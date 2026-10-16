@@ -1,8 +1,11 @@
 <script>
   // First-run installer (pixel-port of app/admin/setup/page.tsx): database driver + image storage radio cards, site info, first admin.
   // Every string comes from the admin.setup loader, which renders in the
-  // browser's language (Accept-Language - no site preference exists yet).
-  let su = $data(() => __rvLoad("admin.setup", {}));
+  // browser's language. The ?l= tag the middleware bounces this page to is
+  // the authoritative signal (it partitions the prod hot cache, BUG.md AB);
+  // __rvQs() is the isomorphic query accessor ($query() under SSR, faithful
+  // under isolateRender - never getContext().query).
+  let su = $data(() => __rvLoad("admin.setup", { l: __rvQs().get("l") || "" }));
 </script>
 
 <head>
@@ -11,7 +14,7 @@
 
 <div class="su-wrap">
   <form class="su-card" data-adm-form="setup" data-su-locale="{su().locale}" novalidate>
-    <h1 class="su-title">{su().s.title}</h1><div id="dbg-al" style="display:none">{su().acceptLanguageDbg}</div>
+    <h1 class="su-title">{su().s.title}</h1>
     <p class="su-lead">{su().s.lead}</p>
 
     <fieldset class="su-group">

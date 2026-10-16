@@ -72,14 +72,24 @@ function requireUser(ctx: Ctx): SessionUser {
 /**
  * The first-run installer's strings, in the browser's language. No URL prefix
  * and no locale cookie exist before the first admin is created, so the
- * Accept-Language header (carried on ctx by the middleware) is the signal.
+ * Accept-Language header (carried on ctx by the middleware) is the signal -
+ * unless the URL already carries one: the middleware bounces the untagged
+ * installer path to /admin/setup?l=<lang> so the prod hot cache (keyed on
+ * pathname+cookie only, BUG.md AB) can never replay one browser's render to
+ * another language. The tag therefore WINS over the header: the cache key and
+ * the rendered language must agree, or a shared ?l=zh link would cache English
+ * bytes under the Chinese key.
  */
-export async function adminSetup(_p: unknown, ctx: Ctx) {
-  const locale = acceptLanguageLocale(ctx.acceptLanguage || "");
-  if (process.env.OBOEXT_DBG_SETUP) console.error('[dbg-setup] acceptLanguage=', JSON.stringify(ctx.acceptLanguage), 'locale=', locale, 'ctxKeys=', Object.keys(ctx).join(','));
+export async function adminSetup(p: { l?: string } | undefined, ctx: Ctx) {
+  const tag = String(p?.l ?? "").trim().toLowerCase();
+  const locale =
+    tag.startsWith("en")
+      ? "en"
+      : tag.startsWith("zh")
+        ? "zh-CN"
+        : acceptLanguageLocale(ctx.acceptLanguage || "");
   const t = makeT(locale);
   return {
-    acceptLanguageDbg: ctx.acceptLanguage || 'EMPTY',
     locale,
     s: {
       docTitle: t("setup.doc_title"),

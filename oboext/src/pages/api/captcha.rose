@@ -13,11 +13,14 @@
     const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const sec = await getAdminSecurity();
-      if (!isEntryReferer(request, sec)) return jsonFail(t("api.no_entry"), 404);
-      return {
+      if (!isEntryReferer(request, sec)) return jsonFail(t("api.no_entry"), 404, { "cache-control": "no-store, max-age=0" });
+      return new Response(JSON.stringify({
         enabled: sec.captchaEnabled,
         mode: sec.captchaEnabled ? sec.captchaMode : null,
-      };
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store, max-age=0" },
+      });
     }, t);
   }
 </script>

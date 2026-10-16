@@ -96,10 +96,10 @@ export function jsonOk(data: unknown, status = 200): Response {
   });
 }
 
-export function jsonFail(message: string, status = 400): Response {
+export function jsonFail(message: string, status = 400, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify({ error: message }), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: { "content-type": "application/json; charset=utf-8", ...(headers ?? {}) },
   });
 }
 

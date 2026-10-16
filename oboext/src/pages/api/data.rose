@@ -63,7 +63,15 @@
       return searchRedirect(q);
     },
     // Boot warmup's dynamic URLs (latest post, a category, a tag page): the prod server's warm loop renders these through the normal handler.
-    warmUrls: () => warmEntityUrls(),
+    // The prod server calls this inside ready.then(), which is the SERVER's
+    // readiness - the DATABASE may still be mid-ensureDb(). Without awaiting
+    // the db-level ready here the lookup threw db-used-before-ensureDb and a
+    // silent catch shrank the warm list to the fixed routes: the dynamic
+    // warmup (and everything built on it) never actually ran.
+    warmUrls: async () => {
+      await ready();
+      return warmEntityUrls();
+    },
     // /admin <-> /admin/dashboard swap driven by the adminHomePath preference
     adminHome: {
       redirect: async (pathname) => {

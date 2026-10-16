@@ -2154,11 +2154,18 @@ export async function warmEntityUrls(): Promise<string[]> {
     listTags(),
     getPermalinkConfig(),
   ]);
-  return [
+  // The English tree is first-class: the warm loop must cover its variants
+  // too, or the first /en visitor pays the cold-start wave the zh visitor no
+  // longer does. The prod server caps extras at 8, so this list is capped too.
+  const urls = [
     posts.items[0]?.url,
     cats[0] ? categoryUrlFor(cfg, cats[0]) : undefined,
     tags[0] ? tagUrlFor(cfg, tags[0]) : undefined,
   ].filter((u): u is string => typeof u === "string" && u.startsWith("/"));
+  const enUrls = urls.map((u) => canonicalPath(u, "en"));
+  return [...urls, "/en", "/en/blog", ...enUrls]
+    .filter((u, i, all) => all.indexOf(u) === i && u.startsWith("/"))
+    .slice(0, 8);
 }
 
 export const loaders = {

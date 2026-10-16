@@ -128,7 +128,7 @@ if (shouldWarm) ready.then(async (h) => {
   }));
 }).catch((e) => console.error('[rosefd] warm loop aborted:', (e as Error)?.stack ?? e));
 
-const hotCache = new Map<string, { raw: Buffer; br?: Buffer; gzip?: Buffer; headers: Record<string, string>; etag: string; fetchedAt: number; status?: number; refreshing?: boolean }>();
+const hotCache = new Map<string, { raw: Buffer; br?: Buffer; gzip?: Buffer; headers: Record<string, string | string[]>; etag: string; fetchedAt: number; status?: number; refreshing?: boolean }>();
 const HOT_CACHE_MAX = 300;
 function hotCacheEvict(): void {
   while (hotCache.size >= HOT_CACHE_MAX) {
@@ -138,6 +138,29 @@ function hotCacheEvict(): void {
   }
 }
 const HOT_TTL = 10_000;
+
+// An invalidation is only sound if it lands AFTER the mutation commits. The
+// clear used to sit at the top of the non-GET handler - before the app's
+// write, which commits inside handle() below - so a warm render that started
+// between the clear and the commit stored pre-mutation bytes into a cache that
+// had already been cleared: stale bytes resurrected for a whole TTL, and the
+// window renews itself while the warm storm keeps firing. The generation
+// counter closes the other half of the same hole: a store (refetchHot or
+// fillHot) that straddled ANY invalidation abandons its write, so bytes
+// rendered before the world changed can never outlive the change.
+let hotGen = 0;
+function invalidateHot(): void {
+  hotGen++;
+  hotCache.clear();
+  const fn = (mod as any).invalidateRenderCache;
+  if (typeof fn === 'function') fn();
+}
+// An app that mutates state OUTSIDE a request - a queue consumer, a cron, a
+// $store write from a websocket handler - has no non-GET request to hang the
+// invalidation on, so it calls this at its commit point instead. The request
+// path needs no hook: the handler schedules its own invalidation on the
+// response's finish (below).
+(globalThis as unknown as { __rosefdInvalidateHot?: () => void }).__rosefdInvalidateHot = invalidateHot;
 
 const gzipFallback: zlib.ZlibOptions = { level: 6 };
 
@@ -237,6 +260,7 @@ function relTarget(u: string): string {
 }
 
 async function refetchHot(pathname: string, cookieHeader: string): Promise<void> {
+  const gen = hotGen;
   const headers: Record<string, string> = { 'user-agent': 'rosefd-hot' };
   if (cookieHeader) headers.cookie = cookieHeader;
   const response = await runIsolated(() => handle!(new Request('http://localhost' + pathname, { headers })));
@@ -246,9 +270,19 @@ async function refetchHot(pathname: string, cookieHeader: string): Promise<void>
     hotCache.delete(key);
     return;
   }
-  const head: Record<string, string> = {};
-  response.headers.forEach((v, k) => { if (k !== 'content-length' && k !== 'date' && k !== 'content-encoding') head[k] = v; });
+  // set-cookie is a list header: forEach delivers it per value, so a plain
+  // object assignment keeps only the last one. Capture the whole array and
+  // store it under the name node's setHeader replays as multiple headers.
+  const head: Record<string, string | string[]> = {};
+  const cookies = response.headers.getSetCookie?.() ?? [];
+  response.headers.forEach((v, k) => { if (k !== 'content-length' && k !== 'date' && k !== 'content-encoding') { if (cookies.length && k.toLowerCase() === 'set-cookie') return; head[k] = v; } });
+  if (cookies.length) head['set-cookie'] = cookies;
   const raw = Buffer.from(await response.arrayBuffer());
+  // An invalidation landed while this render was in flight: the bytes may
+  // predate it, and the cache was already cleared - storing them would
+  // resurrect exactly the staleness the invalidation published. Drop them; the
+  // next request renders fresh.
+  if (gen !== hotGen) return;
   hotCacheEvict();
   hotCache.set(key, {
     raw,
@@ -259,14 +293,23 @@ async function refetchHot(pathname: string, cookieHeader: string): Promise<void>
   });
 }
 
+// In-flight warm dedup: a cookieless GET storm against an empty cache used to
+// replay the whole warmList per request (the re-warm trigger has no in-flight
+// set), so N concurrent first-hits rendered N x warmList routes - and a failed
+// wave left the cache empty, so every subsequent GET fired another full wave.
+const warming = new Set<string>();
 function warmHot(pathname: string, cookieHeader: string): void {
+  const wkey = pathname + '|' + fnv(cookieHeader);
+  if (warming.has(wkey)) return;
+  warming.add(wkey);
   refetchHot(pathname, cookieHeader)
     .catch(() => {
-      const e = hotCache.get(pathname + '|' + fnv(cookieHeader));
+      const e = hotCache.get(wkey);
       if (e) { e.refreshing = false; e.fetchedAt = Date.now() - HOT_TTL + 2000; }
     })
     .finally(() => {
-      const e = hotCache.get(pathname + '|' + fnv(cookieHeader));
+      warming.delete(wkey);
+      const e = hotCache.get(wkey);
       if (e) e.refreshing = false;
     });
 }
@@ -285,6 +328,12 @@ async function tryHot(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
   res.statusCode = entry.status ?? 200;
   for (const k in entry.headers) res.setHeader(k, entry.headers[k]);
+  // The memoized headers come from the edge response, which carries the app's
+  // own dimensions but never the server's negotiation dimension - the dynamic
+  // path adds it to `res` after the fact, so a hot-cache replay used to serve
+  // bytes negotiated on Accept-Encoding while telling caches the response does
+  // not vary by it. Merge it back in here.
+  addVary(res, 'Accept-Encoding');
   res.setHeader('ETag', entry.etag);
   if (req.headers['if-none-match'] === entry.etag) {
     res.statusCode = 304;
@@ -309,13 +358,22 @@ function cacheable(status: number): boolean {
   return status === 200 || status === 404;
 }
 
-function fillHot(pathname: string, cookieHeader: string, response: Response, memo: { raw: Buffer; br?: Buffer; gzip?: Buffer }, etag: string): void {
+function fillHot(pathname: string, cookieHeader: string, response: Response, memo: { raw: Buffer; br?: Buffer; gzip?: Buffer }, etag: string, gen: number): void {
+  // The render behind this response may predate an invalidation that landed
+  // while it ran (the request path awaits the body and the compression before
+  // storing). Stale bytes must not enter the cache it was just dropped from.
+  if (gen !== hotGen) return;
   if (!cacheable(response.status)) return;
   const csp = response.headers.get('content-security-policy') || '';
   if (csp.includes('nonce-')) return;
   if (response.status === 404 && hotCache.size >= HOT_CACHE_MAX) return;
-  const head: Record<string, string> = {};
-  response.headers.forEach((v, k) => { if (k !== 'content-length' && k !== 'date' && k !== 'content-encoding') head[k] = v; });
+  // set-cookie is a list header: forEach delivers it per value, so a plain
+  // object assignment keeps only the last one. Capture the whole array and
+  // store it under the name node's setHeader replays as multiple headers.
+  const head: Record<string, string | string[]> = {};
+  const cookies = response.headers.getSetCookie?.() ?? [];
+  response.headers.forEach((v, k) => { if (k !== 'content-length' && k !== 'date' && k !== 'content-encoding') { if (cookies.length && k.toLowerCase() === 'set-cookie') return; head[k] = v; } });
+  if (cookies.length) head['set-cookie'] = cookies;
   hotCacheEvict();
   hotCache.set(pathname + '|' + fnv(cookieHeader), { ...memo, headers: head, etag, fetchedAt: Date.now(), status: response.status });
 }
@@ -373,12 +431,19 @@ function handleRevalidate(req: http.IncomingMessage, res: http.ServerResponse): 
     try {
       if (!revalidateMod) revalidateMod = mod;
       const payload = JSON.parse(body || '{}');
+      // The endpoint short-circuits before the handler's non-GET branch, so it
+      // owes its own invalidation - and it used to drop only the render memo,
+      // leaving the hot cache serving the pre-revalidation bytes for a whole
+      // TTL. Both caches go, per path or all at once: the endpoint is an
+      // explicit admin action and the hot cache repopulates on the next
+      // requests.
       if (payload.all) {
-        revalidateMod.invalidateRenderCache();
+        invalidateHot();
         res.end(JSON.stringify({ revalidated: true, scope: 'all' }));
       } else {
         let n = 0;
         for (const p of payload.paths || []) n += revalidateMod.invalidatePath(String(p));
+        invalidateHot();
         res.end(JSON.stringify({ revalidated: true, paths: (payload.paths || []).length, dropped: n }));
       }
     } catch (e: any) {
@@ -477,13 +542,32 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, pathna
 }
 
 const server = http.createServer(async (req, res) => {
+  // The generation this request's renders belong to: captured before handle()
+  // runs, so a store at the end of the request can tell whether an invalidation
+  // landed while it was rendering.
+  const reqGen = hotGen;
   try {
     await ready;
     if (handleRevalidate(req, res)) return;
     if (req.method !== 'GET' && req.method !== 'HEAD') {
-      hotCache.clear();
-      const fn = (mod as any).invalidateRenderCache;
-      if (typeof fn === 'function') fn();
+      // The invalidation moves to the response's finish (or the client's
+      // disconnect): the app's mutation commits INSIDE handle() below, so a
+      // clear at the top of the handler ran BEFORE the write it exists to
+      // publish - and a warm render starting in between stored pre-mutation
+      // bytes into the already-cleared cache. Until this response finishes, a
+      // concurrent GET keeps being served the previous bytes, which is exactly
+      // right for a mutation that has not committed yet; the moment it has,
+      // everything drops and the next render is fresh. Both events are guarded
+      // by one flag (close always follows finish), and every path that ends the
+      // response - including the catch's 500 - fires one of them.
+      let invalidated = false;
+      const invalidateOnce = () => {
+        if (invalidated) return;
+        invalidated = true;
+        invalidateHot();
+      };
+      res.on('finish', invalidateOnce);
+      res.on('close', invalidateOnce);
     }
     if (hotCache.size > 0 && (await tryHot(req, res))) return;
     if (req.method === 'GET' && !req.headers.cookie && hotCache.size === 0) {
@@ -529,7 +613,13 @@ const server = http.createServer(async (req, res) => {
       response = await runIsolated(() => handle!(new Request(url, init)));
     }
     res.statusCode = response.status;
-    response.headers.forEach((v, k) => res.setHeader(k, v));
+    // set-cookie is a list header: forEach delivers it per value and setHeader
+    // replaces, so a multi-cookie response (session + csrf, say) would keep
+    // only the last one. Emit the whole array through node's native
+    // multi-value form instead.
+    const setCookies = response.headers.getSetCookie?.() ?? [];
+    response.headers.forEach((v, k) => { if (setCookies.length && k.toLowerCase() === 'set-cookie') return; res.setHeader(k, v); });
+    if (setCookies.length) res.setHeader('set-cookie', setCookies);
     // The bytes below are content-negotiated on Accept-Encoding, so a cache
     // must know the response varies by it. Merged, not written: the edge
     // response may carry the app's own dimensions (an i18n redirect varies on
@@ -554,11 +644,11 @@ const server = http.createServer(async (req, res) => {
         res.setHeader('Content-Encoding', enc);
         res.setHeader('Content-Length', String(body.length));
       }
-      if (req.method === 'GET') fillHot(relTarget(req.url || '/'), cookieHeader, response, memo, etag);
+      if (req.method === 'GET') fillHot(relTarget(req.url || '/'), cookieHeader, response, memo, etag, reqGen);
       res.end(body);
       writeAccessLine(req, res, body.length);
     } else if (raw) {
-      if (req.method === 'GET') fillHot(relTarget(req.url || '/'), cookieHeader, response, { raw }, `W/"${raw.length}-${fnv(cookieHeader)}"`);
+      if (req.method === 'GET') fillHot(relTarget(req.url || '/'), cookieHeader, response, { raw }, `W/"${raw.length}-${fnv(cookieHeader)}"`, reqGen);
       res.end(raw);
       writeAccessLine(req, res, raw.length);
     } else {

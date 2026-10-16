@@ -9,6 +9,7 @@ import { createRequire } from 'module';
 import { pathToFileURL, fileURLToPath } from 'url';
 import { promisify } from 'util';
 import { AsyncLocalStorage } from 'async_hooks';
+import { Worker } from 'worker_threads';
 import { buildProject, scanRoseFiles, scanComponentFiles, scriptOf, extractExports, loadPlugins, loadConfig, RoseError, errorInfo, codeFrame, type RouteInfo } from '../compiler/index.js';
 import { prunePrerendered, rmTreeParallel } from '../compiler/rm-fast.js';
 import { getHtmlShell, getClientSource, getStyles, shellOpen, clientScriptTag, securityHeaders, mintNonce, setBundleMode } from './shell.js';
@@ -191,7 +192,7 @@ async function sendPage(req: any, res: any, ssrModule: any, hookCtx: any, page: 
  // Page.lang/page.dir are the locale the render used: the document's <html> attributes follow the route's [lang] segment.
   const nonce = nonceFor(ssrModule, routePath);
   // A nonce route is dynamic by construction (the compiler put it in dynamicRoutes)
-  let html = getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, nonce, page.shell !== false);
+  let html = getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, nonce, page.shell !== false, ssrModule.sliceKeyFor?.(routePath) ?? null);
   if (pjaxRequested(req)) html = pjaxFragment(html);
   let headers: Record<string, any> = pageHeaders(ssrModule, routePath, nonce);
   if (hookCtx) {
@@ -255,18 +256,22 @@ async function loadServer(): Promise<any> {
     serverVersion++;
     // A fresh FILE per version, not a ?v= query: the tsx loader (how the CLI
     // runs) caches by resolved path and would serve a stale module for a
-    // query-busted URL. The copy lives in tmp so dist stays free of
-    // intermediates; only the newest version is kept.
+    // query-busted URL. The copy lives in the PROJECT (.rosefd-dev/), never in
+    // the OS temp dir: ESM resolves a bare specifier by walking up from the
+    // importing file, and a temp-dir copy walks up into nothing - so every
+    // runtime (non-bundled) import an app deliberately split to dodge the
+    // bundler ('@electric-sql/' + 'pglite') failed to resolve under dev while
+    // production worked. Only the newest version is kept.
     let target = pathToFileURL(file).href;
     if (devMode) {
-      const dir = path.join(os.tmpdir(), `rosefd-dev-${process.pid}`);
-      const copy = path.join(dir, `server-${serverVersion}.mjs`);
+      const dir = path.join(SRC_DIR, '.rosefd-dev');
+      const copy = path.join(dir, `server-${process.pid}-${serverVersion}.mjs`);
       // Write the new version, then drop the previous one: an rm -rf + mkdir
       // per rebuild measured 2.5x the cost of copy+unlink on Windows, and the
       // import cache is keyed by path - only the newest file has to exist.
       await fs.promises.mkdir(dir, { recursive: true });
       await fs.promises.copyFile(file, copy);
-      await fs.promises.rm(path.join(dir, `server-${serverVersion - 1}.mjs`), { force: true });
+      await fs.promises.rm(path.join(dir, `server-${process.pid}-${serverVersion - 1}.mjs`), { force: true });
       target = pathToFileURL(copy).href;
     }
     serverModule = await import(target);
@@ -284,6 +289,7 @@ async function writeIfChanged(file: string, content: string): Promise<void> {
 async function build(): Promise<void> {
   const minify = !devMode && !argv.includes('--no-minify');
   const { routes, bundle, config } = await buildProject(SRC_DIR, OUT_DIR, { minify, incremental: devMode });
+  const brotliQuality = config.brotli?.quality ?? 11;
   // dist/server.js is ESM in a .js file. Node >= 22.7 detects the syntax, but
   // engines allow 22.0-22.6 (where it parses as CJS and fails on import), and
   // external tooling loading dist/server.js has no such detection at all. A
@@ -297,18 +303,37 @@ async function build(): Promise<void> {
   const skipped = devMode ? [] : await prerender(routes);
   await writeIfChanged(path.join(OUT_DIR, 'broken.json'), JSON.stringify(skipped));
   const ssrModule = await loadServer();
+  // Sliced mode: each route's document inlines its OWN bundle, so each route
+  // needs its own script hash - emitted as route entries the static server
+  // (the Go binary) merges over the default. A route's exported headers keep
+  // every key; the CSP is computed per route - EXCEPT when the route exported
+  // one explicitly, and the explicit override stays the last word.
+  let routeHeaders: Array<{ pattern: string; headers: Record<string, string> }> = ssrModule.routeHeaders ?? [];
+  if (bundle === 'sliced') {
+    const merged = new Map<string, Record<string, string>>();
+    for (const r of routeHeaders) merged.set(r.pattern, { ...r.headers });
+    for (const r of routes) {
+      const key = ssrModule.sliceKeyFor?.(r.routePath);
+      if (!key) continue;
+      const own = merged.get(r.pattern) ?? {};
+      const hasOwnCsp = Object.keys(own).some((k) => k.toLowerCase() === 'content-security-policy');
+      if (hasOwnCsp) continue;
+      merged.set(r.pattern, { ...own, 'content-security-policy': securityHeaders(getClientSource(key))['Content-Security-Policy'] });
+    }
+    routeHeaders = [...merged].map(([pattern, headers]) => ({ pattern, headers }));
+  }
   await writeIfChanged(path.join(OUT_DIR, 'headers.json'), JSON.stringify({
     default: securityHeaders(getClientSource()),
-    routes: ssrModule.routeHeaders ?? [],
+    routes: routeHeaders,
   }));
-  if (!devMode) await writeBrotli(OUT_DIR);
+  if (!devMode) await writeBrotli(OUT_DIR, brotliQuality);
   if (!devMode) await analyze(OUT_DIR, (ssrModule.dynamicRoutes as string[] | undefined) ?? []);
 
   if (config.pwa) {
     try {
       await generatePWA(OUT_DIR, config.pwa);
       await injectPwaIntoHtml(OUT_DIR, config.pwa);
-      await writeBrotli(OUT_DIR);
+      await writeBrotli(OUT_DIR, brotliQuality);
     } catch (e) {
       console.error('Rose Frame Driver: PWA generation failed:', e instanceof Error ? e.message : String(e));
     }
@@ -342,7 +367,77 @@ async function build(): Promise<void> {
 const BROTLI_EXT = new Set(['.html', '.js', '.css', '.json', '.svg', '.txt']);
 const brotliAsync = promisify(zlib.brotliCompress);
 const BROTLI_PARALLEL = 8;
-async function writeBrotli(dir: string): Promise<void> {
+
+/**
+ * A worker pool for build-time precompression. Quality 11 (zlib's default,
+ * which this pass has always used) costs ~860ms on a 520KB prerendered page -
+ * so a 300-route app spent ~31s compressing, 96% of its cold build, and the
+ * async pool it used runs on libuv's threadpool, fixed at 4 threads: real
+ * threads scale with the machine instead (measured 2.1x on 16 cores; brotli
+ * q11 is memory-bound, so it scales worse than a pure-CPU workload).
+ *
+ * The worker is built from a source string, so there is no extra file to ship
+ * in the package or to resolve differently under tsx. It reads the file
+ * itself (handing a 500KB buffer over per message would serialize on the main
+ * thread) and always writes the .br: every text file gets a sibling, because
+ * the server, the Go binary and the docs all assume one exists.
+ */
+function brotliPool(size: number, quality: number): { run: (file: string) => void; done: () => Promise<void> } {
+  const src = `
+const { parentPort, workerData } = require('node:worker_threads');
+const zlib = require('node:zlib');
+const fs = require('node:fs');
+const params = { [zlib.constants.BROTLI_PARAM_QUALITY]: workerData.quality };
+parentPort.on('message', (file) => {
+  try {
+    const raw = fs.readFileSync(file);
+    fs.writeFileSync(file + '.br', zlib.brotliCompressSync(raw, { params }));
+  } catch (e) { parentPort.postMessage(String((e && e.message) || e)); return; }
+  parentPort.postMessage(null);
+});
+`;
+  const workers: Worker[] = [];
+  const waiting: string[] = [];
+  let pending = 0;
+  let failure: string | null = null;
+  const pump = (): void => {
+    // Each worker holds at most one job: a message in flight IS the busy flag,
+    // and the reply returns the worker to the queue.
+    for (const w of workers) {
+      if (waiting.length === 0) break;
+      if (busy.has(w)) continue;
+      busy.add(w);
+      pending++;
+      w.postMessage(waiting.shift()!);
+    }
+  };
+  const busy = new Set<Worker>();
+  for (let i = 0; i < size; i++) {
+    const w = new Worker(src, { eval: true, workerData: { quality } });
+    w.on('message', (err) => {
+      pending--;
+      busy.delete(w);
+      if (err) failure = failure ?? String(err);
+      pump();
+    });
+    w.on('error', (e) => { failure = failure ?? String(e?.message ?? e); busy.delete(w); });
+    workers.push(w);
+  }
+  return {
+    run: (file: string) => { waiting.push(file); pump(); },
+    done: async () => {
+      while (pending > 0 || waiting.length > 0) {
+        if (failure) break;
+        pump();
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      await Promise.all(workers.map((w) => w.terminate()));
+      if (failure) throw new Error(failure);
+    },
+  };
+}
+
+async function writeBrotli(dir: string, quality = 11): Promise<void> {
   const targets: string[] = [];
   const walk = async (d: string): Promise<void> => {
     for (const e of await fs.promises.readdir(d, { withFileTypes: true })) {
@@ -352,24 +447,49 @@ async function writeBrotli(dir: string): Promise<void> {
     }
   };
   await walk(dir);
+  // Freshness by mtime (the same rule the server's prebuiltBro uses): a .br at
+  // least as new as its raw was compressed from these exact bytes. Skipping it
+  // keeps a rebuild from re-paying brotli on files nothing touched.
+  const fresh: Array<{ file: string; size: number }> = [];
+  let freshBytes = 0;
+  for (const p of targets) {
+    const rst = await fs.promises.stat(p).catch(() => null);
+    if (!rst) continue; // vanished mid-walk
+    const bst = await fs.promises.stat(p + '.br').catch(() => null);
+    if (bst && bst.mtimeMs >= rst.mtimeMs) continue; // fresh: compressed from these exact bytes
+    fresh.push({ file: p, size: rst.size });
+    freshBytes += rst.size;
+  }
+  if (fresh.length === 0) return;
+  // Whether the worker pool is worth its ~80ms startup depends on how much
+  // work there is: the in-process pool already runs on libuv's 4 threads, so a
+  // small app is faster WITHOUT workers (43 routes: 387ms in-process vs 463ms
+  // pooled) while a large one is much faster with them (301 routes: 34.0s vs
+  // 18s). One worker per ~4MB of fresh input, and below two workers the pool
+  // never pays for itself.
+  const size = Math.min(Math.max(2, os.cpus().length - 1), 12, Math.ceil(freshBytes / (4 * 1024 * 1024)));
+  if (size >= 2) {
+    try {
+      const pool = brotliPool(size, quality);
+      for (const { file } of fresh) pool.run(file);
+      await pool.done();
+      return;
+    } catch (e) {
+      // A pool can be refused (an exotic sandbox, a bundler that rewrites the
+      // eval path). Precompression is not optional, so fall back in-process.
+      console.warn(`Rose Frame Driver: parallel precompression unavailable (${e instanceof Error ? e.message : String(e)}), falling back to in-process`);
+    }
+  }
+  const params = { [zlib.constants.BROTLI_PARAM_QUALITY]: quality };
   let next = 0;
   const worker = async (): Promise<void> => {
-    while (next < targets.length) {
-      const p = targets[next++];
-      const br = p + '.br';
-      try {
-        // Freshness by mtime (the same rule the server's prebuiltBro uses): a
-        // .br at least as new as its raw was compressed from these exact
-        // bytes. Skipping it keeps a rebuild from re-paying brotli q11 on
-        // files nothing touched.
-        const [rst, bst] = await Promise.all([fs.promises.stat(p), fs.promises.stat(br)]);
-        if (bst.mtimeMs >= rst.mtimeMs) continue;
-      } catch { /* no .br yet (or the raw vanished mid-walk): compress below */ }
+    while (next < fresh.length) {
+      const p = fresh[next++].file;
       const raw = await fs.promises.readFile(p);
-      await fs.promises.writeFile(br, await brotliAsync(raw));
+      await fs.promises.writeFile(p + '.br', await brotliAsync(raw, { params }));
     }
   };
-  await Promise.all(Array.from({ length: Math.min(BROTLI_PARALLEL, targets.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(BROTLI_PARALLEL, fresh.length) }, worker));
 }
 
 async function injectPwaIntoHtml(dir: string, opts: PwaOptions): Promise<void> {
@@ -523,7 +643,7 @@ async function prerender(routes: RouteInfo[]): Promise<string[]> {
         await fs.promises.rm(file, { force: true });
         return;
       }
-      const html = getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, '', page.shell !== false);
+      const html = getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, '', page.shell !== false, ssrModule.sliceKeyFor?.(routePath) ?? null);
       let prev: string | null = null;
       try { prev = await fs.promises.readFile(file, 'utf-8'); } catch { /* new file: always write */ }
       if (prev !== html) {
@@ -588,7 +708,9 @@ const ASSET_EXT = new Set(['.js', '.css', '.json', '.png', '.jpg', '.jpeg', '.gi
 
 function pageHeaders(ssrModule: any, pathname: string, nonce = ''): Record<string, string> {
   const headers: Record<string, string> = {};
-  for (const [k, v] of Object.entries(securityHeaders(getClientSource(), nonce))) headers[k.toLowerCase()] = v;
+  // Sliced mode: the hash covers THIS route's inline bundle, so the header is
+  // per route; the other modes have one bundle for the whole app.
+  for (const [k, v] of Object.entries(securityHeaders(getClientSource(ssrModule.sliceKeyFor?.(pathname) ?? null), nonce))) headers[k.toLowerCase()] = v;
   const own = ssrModule.headersFor?.(pathname) as Record<string, string> | null | undefined;
   if (own) for (const [k, v] of Object.entries(own)) headers[k.toLowerCase()] = v;
   return headers;
@@ -614,7 +736,7 @@ function revalidateInBackground(routePath: string, filePath: string): void {
         ssrModule.setQuery?.({});
         const page = await ssrModule.renderPage(routePath);
         if (page.status === 200) {
-          await fs.promises.writeFile(filePath, getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, '', page.shell !== false));
+          await fs.promises.writeFile(filePath, getHtmlShell(page.html, page.state, page.head, page.csr !== false, page.lang, page.dir, '', page.shell !== false, ssrModule.sliceKeyFor?.(routePath) ?? null));
           fileCache.delete(filePath);
           console.log(`Rose Frame Driver: revalidated ${routePath} in the background`);
         }
@@ -1160,7 +1282,7 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
           done = () => res.end();
         }
         const doc = ssrModule.docAttrs(safe2);
-        await ssrModule.renderPageStream(safe2, write, shellOpen(getStyles(), doc.lang, doc.dir, !ssrModule.shellOff(safe2)), clientScriptTag(getClientSource(), nonce));
+        await ssrModule.renderPageStream(safe2, write, shellOpen(getStyles(), doc.lang, doc.dir, !ssrModule.shellOff(safe2)), clientScriptTag(getClientSource(ssrModule.sliceKeyFor?.(safe2) ?? null), nonce));
         done();
         return;
       }
@@ -1316,14 +1438,15 @@ async function dev(): Promise<void> {
   let timeout: any;
   fs.watch(SRC_DIR, { recursive: true }, (_ev, filename) => {
     // Build output must not retrigger the build: dist/ (prerendered HTML,
-    // bundles), .rosefd-build/ (esbuild intermediates) and src/.rosefd/
+    // bundles), .rosefd-build/ (esbuild intermediates), .rosefd-dev/ (the
+    // per-version server copies loadServer imports) and src/.rosefd/
     // (generated route types) are all rewritten by every rebuild, and
     // watching them turns one edit into an endless rebuild loop whose
     // prune/prerender window serves stale documents. node_modules and .git
     // are noise for the same reason.
     if (filename) {
       const segs = String(filename).replace(/\\/g, '/').split('/');
-      if (segs.some((s) => s === 'dist' || s === 'node_modules' || s === '.git' || s === '.rosefd' || s === '.rosefd-build')) return;
+      if (segs.some((s) => s === 'dist' || s === 'node_modules' || s === '.git' || s === '.rosefd' || s === '.rosefd-build' || s === '.rosefd-dev')) return;
     }
     if (devBuild) {
       // A change racing a running build. The build reads sources within its
@@ -1489,7 +1612,11 @@ async function serve(): Promise<void> {
         const response = await handle(new Request(url, { method: req.method, headers: req.headers }));
         const access = () => writeAccessLine(req, res, bytesWritten, `w${process.pid}`, started);
         res.statusCode = response.status;
-        response.headers.forEach((v: string, k: string) => res.setHeader(k, v));
+        // set-cookie is a list header: forEach delivers it per value and
+        // setHeader replaces, so a multi-cookie response would keep only the
+        // last one. webHeadersToNode keeps the whole array under the name.
+        const webHeaders = webHeadersToNode(response);
+        for (const [k, v] of Object.entries(webHeaders)) res.setHeader(k, v);
         // The body below is content-negotiated on Accept-Encoding, so a cache
         // must know the response varies by it - the same header the static and
         // streamed branches set. Merged, not written: the edge response may

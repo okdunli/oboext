@@ -3,6 +3,7 @@
 import { pathToFileURL } from 'url';
 import { join } from 'path';
 import { buildShell, shellOpen, clientScriptTag, securityHeaders, mintNonce, getClientSource, setBundleMode } from './shell.js';
+import { hotVaryValues } from './hot-vary.js';
 
 type ServerModule = {
   renderPage(pathname: string, form?: FormData): Promise<{ html: string; state: string; head: string[]; status?: number; csr?: boolean; shell?: boolean; lang?: string; dir?: string }>;
@@ -17,6 +18,8 @@ type ServerModule = {
   handleApi(method: string, pathname: string, request: Request): Promise<Response>;
  /** The document's <html lang>/<dir> for a pathname (streaming needs them before the render) */
   docAttrs(pathname: string): { lang: string; dir: string };
+  /** The headers the matched route declared with `export const hotVary` - extra cache-key dimensions, or null when it declared none */
+  hotVaryFor?(pathname: string): string[] | null;
   /** pages/_middleware.rose's handler, or null when the project has none */
   middleware: ((request: Request) => Promise<Response | void | null>) | null;
   /** run the middleware once per request; returns its short-circuit Response or null */
@@ -217,11 +220,15 @@ export async function createEdgeHandler(
     }
     const cookieHeader = request.headers.get('cookie') || '';
     const qs = searchParams.toString();
+    // The render memo is shared across requests, so its key carries the
+    // negotiation fingerprint too - accept-language plus whatever the matched
+    // route declared with `export const hotVary`.
+    const dims = hotVaryValues(pathname, (mod as any).hotVaryFor, (n) => request.headers.get(n)).join('\u0000');
     const memoHit = !form && (mod as any).isCachedRoute?.(pathname)
-      ? (mod as any).peekRenderCache?.(pathname, cookieHeader, qs)
+      ? (mod as any).peekRenderCache?.(pathname, cookieHeader, qs, dims)
       : null;
     const page = memoHit ?? ((mod as any).renderPageCached && !form
-      ? await (mod as any).renderPageCached(pathname, cookieHeader, qs)
+      ? await (mod as any).renderPageCached(pathname, cookieHeader, qs, dims)
       : await mod.renderPage(pathname, form));
     const nonce = mod.cspNonce?.(pathname) ? mintNonce() : '';
     let html = buildShell(page.html, page.state, clientFor(pathname), page.head, styles, page.csr !== false, page.lang, page.dir, nonce, page.shell !== false);

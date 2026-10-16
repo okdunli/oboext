@@ -19,6 +19,7 @@ import { Readable } from 'stream';
 import { createEdgeHandler } from './edge.js';
 import { runShutdownHooks } from './shutdown.js';
 import { requestOrigin } from './origin.js';
+import { hotVaryValues } from './hot-vary.js';
 
 import type * as ts from 'typescript';
 
@@ -1288,7 +1289,7 @@ function serveStatic(dir: string, isr = false, dev = false): (req: any, res: any
       }
       const hasQuery = (req.url || '').includes('?');
       const page = req.method === 'GET' && !hasQuery && ssrModule.renderPageCached
-        ? await ssrModule.renderPageCached(safe2, String(req.headers.cookie || ''))
+        ? await ssrModule.renderPageCached(safe2, String(req.headers.cookie || ''), '', hotVaryValues(safe2, ssrModule.hotVaryFor, (n) => req.headers[n] as string | undefined).join('\u0000'))
         : await ssrModule.renderPage(safe2);
       await sendPage(req, res, ssrModule, hookCtx, page, safe2);
       });

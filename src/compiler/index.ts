@@ -72,6 +72,8 @@ export interface CompileResult {
   usesStore?: boolean;
   revalidate?: number;
   cache?: number;
+  /** request headers this route's representation is negotiated on, beyond cookie/accept-language - folded into every shared cache key (see hot-vary.ts) */
+  hotVary?: string[];
   csr?: boolean;
   /**
    * still needs it - comments widgets, third-party scripts) but drop the
@@ -1419,6 +1421,46 @@ export async function compileComponent(filePath: string, publicDir: string, scop
   const revalidate = revalidateMatch ? Number(revalidateMatch[1]) : undefined;
   const cacheMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+cache\s*=\s*(\d+)\s*;?/);
   const cacheSeconds = cacheMatch ? Number(cacheMatch[1]) : undefined;
+  // hotVary: the request headers this route's representation is negotiated on,
+  // beyond the ones the server key already carries (cookie, accept-language).
+  // The shared caches are keyed on URL + cookie + language only, so a route
+  // that reads its own private header (x-locale, x-rv-url) would have one
+  // client's bytes replayed to another for a whole TTL - the app's only exits
+  // used to be a query tag (?l=, ?rv=) or declaring no-store, which switches
+  // the cache off for that route entirely. Naming the header here folds it
+  // into the key: the cache keeps serving, partitioned per value.
+  const hotVaryMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+hotVary\s*=\s*\[([\s\S]*?)\]\s*;?/);
+  let hotVary: string[] | undefined;
+  if (hotVaryMatch) {
+    const dims: string[] = [];
+    for (const part of hotVaryMatch[1]!.split(',')) {
+      const token = part.trim().replace(/^['"`]|['"`]$/g, '');
+      if (!token) continue;
+      const dim = token.toLowerCase();
+      if (!/^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(dim)) {
+        throw new RoseError(
+          'E-EXPORT',
+          `${filePath}: export const hotVary must list request header names (got '${token}')`,
+          { file: filePath, line: lineAt(rawScript, hotVaryMatch), hint: "hotVary is a list of the request headers this route negotiates on, e.g. export const hotVary = ['x-locale', 'x-rv-url']" },
+        );
+      }
+      // accept-encoding is negotiated per request from the stored raw bytes,
+      // so partitioning on it would only multiply identical entries.
+      if (dim === 'accept-encoding') {
+        throw new RoseError(
+          'E-EXPORT',
+          `${filePath}: hotVary must not name accept-encoding - the server stores raw bytes and re-negotiates the encoding on every request`,
+          { file: filePath, line: lineAt(rawScript, hotVaryMatch), hint: 'drop accept-encoding from hotVary; it is already handled per request' },
+        );
+      }
+      // cookie and accept-language are already in the key; naming them is a
+      // no-op and is dropped rather than rejected (the declaration stays
+      // readable as the route\'s full negotiation surface).
+      if (dim === 'cookie' || dim === 'accept-language') continue;
+      if (!dims.includes(dim)) dims.push(dim);
+    }
+    hotVary = dims.length ? dims : undefined;
+  }
   const prefetchMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+prefetch\s*=\s*['"`](\w+)['"`]\s*;?/);
   const prefetch = prefetchMatch ? prefetchMatch[1] : undefined;
   if (prefetch && !['off', 'hover', 'viewport', 'all'].includes(prefetch)) {
@@ -1872,6 +1914,7 @@ if (!__seeded_${d.name}) { const __v_${d.name} = await $data(${fn}); set${capita
     usesStore,
     revalidate,
     cache: cacheSeconds,
+    hotVary,
     csr,
     shell,
     buffer,
@@ -5111,6 +5154,22 @@ export const revalidate = [
 export const routeCaches = [
   ${pages.filter(({ i }) => compiled[i].cache !== undefined).map(({ info, i }) => `{ pattern: '${info.pattern}', seconds: ${compiled[i].cache} }`).join(',\n  ')}
 ];
+
+// Hot-cache key dimensions (export const hotVary = ['x-locale']): the shared
+// server caches key on URL + cookie + accept-language only, so a route whose
+// representation is negotiated on its own private header had one client's
+// bytes replayed to another for a whole TTL (BUG.md AB) - and the app's only
+// exits were a query tag (?l=, ?rv=) or no-store, which switches the cache off
+// for the route entirely. Naming the headers here folds them into the key AND
+// into the warm render that fills it, so every value gets its own entry and
+// the cache keeps working.
+export const routeHotVary = [
+  ${[...pages, ...apiRoutes].filter(({ i }) => compiled[i].hotVary).map(({ info, i }) => `{ pattern: '${info.pattern}', dims: ${JSON.stringify(compiled[i].hotVary)} }`).join(',\n  ')}
+];
+export function hotVaryFor(pathname: string): string[] | null {
+  for (const r of routeHotVary) if (matchRoute(r.pattern, pathname)) return r.dims;
+  return null;
+}
 const __dynCache = new Map();
 export function invalidateRenderCache(): void {
   __dynCache.clear();
@@ -5302,28 +5361,32 @@ export function invalidatePath(pathname: string): number {
   }
   return n;
 }
-export function peekRenderCache(pathname: string, cookieHeader: string, search = ''): ReturnType<typeof renderPage> | null {
-  const cfg = routeClass(pathname).cache;
-  if (!cfg) return null;
+// The render memo is a shared store, so its key has to name the whole
+// representation: URL + cookie alone let one visitor's render be replayed to
+// another for the entire memo TTL whenever the route negotiates on a request
+// header - accept-language first (BUG.md AB), then whatever the route itself
+// declared with export const hotVary. dims is the caller-built negotiation
+// fingerprint (accept-language plus the declared headers); it folds in here.
+function __dynKey(pathname: string, cookieHeader: string, search: string, dims: string): string {
   let h = 0x811c9dc5;
-  const c = cookieHeader || '';
+  const c = (cookieHeader || '') + '\\u0000' + (dims || '');
   for (let i = 0; i < c.length; i++) {
     h ^= c.charCodeAt(i);
     h = (h * 0x01000193) >>> 0;
   }
   // The query string is part of the cache key: routes like /search?q= or /archives?year= render different documents per query.
-  const hit = __dynCache.get(pathname + '|' + (search || '') + '|' + h.toString(16));
+  return pathname + '|' + (search || '') + '|' + h.toString(16);
+}
+export function peekRenderCache(pathname: string, cookieHeader: string, search = '', dims = ''): ReturnType<typeof renderPage> | null {
+  const cfg = routeClass(pathname).cache;
+  if (!cfg) return null;
+  const hit = __dynCache.get(__dynKey(pathname, cookieHeader, search, dims));
   return hit && hit.expires > Date.now() ? hit.page : null;
 }
-export async function renderPageCached(pathname: string, cookieHeader: string, search = ''): Promise<ReturnType<typeof renderPage>> {
+export async function renderPageCached(pathname: string, cookieHeader: string, search = '', dims = ''): Promise<ReturnType<typeof renderPage>> {
   const cfg = routeClass(pathname).cache;
   if (!cfg) return renderPage(pathname);
-  let h = 0x811c9dc5;
-  for (let i = 0; i < cookieHeader.length; i++) {
-    h ^= cookieHeader.charCodeAt(i);
-    h = (h * 0x01000193) >>> 0;
-  }
-  const key = pathname + '|' + (search || '') + '|' + h.toString(16);
+  const key = __dynKey(pathname, cookieHeader, search, dims);
   const hit = __dynCache.get(key);
   if (hit && hit.expires > Date.now()) {
     __dynCache.delete(key);

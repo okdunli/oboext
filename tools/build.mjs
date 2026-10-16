@@ -181,96 +181,15 @@ console.log(`[build] deploy-root public/ -> ${countFiles(rootPublic)} files (Ver
 // loads it and dispatches into it), so giving dist/server.js a function default
 // export makes whichever file wins the key collision satisfy the contract.
 // ---------------------------------------------------------------------------
-// rosezm BUG.md entry W: prod-server clears hotCache at the TOP of every
-// non-GET handler while background warm renders may be in flight; a warm that
-// finishes after the clear stores pre-mutation bytes and serves them for a
-// full TTL. Measured on oboext: 8/8 admin publishes followed by a cookieless
-// read served stale content (scripts/warm-race.test.mts is the regression
-// lock). rosezm is read-only here, so the fix is applied to OUR build artifact
-// with anchored edits: every anchor must occur exactly once, the result must
-// pass `node --check`, and a banner marks the patched region. Anchor drift
-// fails the build loudly instead of silently shipping the racy server.
-const WARM_RACE_BANNER = 'oboext patch: warm/invalidation generation guard';
-const WARM_RACE_DECL = "// --- oboext patch: warm/invalidation generation guard (rosezm BUG.md W) ---\n// Every invalidation bumps hotGen; a store whose captured generation is\n// stale served pre-invalidation bytes (the warm-race bug).\nvar hotGen=0;\nglobalThis.__oboextHotInvalidate=function(){hotGen++,te.clear();let f=ye.invalidateRenderCache;typeof f==\"function\"&&f()};\nvar te=new Map,bn=300;";
-function patchWarmRace(file) {
-  if (!existsSync(file)) return;
-  // Escape hatch for A/B evidence runs: OBOEXT_SKIP_WARM_PATCH=1 ships the
-  // unpatched server so the race can be re-measured against the current
-  // framework (scripts/warm-race.test.mts fails loudly without the patch).
-  if (process.env.OBOEXT_SKIP_WARM_PATCH === '1') {
-    console.log('[build] warm-race patch SKIPPED (OBOEXT_SKIP_WARM_PATCH=1)');
-    return;
-  }
-  let src = readFileSync(file, 'utf8');
-  if (src.includes(WARM_RACE_BANNER)) {
-    console.log('[build] warm-race patch already present in dist/prod.mjs');
-    return;
-  }
-  const edit = (from, to, label) => {
-    const n = src.split(from).length - 1;
-    if (n !== 1) {
-      throw new Error(
-        `warm-race patch anchor '${label}' matched ${n} times (expected 1) - rosezm drifted, re-author the patch`,
-      );
-    }
-    src = src.replace(from, to);
-  };
-
-  // 0.1.8 ships a MINIFIED prod-server bundle: hotCache -> te, HOT_TTL -> Sn,
-  // refetchHot -> Vr, fillHot -> mn, ready -> yn, mod -> ye, req/res -> e/t.
-  // The anchors below are structural (whole statements), not names, so they
-  // survive identifier mangling; the uniqueness assertion is the drift guard.
-
-  // 1) generation counter + the app-level commit-point hook, next to the cache
-  edit(
-    'var te=new Map,bn=300;',
-    WARM_RACE_DECL,
-    'hotCache declaration',
-  );
-
-  // 2) invalidate on response finish - AFTER the mutation commits - not before
-  edit(
-    'if(e.method!=="GET"&&e.method!=="HEAD"){te.clear();let u=ye.invalidateRenderCache;typeof u=="function"&&u()}',
-    'if(e.method!=="GET"&&e.method!=="HEAD"){let iv=!1;const inv=()=>{if(iv)return;iv=!0,hotGen++,te.clear();let u=ye.invalidateRenderCache;typeof u=="function"&&u()};typeof t.on=="function"?(t.on("finish",inv),t.on("close",inv)):inv()}',
-    'non-GET invalidation block',
-  );
-
-  // 3) capture this request generation for its own store
-  edit('if(await yn,Kr(e,t))return;', 'if(await yn,Kr(e,t))return;const rqG=hotGen;', 'handler top');
-
-  // 4) warm renders: capture at entry, refuse to store across an invalidation
-  edit('async function Vr(e,t){', 'async function Vr(e,t){const wG=hotGen;', 'refetchHot head');
-  edit(
-    '))),o=r.headers.get("content-security-policy")',
-    ')));if(wG!==hotGen)return;let o=r.headers.get("content-security-policy")',
-    'refetchHot store guard',
-  );
-
-  // 5) request-path store: same guard (arrayBuffer + compression open a window)
-  edit(
-    'function mn(e,t,n,r,o){',
-    'function mn(e,t,n,r,o,g){if(g!==void 0&&g!==hotGen)return;',
-    'fillHot head',
-  );
-  edit(
-    'e.method==="GET"&&mn(De(e.url||"/"),o,a,g,u)',
-    'e.method==="GET"&&mn(De(e.url||"/"),o,a,g,u,rqG)',
-    'fillHot call A',
-  );
-  edit(
-    '`W/"${h.length}-${ve(o)}"`)',
-    '`W/"${h.length}-${ve(o)}"`,rqG)',
-    'fillHot call B',
-  );
-
-  writeFileSync(file, src);
-  const check = spawnSync(process.execPath, ['--check', file], { stdio: 'pipe' });
-  if (check.status !== 0) {
-    throw new Error('patched dist/prod.mjs failed node --check: ' + String(check.stderr));
-  }
-  console.log('[build] warm-race patch applied to dist/prod.mjs (BUG.md W)');
-}
-
+// ---------------------------------------------------------------------------
+// R58: the framework tree (oboext/oboext/src) now carries the fixes these two
+// build-time patches used to inject - rosezm BUG.md W (generation guard +
+// finish-hook invalidation, R56) and BUG.md Y (set-cookie as a list header,
+// R57) are upstream, and the prod-server exposes the app-level commit-point
+// hook as globalThis.__rosezmInvalidateHot. Both patches are REMOVED: their
+// anchors no longer exist in the bundle, and the framework implementation
+// supersedes them (src/server/cache.ts calls the framework hook directly).
+// ---------------------------------------------------------------------------
 const distServer = join(ROOT, 'dist', 'server.js');
 if (existsSync(distServer)) {
   const src = readFileSync(distServer, 'utf8');
@@ -303,47 +222,5 @@ if (existsSync(distServer)) {
     console.log('[build] appended Vercel handler shim to dist/server.js');
   }
 }
-
-patchWarmRace(join(ROOT, 'dist', 'prod.mjs'));
-
-// ---------------------------------------------------------------------------
-// rosezm BUG.md entry Y: the prod-server writes response headers with
-// `headers.forEach((v, k) => res.setHeader(k, v))`. For set-cookie that is
-// lossy twice over: on runtimes whose forEach combines multi-value cookies
-// into one comma-joined callback the browser sees a single malformed
-// Set-Cookie; on runtimes whose forEach fires once per cookie the second
-// setHeader REPLACES the first (node semantics), so only the last cookie
-// survives. Either way a login response lost its cms_session cookie and
-// every admin write then failed CSRF (no-token) - a total admin lockout.
-// The framework is read-only; patch the bundle to emit one header per
-// cookie, which is what the spec requires.
-// ---------------------------------------------------------------------------
-function patchSetCookieHeaders(file) {
-  if (!existsSync(file)) return;
-  let src = readFileSync(file, 'utf8');
-  const anchor = 'a.headers.forEach((u,g)=>t.setHeader(g,u))';
-  if (!src.includes(anchor)) {
-    if (src.includes('__oboextSetCookie')) return;
-    throw new Error(
-      'BUG.md Y: set-cookie export anchor not found in dist/prod.mjs ' +
-        '- the framework bundle changed shape; re-derive the patch before shipping.',
-    );
-  }
-  // The anchor sits inside a comma expression (forEach(...), kn(t, ...)),
-  // so the extra step must stay an expression too - an IIFE, not a block.
-  const replacement =
-    'a.headers.forEach((u,g)=>{if(g==="set-cookie")return;t.setHeader(g,u)}),' +
-    '(()=>{const __oboextSetCookie=a.headers.getSetCookie?a.headers.getSetCookie():[];' +
-    'if(__oboextSetCookie.length)t.setHeader("set-cookie",__oboextSetCookie)})()';
-  src = src.replace(anchor, replacement);
-  retry('dist/prod.mjs set-cookie patch', () => writeFileSync(file, src));
-  const check = spawnSync(process.execPath, ['--check', file], { stdio: 'pipe' });
-  if (check.status !== 0) {
-    throw new Error('patched dist/prod.mjs failed node --check: ' + String(check.stderr));
-  }
-  console.log('[build] set-cookie header patch applied to dist/prod.mjs (BUG.md Y)');
-}
-
-patchSetCookieHeaders(join(ROOT, 'dist', 'prod.mjs'));
 
 console.log('[build] done');

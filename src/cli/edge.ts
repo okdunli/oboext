@@ -2,7 +2,7 @@
 // rosezm Edge adapter - Web-standard fetch handler.
 import { pathToFileURL } from 'url';
 import { join } from 'path';
-import { buildShell, shellOpen, clientScriptTag, securityHeaders, mintNonce } from './shell.js';
+import { buildShell, shellOpen, clientScriptTag, securityHeaders, mintNonce, getClientSource, setBundleMode } from './shell.js';
 
 type ServerModule = {
   renderPage(pathname: string, form?: FormData): Promise<{ html: string; state: string; head: string[]; status?: number; csr?: boolean; shell?: boolean; lang?: string; dir?: string }>;
@@ -69,6 +69,26 @@ function crossSiteWrite(request: Request): Response | null {
 }
 
 /**
+ * The whole request unit - setQuery through the rendered response - runs one
+ * at a time, on the same promise-chain shape as the runtime's fallback render
+ * mutex. The runtime lock protects the render MAPS (isolateRender swaps them
+ * once it is inside the render), but setQuery writes a module-level variable
+ * OUTSIDE that lock, so without this queue two concurrent requests could
+ * still overwrite each other's query before either render began - a render
+ * then read the other request's $query(). Queueing the unit also means the
+ * render lock inside is always free when a unit is admitted, so the two locks
+ * can never deadlock against each other. Under a context store (Node) none of
+ * this applies: each chain carries its own maps and query bag.
+ */
+let edgeQueue: Promise<void> = Promise.resolve();
+const withEdgeQueue = <T>(fn: () => Promise<T>): Promise<T> => {
+  const prev = edgeQueue;
+  let release!: () => void;
+  edgeQueue = new Promise<void>((r) => { release = r; });
+  return prev.then(fn).finally(release);
+};
+
+/**
  * Create a fetch handler from a built rosezm project.
  * @param outDir directory containing server.js and client.js
  * @param preloaded for runtimes with NO filesystem (Cloudflare Workers /
@@ -94,6 +114,18 @@ export async function createEdgeHandler(
     }
   }
   if (client && client.includes('chunks/')) client = null;
+  // Sliced mode: every route's document inlines its OWN bundle, so the source
+  // is resolved per request (mtime-cached inside shell.ts). The server bundle
+  // exports sliceKeyFor only in sliced builds - its presence is the mode test,
+  // and it also flips shell.ts's resolver into per-route mode (this process
+  // never ran the CLI's build(), which is what sets the flag there).
+  const sliced = typeof (mod as { sliceKeyFor?: unknown }).sliceKeyFor === 'function';
+  if (sliced) setBundleMode('sliced');
+  // The dist this handler serves, not the process cwd's: an edge runtime is
+  // handed a directory, and a slice resolved against the wrong one would
+  // silently fall back to the core (every route's chain in one document).
+  const clientFor = (pathname: string): string | null =>
+    sliced ? getClientSource((mod as { sliceKeyFor: (p: string) => string | null }).sliceKeyFor(pathname), outDir) : client;
   if (preloaded && 'styles' in preloaded) {
     styles = preloaded.styles ?? '';
   } else {
@@ -116,7 +148,7 @@ export async function createEdgeHandler(
 
   const pageHeaders = (pathname: string, nonce = ''): Record<string, string> => {
     const headers: Record<string, string> = {};
-    for (const [k, v] of Object.entries(securityHeaders(client, nonce))) headers[k.toLowerCase()] = v;
+    for (const [k, v] of Object.entries(securityHeaders(clientFor(pathname), nonce))) headers[k.toLowerCase()] = v;
     if (!headers['cache-control']) headers['cache-control'] = 'no-cache';
     const own = mod.headersFor?.(pathname);
     if (own) for (const [k, v] of Object.entries(own)) headers[k.toLowerCase()] = v;
@@ -131,6 +163,11 @@ export async function createEdgeHandler(
     if (canonical !== pathname) {
       return new Response(null, { status: 308, headers: { location: canonical + new URL(request.url).search } });
     }
+    // setQuery onward: the serialized unit. The streaming branch returns as
+    // soon as the Response exists (its start() is lazy and runs outside the
+    // queue), so a slow reader never holds the queue - the render lock inside
+    // still serializes the render itself.
+    return withEdgeQueue(async () => {
     mod.setQuery?.(Object.fromEntries(searchParams));
     const hookCtx = mod.hasRequestHooks || mod.hasResponseHooks
       ? { request, url: new URL(request.url), method: request.method, pathname, state: {} as Record<string, unknown> }
@@ -171,7 +208,7 @@ export async function createEdgeHandler(
             pathname,
             (chunk) => controller.enqueue(encoder.encode(chunk)),
             shellOpen(styles, doc.lang, doc.dir, !mod.shellOff?.(pathname)),
-            clientScriptTag(client, nonce)
+            clientScriptTag(clientFor(pathname), nonce)
           );
           controller.close();
         }
@@ -187,13 +224,14 @@ export async function createEdgeHandler(
       ? await (mod as any).renderPageCached(pathname, cookieHeader, qs)
       : await mod.renderPage(pathname, form));
     const nonce = mod.cspNonce?.(pathname) ? mintNonce() : '';
-    let html = buildShell(page.html, page.state, client, page.head, styles, page.csr !== false, page.lang, page.dir, nonce, page.shell !== false);
+    let html = buildShell(page.html, page.state, clientFor(pathname), page.head, styles, page.csr !== false, page.lang, page.dir, nonce, page.shell !== false);
     if (request.headers.get('x-pjax')) html = pjaxFragment(html);
     const buffered = new Response(html, {
       status: page.status ?? 200,
       headers: { 'content-type': 'text/html; charset=utf-8', ...pageHeaders(pathname, nonce) }
     });
     return hookCtx ? mod.runResponseHooks(hookCtx, buffered) : buffered;
+    });
   };
 }
 

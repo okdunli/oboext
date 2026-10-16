@@ -204,9 +204,11 @@ export function invalidateContentCaches(): void {
   // cache) invalidate at request boundaries, which leaves a window where an
   // in-flight warm render stores pre-mutation bytes. This function runs at
   // the COMMIT POINT of every content write, so it is the one place that can
-  // tell the server "the world changed NOW". The hook is installed by the
-  // build-time patch of dist/prod.mjs; absent (dev server) it is a no-op.
-  const invalidateHot = (globalThis as Record<string, unknown>).__oboextHotInvalidate;
+  // tell the server "the world changed NOW". Since the R58 framework upgrade
+  // the prod-server exposes that hook natively
+  // (globalThis.__rosezmInvalidateHot, rosezm R56); absent (dev server) it is
+  // a no-op. The build-time patch that used to install it is gone.
+  const invalidateHot = (globalThis as Record<string, unknown>).__rosezmInvalidateHot;
   if (typeof invalidateHot === "function") (invalidateHot as () => void)();
 }
 

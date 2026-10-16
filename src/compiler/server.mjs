@@ -1175,11 +1175,11 @@ ${hoisted.rest}`, "ssr").trim()}`,
   }
   const bundleMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+bundle\s*=\s*['"`](\w+)['"`]\s*;?/);
   const bundle = bundleMatch ? bundleMatch[1] : void 0;
-  if (bundle && !["inline", "split"].includes(bundle)) {
+  if (bundle && !["inline", "split", "sliced"].includes(bundle)) {
     throw new RoseError(
       "E-EXPORT",
-      `${filePath2}: export const bundle must be 'inline' or 'split'`,
-      { file: filePath2, line: lineAt(rawScript, bundleMatch), hint: "'inline' (default) is the single-document mode; 'split' is mode B for large apps - route-level chunks, loaded on demand" }
+      `${filePath2}: export const bundle must be 'inline', 'split' or 'sliced'`,
+      { file: filePath2, line: lineAt(rawScript, bundleMatch), hint: "'inline' (default) is the single-document mode; 'split' is mode B for large apps - route-level chunks, loaded on demand; 'sliced' inlines the runtime plus each route's own render chain and shares the rest via a nav chunk" }
     );
   }
   const csrMatch = rawScript.match(/(?:^|\n)\s*export\s+(?:const|let|var)\s+csr\s*=\s*(true|false)\s*;?/);

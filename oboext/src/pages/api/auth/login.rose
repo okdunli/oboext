@@ -27,10 +27,11 @@
       if (!account || !password) return jsonFail(t("api.login_required"), 422);
       parseOrThrow(
         v.object({
-          account: v.string({ max: 120, label: "账号" }),
-          password: v.string({ max: 200, trim: false, label: "密码" }),
+          account: v.string({ max: 120, label: "v.field.account" }),
+          password: v.string({ max: 200, trim: false, label: "v.field.password" }),
         }),
         { account, password },
+        t,
       );
 
       const sec = await getAdminSecurity();

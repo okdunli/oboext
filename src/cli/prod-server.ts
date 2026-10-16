@@ -259,14 +259,66 @@ function relTarget(u: string): string {
   return u;
 }
 
-async function refetchHot(pathname: string, cookieHeader: string): Promise<void> {
+// The hot cache is a SHARED store, so its key must name the representation
+// exactly: same path, same cookie, same negotiated language. It used to be
+// pathname + cookie only - and a representation negotiated on Accept-Language
+// is a different representation per language, so the first language rendered
+// was replayed to every other language for a whole TTL. Boot warm sends no
+// accept-language at all, so the app's default won the shared key and an
+// English browser got the Chinese installer (BUG.md AB). Folding the header
+// into the key partitions the store: warm fills its own header-less slot
+// lazily, and every real language renders on demand.
+function hotKey(pathname: string, cookieHeader: string, acceptLanguage: string): string {
+  return pathname + '|' + fnv(cookieHeader + '\u0000' + acceptLanguage);
+}
+
+// A response that declares it must not be STORED by a shared cache - or that
+// varies on a dimension the key does not carry - must never enter the store:
+// it would be replayed to requests that negotiate differently for a whole
+// TTL. The key carries pathname, cookie and accept-language, so
+// accept-language is the one app-declared dimension that is already safe;
+// anything else (`*`, origin, a custom header) is not - the /api/data loader
+// fragment and the installer were both poisoned this way (BUG.md AB).
+// accept-encoding needs no mention: the store keeps the raw bytes and
+// re-negotiates the encoding per request (pickEncoding), which is why the
+// framework's own Accept-Encoding merge on the node response stays out of
+// this check - this reads the app's Response.
+//
+// no-store and private are the storage prohibitions, and they are the app's
+// escape valves. Revalidation-freshness directives (no-cache, max-age=0) are
+// deliberately NOT refusals: the framework's own dynamic documents carry
+// `cache-control: no-cache` (browsers must revalidate HTML on every visit),
+// and the hot cache is the server-side revalidation layer for exactly those
+// documents - a 10s TTL plus generation invalidation on every mutation.
+// Refusing no-cache would disable the cache for its primary workload, which
+// was never the reported defect.
+function refusesStore(response: Response): boolean {
+  const cc = (response.headers.get('cache-control') || '').toLowerCase();
+  for (const tok of cc.split(/[,\s]+/)) {
+    if (tok === 'no-store' || tok === 'private') return true;
+  }
+  const vary = response.headers.get('vary');
+  if (vary) {
+    for (const dim of vary.split(',')) {
+      const d = dim.trim().toLowerCase();
+      if (d !== '' && d !== 'accept-encoding') return true;
+    }
+  }
+  return false;
+}
+
+async function refetchHot(pathname: string, cookieHeader: string, acceptLanguage: string): Promise<void> {
   const gen = hotGen;
   const headers: Record<string, string> = { 'user-agent': 'rosezm-hot' };
   if (cookieHeader) headers.cookie = cookieHeader;
+  // The warm render must negotiate the SAME language the entry it fills is
+  // keyed by: a header-less warm render stored under a language key would
+  // serve default-locale bytes to that language for a whole TTL.
+  if (acceptLanguage) headers['accept-language'] = acceptLanguage;
   const response = await runIsolated(() => handle!(new Request('http://localhost' + pathname, { headers })));
   const csp = response.headers.get('content-security-policy') || '';
-  const key = pathname + '|' + fnv(cookieHeader);
-  if (!cacheable(response.status) || csp.includes('nonce-')) {
+  const key = hotKey(pathname, cookieHeader, acceptLanguage);
+  if (!cacheable(response.status) || csp.includes('nonce-') || refusesStore(response)) {
     hotCache.delete(key);
     return;
   }
@@ -298,11 +350,11 @@ async function refetchHot(pathname: string, cookieHeader: string): Promise<void>
 // set), so N concurrent first-hits rendered N x warmList routes - and a failed
 // wave left the cache empty, so every subsequent GET fired another full wave.
 const warming = new Set<string>();
-function warmHot(pathname: string, cookieHeader: string): void {
-  const wkey = pathname + '|' + fnv(cookieHeader);
+function warmHot(pathname: string, cookieHeader: string, acceptLanguage: string): void {
+  const wkey = hotKey(pathname, cookieHeader, acceptLanguage);
   if (warming.has(wkey)) return;
   warming.add(wkey);
-  refetchHot(pathname, cookieHeader)
+  refetchHot(pathname, cookieHeader, acceptLanguage)
     .catch(() => {
       const e = hotCache.get(wkey);
       if (e) { e.refreshing = false; e.fetchedAt = Date.now() - HOT_TTL + 2000; }
@@ -318,13 +370,16 @@ async function tryHot(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (req.method !== 'GET') return false;
   const q = relTarget(req.url || '/');
   const cookieHeader = String(req.headers.cookie || '');
-  const key = q + '|' + fnv(cookieHeader);
+  // Same normalization the request path below applies: a key is per
+  // representation, and `en-US` / `en-us` are the same representation.
+  const acceptLanguage = String(req.headers['accept-language'] ?? '').trim().toLowerCase();
+  const key = hotKey(q, cookieHeader, acceptLanguage);
   const entry = hotCache.get(key);
   if (!entry) return false;
   const age = Date.now() - entry.fetchedAt;
   if (age > HOT_TTL && !entry.refreshing) {
     entry.refreshing = true;
-    warmHot(q, cookieHeader);
+    warmHot(q, cookieHeader, acceptLanguage);
   }
   res.statusCode = entry.status ?? 200;
   for (const k in entry.headers) res.setHeader(k, entry.headers[k]);
@@ -358,7 +413,7 @@ function cacheable(status: number): boolean {
   return status === 200 || status === 404;
 }
 
-function fillHot(pathname: string, cookieHeader: string, response: Response, memo: { raw: Buffer; br?: Buffer; gzip?: Buffer }, etag: string, gen: number): void {
+function fillHot(pathname: string, cookieHeader: string, acceptLanguage: string, response: Response, memo: { raw: Buffer; br?: Buffer; gzip?: Buffer }, etag: string, gen: number): void {
   // The render behind this response may predate an invalidation that landed
   // while it ran (the request path awaits the body and the compression before
   // storing). Stale bytes must not enter the cache it was just dropped from.
@@ -366,6 +421,10 @@ function fillHot(pathname: string, cookieHeader: string, response: Response, mem
   if (!cacheable(response.status)) return;
   const csp = response.headers.get('content-security-policy') || '';
   if (csp.includes('nonce-')) return;
+  // The declared cacheability contract (BUG.md AB): a response that says it
+  // must not be stored, or that varies on a dimension the key does not carry,
+  // never enters the shared store.
+  if (refusesStore(response)) return;
   if (response.status === 404 && hotCache.size >= HOT_CACHE_MAX) return;
   // set-cookie is a list header: forEach delivers it per value, so a plain
   // object assignment keeps only the last one. Capture the whole array and
@@ -375,7 +434,7 @@ function fillHot(pathname: string, cookieHeader: string, response: Response, mem
   response.headers.forEach((v, k) => { if (k !== 'content-length' && k !== 'date' && k !== 'content-encoding') { if (cookies.length && k.toLowerCase() === 'set-cookie') return; head[k] = v; } });
   if (cookies.length) head['set-cookie'] = cookies;
   hotCacheEvict();
-  hotCache.set(pathname + '|' + fnv(cookieHeader), { ...memo, headers: head, etag, fetchedAt: Date.now(), status: response.status });
+  hotCache.set(hotKey(pathname, cookieHeader, acceptLanguage), { ...memo, headers: head, etag, fetchedAt: Date.now(), status: response.status });
 }
 
 const fileCache = new Map<string, { filePath: string; raw: Buffer; br?: Buffer; gzip?: Buffer; compressed: boolean; etag: string; mtimeMs: number; checkedAt: number }>();
@@ -571,7 +630,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (hotCache.size > 0 && (await tryHot(req, res))) return;
     if (req.method === 'GET' && !req.headers.cookie && hotCache.size === 0) {
-      for (const r of warmList) warmHot(r, '');
+      for (const r of warmList) warmHot(r, '', '');
     }
     if (req.method === 'GET' || req.method === 'HEAD') {
       const rawUrl = relTarget(req.url || '/');
@@ -599,6 +658,9 @@ const server = http.createServer(async (req, res) => {
       (init as any).duplex = 'half';
     }
     const cookieHeader = String(req.headers.cookie || '');
+    // The negotiated language is part of the representation's identity: it
+    // names the hot-cache key below and the warm render that fills it.
+    const acceptLanguage = String(req.headers['accept-language'] ?? '').trim().toLowerCase();
     if (earlyHintLinks.length && req.method === 'GET' && String(req.headers.accept ?? '').includes('text/html')) {
       try { res.writeEarlyHints({ link: earlyHintLinks }); } catch { /* client gone: the render still finishes */ }
     }
@@ -644,11 +706,11 @@ const server = http.createServer(async (req, res) => {
         res.setHeader('Content-Encoding', enc);
         res.setHeader('Content-Length', String(body.length));
       }
-      if (req.method === 'GET') fillHot(relTarget(req.url || '/'), cookieHeader, response, memo, etag, reqGen);
+      if (req.method === 'GET') fillHot(relTarget(req.url || '/'), cookieHeader, acceptLanguage, response, memo, etag, reqGen);
       res.end(body);
       writeAccessLine(req, res, body.length);
     } else if (raw) {
-      if (req.method === 'GET') fillHot(relTarget(req.url || '/'), cookieHeader, response, { raw }, `W/"${raw.length}-${fnv(cookieHeader)}"`, reqGen);
+      if (req.method === 'GET') fillHot(relTarget(req.url || '/'), cookieHeader, acceptLanguage, response, { raw }, `W/"${raw.length}-${fnv(cookieHeader)}"`, reqGen);
       res.end(raw);
       writeAccessLine(req, res, raw.length);
     } else {

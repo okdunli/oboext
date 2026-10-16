@@ -238,6 +238,28 @@ export type PagePageParts = {
 export const THEMES_DIR = path.join(process.cwd(), "themes");
 
 /**
+ * The public chrome LAYOUT DIALECT a theme builds for ("layout" in its
+ * manifest). The program implements the dialects; a theme only declares which
+ * one it uses, so a new theme needs no program change. Cached by manifest
+ * mtime, so a dev edit is picked up without a restart.
+ */
+const layoutCache = new Map<string, { mtime: number; layout: string }>();
+export function themeLayout(slug: string): string {
+  try {
+    const fp = path.join(THEMES_DIR, slug, "manifest.json");
+    const st = fs.statSync(fp);
+    const hit = layoutCache.get(slug);
+    if (hit && hit.mtime === st.mtimeMs) return hit.layout;
+    const m = JSON.parse(fs.readFileSync(fp, "utf-8")) as { layout?: string };
+    const layout = m.layout || "default";
+    layoutCache.set(slug, { mtime: st.mtimeMs, layout });
+    return layout;
+  } catch {
+    return "default";
+  }
+}
+
+/**
  * The manifest-declared default theme (the folder carrying "isDefault": true).
  * The chrome registry falls back to it when asked for a slug no folder
  * provides, so no theme name is hardcoded in the program.

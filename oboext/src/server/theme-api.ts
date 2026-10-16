@@ -240,19 +240,23 @@ export const THEMES_DIR = path.join(process.cwd(), "themes");
 /**
  * The public chrome LAYOUT DIALECT a theme builds for ("layout" in its
  * manifest). The program implements the dialects; a theme only declares which
- * one it uses, so a new theme needs no program change. Cached by manifest
- * mtime, so a dev edit is picked up without a restart.
+ * one it uses, so a new theme needs no program change.
  */
-const layoutCache = new Map<string, { mtime: number; layout: string }>();
+const layoutCache = new Map<string, { layout: string; at: number }>();
+/** How long a resolved dialect may be reused before re-reading the manifest.
+ *  This sits on the RENDER path (every page binds it once), so the cache is
+ *  consulted BEFORE any filesystem call: only a miss (or an expired entry,
+ *  30s) pays a statSync. A dev edit is therefore picked up within 30s. */
+const LAYOUT_TTL_MS = 30_000;
 export function themeLayout(slug: string): string {
+  const hit = layoutCache.get(slug);
+  const now = Date.now();
+  if (hit && now - hit.at < LAYOUT_TTL_MS) return hit.layout;
   try {
     const fp = path.join(THEMES_DIR, slug, "manifest.json");
-    const st = fs.statSync(fp);
-    const hit = layoutCache.get(slug);
-    if (hit && hit.mtime === st.mtimeMs) return hit.layout;
     const m = JSON.parse(fs.readFileSync(fp, "utf-8")) as { layout?: string };
     const layout = m.layout || "default";
-    layoutCache.set(slug, { mtime: st.mtimeMs, layout });
+    layoutCache.set(slug, { layout, at: now });
     return layout;
   } catch {
     return "default";

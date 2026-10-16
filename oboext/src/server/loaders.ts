@@ -50,6 +50,7 @@ import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
 import { getAdminSecurity } from "./security.js";
 import { can } from "./admin.js";
 import { getThemeChrome, publicAssetHref, themeScriptTags, themeLayout, catIconName, type MenuItem } from "./theme-chrome.js";
+import { dialectProfile } from "./dialects.js";
 import { createLogger } from "./logger.js";
 import {
   DEFAULT_LOCALE,
@@ -605,7 +606,7 @@ async function home(ctx?: Ctx) {
   // The chrome LAYOUT dialect this theme declares (see theme-api).
   const layout = themeLayout(themeSlug);
   if (!cachedHome) kv?.set("home:bundle", { all, popular, catRows, random }, 60);
-  const homeLimit = layout === "pseudolinear" ? 30 : 12;
+  const homeLimit = dialectProfile(layout).homeLimit;
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const items = all.items.slice(0, homeLimit);
   const tc = getThemeChrome(themeSlug);
@@ -643,12 +644,13 @@ async function home(ctx?: Ctx) {
     // issued alongside it.
     const widgets = await widgetsP;
     const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
+    const dp = dialectProfile(layout);
     return {
       head: homeHead,
       main: tc.home({
 
-        hero: layout === "pseudolinear" ? items : items.slice(0, 4),
-        latest: layout === "pseudolinear" ? [] : items.slice(4, 12),
+        hero: dp.heroCount === 0 ? items : items.slice(0, dp.heroCount),
+        latest: dp.heroCount === 0 ? [] : items.slice(dp.heroCount, dp.heroCount + dp.latestCount),
         liked: popular.items,
         random,
         cats,
@@ -857,7 +859,9 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
   const layout = themeLayout(themeSlug);
   if (!category) return { notFound: true };
   const isSk = layout === "skyscraper";
-  const catPerPage = isSk ? settings.postsPerPage || 10 : layout === "codeman" || layout === "pseudolinear" ? 30 : 12;
+  // 0 means "follow the admin setting" (skyscraper); every other dialect
+  // carries a fixed page size in its profile.
+  const catPerPage = dialectProfile(layout).catPerPage || settings.postsPerPage || 10;
   // Category listing: memoize the page's post window for 2 minutes (a new
   // post surfaces on refresh or an admin write invalidates by TTL).
   const catKey = `cat:${payload.slug}:${page}:${themeSlug}`;
@@ -1027,13 +1031,11 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
 
   const isBm = layout === "bluemix";
   const isSk = layout === "skyscraper";
-  const perPage = isBm
-    ? Math.min(100, Math.max(1, Number(settings0.postsPerPage) || 10))
-    : isSk
-      ? 20
-      : layout === "codeman" || layout === "pseudolinear"
-        ? 30
-        : 20;
+  // 0 means "follow the admin setting" (bluemix); every other dialect
+  // carries a fixed page size in its profile.
+  const perPage =
+    dialectProfile(layout).searchPerPage ||
+    Math.min(100, Math.max(1, Number(settings0.postsPerPage) || 10));
   const paged = isBm || isSk;
   const { items, total } = cleaned
     ? await listPosts({
@@ -1210,7 +1212,7 @@ async function postDetail(
   // adjacentKeyOf mirrors the SQL's coalesce(published_at, created_at).
   const adjacentP = safe(getAdjacentPosts(postId, adjacentKeyOf(row.post)));
 
-  const relatedN = layout === "codeman" || layout === "pseudolinear" ? 5 : 4;
+  const relatedN = dialectProfile(layout).relatedN;
   // Only three themes render `related` (bluemix / pseudolinear / codeman);
   // the default theme's post page reads relatedTaxonomy alone and skyscraper
   // reads neither. Computing the date-based set unconditionally ran ~6
@@ -1296,7 +1298,9 @@ async function postDetail(
     popularP,
     randomP,
     cfgP,
-    layout === "default" ? relatedByTaxonomy(postId, 4) : Promise.resolve(undefined),
+    layout === "default"
+      ? relatedByTaxonomy(postId, dialectProfile(layout).taxonomyRelatedN)
+      : Promise.resolve(undefined),
     widgetAreas
       ? getAreaWidgets(themeSlug, "post-bottom")
       : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),

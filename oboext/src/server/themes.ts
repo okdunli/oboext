@@ -77,12 +77,25 @@ export type ThemeManifest = {
 const THEMES_DIR = path.join(process.cwd(), "themes");
 
 /**
- * A theme is activatable on the public site when its manifest says the
- * program ships a renderer for it. This used to be a hardcoded slug set,
- * which meant adding a theme required editing the program.
+ * A theme is activatable on the public site when its manifest says the program
+ * ships a renderer for it AND the folder actually ships one. This used to be a
+ * hardcoded slug set; it is now folder data — but the manifest flag alone is
+ * not enough: a theme that declares `public: true` without a `chrome.ts` would
+ * ACTIVATE and then silently render the fallback theme's markup, which is the
+ * exact hazard the old hardcoded list prevented.
  */
 export function isPublicThemePorted(slug: string): boolean {
-  return getThemeManifest(slug)?.public === true;
+  if (getThemeManifest(slug)?.public !== true) return false;
+  return hasThemeChrome(slug);
+}
+
+/** Does this theme folder ship its own renderer (themes/<slug>/chrome.ts)? */
+export function hasThemeChrome(slug: string): boolean {
+  try {
+    return fs.existsSync(path.join(THEMES_DIR, slug, "chrome.ts"));
+  } catch {
+    return false;
+  }
 }
 
 /** The theme that owns the build-time chrome stylesheet. */

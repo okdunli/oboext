@@ -2,7 +2,7 @@
 
   import { jsonFail, readBody, apiGate } from "@server/admin";
   import { hasAnyUser } from "@server/auth";
-  import { sessionCookiePair } from "@server/csrf";
+  import { sessionCookiePair, withCookies } from "@server/csrf";
   import { getMemberSettings, registerMember } from "@server/members";
   import { getAdminSecurity } from "@server/security";
   import { verifyCaptchaFor, readCaptchaCookie } from "@server/captcha";
@@ -36,13 +36,13 @@
         phoneCode: body.phoneCode,
         inviteCode: body.inviteCode,
       });
-      return new Response(JSON.stringify({ user }), {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "set-cookie": await sessionCookiePair(user),
-        },
-      });
+      return withCookies(
+        new Response(JSON.stringify({ user }), {
+          status: 200,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        }),
+        await sessionCookiePair(user),
+      );
     }, t);
   }
 </script>

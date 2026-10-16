@@ -68,6 +68,11 @@
       (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
       (request.headers.get("x-real-ip") || "").trim();
 
+    // First-run installer language: no URL prefix and no cookie exist yet, so
+    // Accept-Language is the only signal (i18n.acceptLanguageLocale).
+    ctx.acceptLanguage = request.headers.get("accept-language") || "";
+    if (process.env.OBOEXT_DBG_SETUP) console.error("[dbg-mw] set acceptLanguage=", JSON.stringify(ctx.acceptLanguage), "ctxKeys=", Object.keys(ctx).join(","));
+
     // ------------------------------------------------ locale prefix (/en)
     // The default locale (zh-CN) is prefix-free, so every existing URL keeps
     // working; English lives under /en. The URL prefix is the ONLY signal:

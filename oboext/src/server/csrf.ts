@@ -33,6 +33,21 @@ export async function sessionCookiePair(user: SessionUser): Promise<string[]> {
   return [sessionCookieValueFor(token), csrfCookieValue(token)];
 }
 
+/**
+ * Attach Set-Cookie values to a response.
+ *
+ * A plain object field (`headers: { "set-cookie": values }`) is WRONG for more
+ * than one cookie: the runtime collapses the array into a single comma-joined
+ * header, and a browser then parses only the first name=value pair - every
+ * cookie after the first is silently dropped (rosefd BUG.md entry Y: this bit
+ * every login path until 0.2.8's framework 0.1.8 upgrade surfaced it).
+ * Headers.append keeps one header per cookie, which is what the spec wants.
+ */
+export function withCookies(res: Response, values: string[]): Response {
+  for (const v of values) res.headers.append("set-cookie", v);
+  return res;
+}
+
 /** Every Set-Cookie value a logout must send. */
 export function clearCookiePair(): string[] {
   return [clearSessionCookieValue(), clearCsrfCookieValue()];

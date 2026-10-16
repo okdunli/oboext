@@ -241,6 +241,40 @@ export const zhCatalog: Record<string, string> = {
   // header those clients stamp; admin.js and the member-center clients do
   // not stamp it and keep the default Chinese.
   "api.csrf_rejected": "请求校验失败，请刷新页面后重试",
+  "setup.doc_title": "初始化 - Oboext",
+  "setup.title": "初始化 Oboext",
+  "setup.lead": "检测到系统尚未配置，请创建管理员账号并填写站点信息。",
+  "setup.db": "数据库",
+  "setup.db_pglite": "本地内置 (PGlite)",
+  "setup.db_postgres": "远程数据库",
+  "setup.db_pglite_hint": "推荐：零配置、无需外部服务，数据保存在本地 .data 目录。",
+  "setup.db_url": "连接串",
+  "setup.storage": "图片存储",
+  "setup.storage_local": "本地 (方案 A)",
+  "setup.storage_blob": "Vercel Blob (方案 B)",
+  "setup.storage_local_hint": "图片写入 content/uploads 并随 Git 提交，由 Vercel 构建部署。适合静态、少量图片。",
+  "setup.storage_blob_hint": "后台传图自动上云，无需手动 Git 提交，适合频繁传图。免费额度内够用，超量后按量计费。令牌在 Vercel 面板的 Storage → Blob 中创建：",
+  "setup.blob_token": "BLOB_READ_WRITE_TOKEN",
+  "setup.site": "站点信息",
+  "setup.site_title": "站点名称",
+  "setup.site_desc": "站点描述",
+  "setup.site_desc_default": "致力于极致性能的开源博客系统",
+  "setup.tagline": "副标题 / 标语",
+  "setup.footer": "页脚文字",
+  "setup.admin": "管理员账号",
+  "setup.email": "登录邮箱",
+  "setup.name": "用户昵称",
+  "setup.name_ph": "用于后台与文章署名",
+  "setup.password": "登录密码（至少 8 位）",
+  "setup.submit": "完成初始化",
+  "setup.back": "返回站点首页",
+  "sui.dburl_req": "选择远程数据库时请填写连接串",
+  "sui.blob_req": "选择 Vercel Blob 时请填写 Blob 读写令牌",
+  "sui.working": "初始化中…",
+  "sui.dbconfig_fail": "数据库配置失败",
+  "sui.submit": "完成初始化",
+  "sui.done": "安装完成",
+  "api.setup_already": "系统已初始化",
   "api.err_internal": "服务器内部错误",
   "api.no_entry": "接口不存在",
   "api.bad_request": "参数不正确",
@@ -658,6 +692,40 @@ export const enCatalog: Record<string, string> = {
   "login.req_fail": "Request failed ({n})",
   // ---- API error messages (mirror of the zh block above) ----
   "api.csrf_rejected": "Request validation failed. Please refresh the page and try again.",
+  "setup.doc_title": "Setup - Oboext",
+  "setup.title": "Set up Oboext",
+  "setup.lead": "This site is not configured yet. Create the admin account and fill in the site info.",
+  "setup.db": "Database",
+  "setup.db_pglite": "Built-in local (PGlite)",
+  "setup.db_postgres": "Remote database",
+  "setup.db_pglite_hint": "Recommended: zero configuration, no external service; data lives in the local .data directory.",
+  "setup.db_url": "Connection string",
+  "setup.storage": "Image storage",
+  "setup.storage_local": "Local (Plan A)",
+  "setup.storage_blob": "Vercel Blob (Plan B)",
+  "setup.storage_local_hint": "Images are written to content/uploads and committed with Git, then deployed by the Vercel build. Fits static sites with few images.",
+  "setup.storage_blob_hint": "Uploads go straight to the cloud with no manual Git commits. Fits frequent image use. The free tier is usually enough; beyond it you pay per use. Create the token in the Vercel panel under Storage → Blob:",
+  "setup.blob_token": "BLOB_READ_WRITE_TOKEN",
+  "setup.site": "Site info",
+  "setup.site_title": "Site name",
+  "setup.site_desc": "Site description",
+  "setup.site_desc_default": "An open-source blog system built for extreme performance",
+  "setup.tagline": "Tagline",
+  "setup.footer": "Footer text",
+  "setup.admin": "Admin account",
+  "setup.email": "Login email",
+  "setup.name": "Nickname",
+  "setup.name_ph": "Used in the admin area and article bylines",
+  "setup.password": "Password (at least 8 characters)",
+  "setup.submit": "Finish setup",
+  "setup.back": "Back to the site",
+  "sui.dburl_req": "Enter the connection string when using a remote database",
+  "sui.blob_req": "Enter the Blob read/write token when using Vercel Blob",
+  "sui.working": "Setting up…",
+  "sui.dbconfig_fail": "Database configuration failed",
+  "sui.submit": "Finish setup",
+  "sui.done": "Setup complete",
+  "api.setup_already": "The system is already initialized",
   "api.err_internal": "Internal server error",
   "api.no_entry": "Not found",
   "api.bad_request": "Invalid request",
@@ -1060,6 +1128,21 @@ export function headerLocale(req: {
   headers: { get(name: string): string | null };
 }): Locale {
   return ctxLocale({ locale: req.headers.get("x-locale") });
+}
+
+/**
+ * Locale from an Accept-Language header. The first-run installer has no URL
+ * prefix and no locale cookie to read, so the browser's preference is the
+ * only signal that can exist at that point.
+ */
+export function acceptLanguageLocale(al: string): Locale {
+  for (const part of String(al || "").split(",")) {
+    const tag = part.split(";")[0].trim().toLowerCase();
+    if (!tag) continue;
+    if (tag.startsWith("zh")) return "zh-CN";
+    if (tag.startsWith("en")) return "en";
+  }
+  return DEFAULT_LOCALE;
 }
 
 // ------------------------------------------------------------------ rendering

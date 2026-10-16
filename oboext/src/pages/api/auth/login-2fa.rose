@@ -8,7 +8,7 @@
     clientIp,
     clientUa,
   } from "@server/auth";
-  import { sessionCookiePair } from "@server/csrf";
+  import { sessionCookiePair, withCookies } from "@server/csrf";
   import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
   import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { makeT, headerLocale } from "@server/i18n";
@@ -51,13 +51,13 @@
         userAgent: clientUa(request),
       });
       doAction(HOOKS.userLoggedIn, { user });
-      return new Response(JSON.stringify({ user }), {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "set-cookie": await sessionCookiePair(user),
-        },
-      });
+      return withCookies(
+        new Response(JSON.stringify({ user }), {
+          status: 200,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        }),
+        await sessionCookiePair(user),
+      );
     }, t);
   }
 </script>

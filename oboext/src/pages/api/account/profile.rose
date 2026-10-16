@@ -32,23 +32,19 @@
       }
 
       const user = await changeOwnProfile(me, { name, email, phone });
-      return new Response(
-        JSON.stringify({ id: user.id, name: user.name, email: user.email, phone: user.phone }),
-        {
-          status: 200,
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-            // A name/email change re-issues the session (the old token still
-            // carries the previous name), so the CSRF token is re-issued with
-            // it — they are derived from the same token and must not drift.
-            "set-cookie": await sessionCookiePair({
-              id: user.id,
-              email: user.email,
-              name: user.name,
-              role: user.role,
-            }),
-          },
-        },
+      // A name/email change re-issues the session (the old token still
+      // carries the previous name)
+      return withCookies(
+        new Response(
+          JSON.stringify({ id: user.id, name: user.name, email: user.email, phone: user.phone }),
+          { status: 200, headers: { "content-type": "application/json; charset=utf-8" } },
+        ),
+        await sessionCookiePair({
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+        }),
       );
     });
   }

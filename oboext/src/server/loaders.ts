@@ -2200,6 +2200,7 @@ export const loaders = {
   resolve,
   // admin screens (all per-request DB reads, session-gated)
   "admin.session": admin.adminSession,
+  "admin.setup": admin.adminSetup,
   "admin.dashboard": admin.adminDashboard,
   "admin.posts": admin.adminPosts,
   "admin.post": admin.adminPost,

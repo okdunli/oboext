@@ -81,13 +81,16 @@
       // SINGLE cookie, and everything after the first "; " is read as an
       // attribute of it. So the state cookie was never actually cleared and
       // the CSRF token never arrived.
-      return new Response(null, {
-        status: 302,
-        headers: {
-          location: new URL(to, origin).toString(),
-          "set-cookie": [...(await sessionCookiePair(result.user)), CLEAR_COOKIE],
-        },
-      });
+      const res = new Response(null, { status: 302 });
+      res.headers.set("location", new URL(to, origin).toString());
+      // Three cookies, appended one header each. Neither a "; " join (parses
+      // as one cookie) nor an object-field array (the runtime collapses it to
+      // a single comma-joined header, dropping all but the first) works -
+      // BUG.md entry Y.
+      for (const v of [...(await sessionCookiePair(result.user)), CLEAR_COOKIE]) {
+        res.headers.append("set-cookie", v);
+      }
+      return res;
     } catch (e) {
 
       // A ServiceError carries a catalog key on the public paths; the Chinese

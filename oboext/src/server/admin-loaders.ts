@@ -33,6 +33,7 @@ import {
 } from "./admin-menu.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
 import { PUBLIC_DIR } from "./storage.js";
+import { makeT, acceptLanguageLocale } from "./i18n.js";
 import { listPlugins, getPlugin, ensurePluginsLoaded } from "./plugins.js";
 import { getNotifySettings } from "./notify.js";
 import { getMemberSettings } from "./members.js";
@@ -68,6 +69,50 @@ function requireUser(ctx: Ctx): SessionUser {
 }
 
 // Login/setup pages: who am I, and does first-run setup still apply.
+/**
+ * The first-run installer's strings, in the browser's language. No URL prefix
+ * and no locale cookie exist before the first admin is created, so the
+ * Accept-Language header (carried on ctx by the middleware) is the signal.
+ */
+export async function adminSetup(_p: unknown, ctx: Ctx) {
+  const locale = acceptLanguageLocale(ctx.acceptLanguage || "");
+  if (process.env.OBOEXT_DBG_SETUP) console.error('[dbg-setup] acceptLanguage=', JSON.stringify(ctx.acceptLanguage), 'locale=', locale, 'ctxKeys=', Object.keys(ctx).join(','));
+  const t = makeT(locale);
+  return {
+    acceptLanguageDbg: ctx.acceptLanguage || 'EMPTY',
+    locale,
+    s: {
+      docTitle: t("setup.doc_title"),
+      title: t("setup.title"),
+      lead: t("setup.lead"),
+      db: t("setup.db"),
+      dbPglite: t("setup.db_pglite"),
+      dbPostgres: t("setup.db_postgres"),
+      dbPgliteHint: t("setup.db_pglite_hint"),
+      dbUrl: t("setup.db_url"),
+      storage: t("setup.storage"),
+      storageLocal: t("setup.storage_local"),
+      storageBlob: t("setup.storage_blob"),
+      storageLocalHint: t("setup.storage_local_hint"),
+      storageBlobHint: t("setup.storage_blob_hint"),
+      blobToken: t("setup.blob_token"),
+      site: t("setup.site"),
+      siteTitle: t("setup.site_title"),
+      siteDesc: t("setup.site_desc"),
+      siteDescDefault: t("setup.site_desc_default"),
+      tagline: t("setup.tagline"),
+      footer: t("setup.footer"),
+      admin: t("setup.admin"),
+      email: t("setup.email"),
+      name: t("setup.name"),
+      namePh: t("setup.name_ph"),
+      password: t("setup.password"),
+      submit: t("setup.submit"),
+      back: t("setup.back"),
+    },
+  };
+}
+
 export async function adminSession(_p: unknown, _ctx: Ctx) {
   const user = _ctx.user ?? null;
   const out: {

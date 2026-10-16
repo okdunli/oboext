@@ -54,7 +54,10 @@
 <head>
   <title>{chrome().siteTitle}</title>
   <meta name="description" content={chrome().siteDescription}>
-  <link rel="alternate" type="application/rss+xml" title="RSS" href="/api/feed">
+  <!-- Two feeds, one per locale. The distinct name= keys keep the head block
+       from collapsing the pair (it dedupes on name|rel|property). -->
+  <link name="rss-default" rel="alternate" type="application/rss+xml" title="RSS" href="/api/feed">
+  <link name="rss-en" rel="alternate" type="application/rss+xml" title="RSS (English)" href="/en/feed.xml">
 
   <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
   <meta name="robots" content="index, follow">

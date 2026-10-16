@@ -338,7 +338,10 @@
       // RSS readers poll aggressively; 5 minutes of edge cache keeps repeat
       // polls from re-rendering the feed body through the function. New posts
       // surface within that window, which is fine for a feed.
-      return new Response(await reg.documents.feed(ctx), {
+      // rp is locale-stripped by now (ctx.pathname was canonicalised), so the
+      // FEED language comes from the prefix that was stripped: /en/feed.xml
+      // serves the English feed. The default stays the zh-CN feed.
+      return new Response(await reg.documents.feed(ctx, loc.locale), {
         headers: {
           "content-type": "application/rss+xml; charset=utf-8",
           "cache-control": "public, max-age=300",

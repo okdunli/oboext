@@ -403,6 +403,11 @@ a.adm-stat:hover { border-color: var(--adm-accent); background: var(--adm-panel-
 .adm-table .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
 .adm-mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: #818cf8; }
 .adm-icons-grid .adm-ic { width: 18px; height: 18px; }
+.adm-icons-grid .adm-table { table-layout: fixed; }
+.adm-icons-grid .adm-mono, .adm-icons-grid .adm-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adm-icons-scroll { max-height: calc(100vh - 260px); overflow-y: auto; overscroll-behavior: contain; }
+.adm-icons-scroll .adm-table th { position: sticky; top: 0; z-index: 2; background: var(--adm-panel); }
+.adm-icons-scroll .ic-sp td { padding: 0; border: none; }
 .adm-iconbtn {
   display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   white-space: nowrap; flex: 0 0 auto;

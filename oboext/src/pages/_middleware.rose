@@ -2,7 +2,7 @@
   // Oboext request interceptor (runs once per request on the Node server).
   import { checkCsrf, needsCsrf, isSafeMethod, selfHealCsrfCookie } from "@server/csrf";
   import { createLogger } from "@server/logger";
-  import { splitLocalePath, localeFromCookieHeader, localeHref, headerLocale, makeT } from "@server/i18n";
+  import { splitLocalePath, localeFromCookieHeader, localeHref, headerLocale, makeT, acceptLanguageLocale } from "@server/i18n";
   import { warmReadWave } from "@server/loaders";
   const log = createLogger("middleware");
 
@@ -71,7 +71,6 @@
     // First-run installer language: no URL prefix and no cookie exist yet, so
     // Accept-Language is the only signal (i18n.acceptLanguageLocale).
     ctx.acceptLanguage = request.headers.get("accept-language") || "";
-    if (process.env.OBOEXT_DBG_SETUP) console.error("[dbg-mw] set acceptLanguage=", JSON.stringify(ctx.acceptLanguage), "ctxKeys=", Object.keys(ctx).join(","));
 
     // ------------------------------------------------ locale prefix (/en)
     // The default locale (zh-CN) is prefix-free, so every existing URL keeps
@@ -142,6 +141,15 @@
     // the first admin exists, not just /admin (which is where the wall used to
     // live, so the root path behaved differently from the admin path).
     //
+    // The target carries the browser's language as ?l= (BUG.md AB): the
+    // installer is the one first-run document whose bytes are negotiated on a
+    // request header, and the prod hot cache keys on pathname+cookie only, so
+    // an untagged URL would let the first visitor's render be replayed to
+    // every other language. The query is not part of the pathname, so route
+    // matching is untouched while the cache key is partitioned per language.
+    const installLang = acceptLanguageLocale(request.headers.get("accept-language") || "");
+    const setupHref = "/admin/setup?l=" + encodeURIComponent(installLang);
+    //
     // Assets and APIs are exempt: the setup page itself pulls the admin bundle
     // and calls /api/data, and redirecting those would either 404 the
     // document's own scripts or bounce the installer's POST. The probe is
@@ -164,7 +172,7 @@
       rp !== "/feed"
     ) {
       if (!(await reg.auth.hasAnyUser())) {
-        return Response.redirect(new URL("/admin/setup", real.origin), 302);
+        return Response.redirect(new URL(setupHref, real.origin), 302);
       }
     }
 
@@ -222,10 +230,17 @@
             302,
           );
         }
+        // First run, installer requested directly (typed URL, bookmark, or the
+        // boot warm's own fetch): bounce the untagged path to its ?l= form so
+        // every render - and every hot-cache entry - is language-partitioned
+        // (BUG.md AB). A 302 is never cached, so the untagged key stays empty.
+        if (!real.searchParams.get("l")) {
+          return Response.redirect(new URL(setupHref, real.origin), 302);
+        }
       } else if (rp === "/admin/login") {
         if (user) return Response.redirect(new URL("/admin", real.origin), 302);
         if (!(await reg.auth.hasAnyUser()))
-          return Response.redirect(new URL("/admin/setup", real.origin), 302);
+          return Response.redirect(new URL(setupHref, real.origin), 302);
       } else if (!user) {
         return Response.redirect(new URL("/admin/login", real.origin), 302);
       } else if (rp === "/admin" || rp === "/admin/dashboard") {

@@ -1,0 +1,90 @@
+-- Indexes for the login throttle check, and removal of the index it cannot use.
+--
+-- assertLoginAllowed (oboext/src/server/auth.ts) runs before the password is
+-- verified, on every sign-in attempt, with the default shape
+-- (throttleMaxFailures = 5, throttleWindowMinutes = 15):
+--
+--   WHERE event_type = 'login.fail' AND created_at > $since
+--     AND ( lower(account) = lower($1) OR ip = $2 )
+--   ORDER BY id DESC LIMIT 5
+--
+-- Two things were wrong with that against the 0015 indexes.
+--
+-- (1) The fold and the ip had no index. security_events_account_idx keys the
+-- RAW account, and a plain btree cannot answer an expression on its column, so
+-- the account arm had nothing to descend; ip was never indexed at all.
+--
+-- (2) Worse, and the reason this migration exists: with LIMIT 5 and
+-- ORDER BY id DESC, the planner reaches for security_events_pkey and walks it
+-- backwards, filtering. That is a cheap plan only if five matching rows turn up
+-- quickly - and an account with fewer than five failures in the window never
+-- fills the LIMIT, so the descent has to run to the bottom of the table. A
+-- successful sign-in by a user who has never failed is the common case, and it
+-- pays a full reverse scan of security_events.
+--
+-- Measured with EXPLAIN (ANALYZE, BUFFERS) on a 105 004-row fixture (100 000
+-- historical events plus 5 000 login.fail inside the window, which is what a
+-- credential-stuffing run produces in 15 minutes):
+--
+--   ordinary sign-in, 0 matching failures
+--     -> Index Scan Backward using security_events_pkey
+--        Filter: (event_type AND created_at AND (lower(account) OR ip))
+--        Rows Removed by Filter: 105004   Buffers: shared hit=1663   21.9 ms
+--   targeted account, 3 matching failures
+--     -> Index Scan Backward using security_events_pkey
+--        Rows Removed by Filter: 105001   Buffers: shared hit=1663   23.7 ms
+--
+-- After this migration the same two queries plan as a BitmapOr over the two
+-- arms plus security_events_type_idx, with the fold and the ip resolved as
+-- Index Cond:
+--
+--   ordinary sign-in  Buffers: shared hit=6                            0.05 ms
+--   targeted account  Buffers: shared hit=21                           0.26 ms
+--
+-- 414x and 90x, and 1663 page reads down to 6 and 21. For the ordinary sign-in
+-- the type_idx arm was not even executed: the two new arms answered the whole
+-- predicate, so the cost is bounded by the account's own event count rather
+-- than by the table or the window. That is the property an attacker-facing
+-- counter needs - before this, every failed attempt both grew the table and
+-- deepened the scan the next visitor had to make.
+--
+-- The query was left exactly as auth.ts writes it. Rewriting the OR as a UNION
+-- of two arms was measured too (43 ms with no new indexes, 0.42 ms with them):
+-- it is slower than the plain shape once the indexes exist, and UNION ALL
+-- double-counts a row that matches both arms - one such row was found in the
+-- fixture, and rows.length >= max is the lockout test, so the rewrite would
+-- have locked out early. Both reasons say keep the query, index the columns.
+--
+-- Both indexes are composite on (key, id) rather than (key) or (key, created_at):
+-- the check orders by id DESC, so putting id second lets each arm descend
+-- straight to the newest events. id is unique, so the leading column still
+-- answers a plain equality on lower(account) / ip - the second key only adds
+-- the ordering.
+--
+-- NOT UNIQUE, and the account key is an expression, same reasoning as
+-- migration 0029: many events share an account or an ip by design (that is what
+-- the counter is counting), and lower() is what the predicate uses.
+--
+-- security_events_account_idx is dropped. Its (account, created_at) key can only
+-- serve a case-sensitive account lookup, and the only account predicate in the
+-- codebase is the folded one at auth.ts, deliberately: matching the failure
+-- counter case-sensitively would let "Alice"/"alice"/"ALICE" each keep their own
+-- counter and never trip the lockout. So the index had no consumer while still
+-- being written on every failed login - and failed logins are the volume an
+-- attacker controls. Dropping it keeps the insert cost at what it was.
+-- Consumers re-enumerated by symbol, not by the SQL table name (grepping for
+-- "security_events" misses security-events.ts, which only ever imports the
+-- exported constant): the readers are assertLoginAllowed (folded account / ip)
+-- and listSecurityEvents (filters event_type only, orders by id DESC), plus
+-- pruneSecurityEvents deleting on bare created_at. None compares raw account.
+-- Re-verify the grep for `eq(securityEvents.account)` before restoring it.
+--
+-- Caveat, same as the other index migrations: CREATE/DROP INDEX take locks on
+-- security_events for their duration. Sub-second at this size; re-check the
+-- table size before running against a database that has grown.
+CREATE INDEX IF NOT EXISTS "security_events_account_lower_idx" ON "security_events" (lower("account"), "id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "security_events_ip_idx" ON "security_events" ("ip", "id");
+--> statement-breakpoint
+DROP INDEX IF EXISTS "security_events_account_idx";
+--> statement-breakpoint

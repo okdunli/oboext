@@ -29,8 +29,8 @@ CREATE TABLE IF NOT EXISTS "widgets" (
 	"theme_slug" text DEFAULT '' NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "site_settings" ALTER COLUMN "site_title" SET DEFAULT 'oboext';--> statement-breakpoint
-ALTER TABLE "site_settings" ALTER COLUMN "active_theme_slug" SET DEFAULT 'oboext-2026';--> statement-breakpoint
+ALTER TABLE "site_settings" ALTER COLUMN "site_title" SET DEFAULT 'xoboe';--> statement-breakpoint
+ALTER TABLE "site_settings" ALTER COLUMN "active_theme_slug" SET DEFAULT 'xoboe-2026';--> statement-breakpoint
 ALTER TABLE "pages" ADD COLUMN "template" text;--> statement-breakpoint
 ALTER TABLE "pages" ADD COLUMN "order" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE "posts" ADD COLUMN "format" "post_format" DEFAULT 'standard' NOT NULL;--> statement-breakpoint

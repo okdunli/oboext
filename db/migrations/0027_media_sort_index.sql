@@ -1,0 +1,22 @@
+-- Index for the media library's default ordering (listMedia).
+--
+-- listMedia orders every media-grid page by (sort_order ASC, created_at DESC)
+-- (media.ts). The media table's only index is on mime_type, which serves the
+-- type filter but not the ORDER BY - so the default (unfiltered) media list is
+--   Limit -> Sort (Sort Key: sort_order, created_at DESC) -> Seq Scan on media
+-- a full sort of the whole table on every media-library page. The table grows
+-- with every upload, so that sort only gets more expensive.
+--
+-- Same discipline and honest framing as 0018 / 0020 / 0025 / 0026: at current
+-- row counts the planner still prefers a scan, so this is insurance for growth.
+-- Composite (sort_order, created_at DESC) because both columns are in the ORDER
+-- BY; sort_order is not unique (default 0 for everything), so created_at is the
+-- tiebreaker and a half-covered sort would still leave a Sort node.
+--
+-- Caveat, same as the others: CREATE INDEX takes a SHARE lock, blocking writes
+-- to media for the build's duration. Sub-second at this size; re-check the
+-- table size before running against a database that has grown a lot.
+--
+-- NOT UNIQUE: (sort_order, created_at) is not a natural key.
+CREATE INDEX IF NOT EXISTS "media_sort_idx" ON "media" ("sort_order" ASC, "created_at" DESC);
+--> statement-breakpoint

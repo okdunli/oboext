@@ -1,0 +1,19 @@
+-- R250: the send ledger's failure marker.
+--
+-- newsletter_sends is CLAIMED before the mail goes out (INSERT ... ON CONFLICT
+-- DO NOTHING), so a claim row is not evidence of a delivered mail: the row
+-- lands first and the SMTP session happens afterwards. An SMTP outage, a
+-- rejected mailbox or a dead host therefore used to leave the row looking
+-- "sent" forever - the post was silently lost for that subscriber and no
+-- rescan could ever pick it up, because the ledger's whole job is to skip
+-- the rows it has already claimed.
+--
+-- failed_at closes that hole: NULL = the delivery went through (or was never
+-- attempted because SMTP is not configured, which is a normal state and not a
+-- failure), a timestamp = the delivery failed and the row is eligible for the
+-- retry pass (newsletter.ts: retryFailedSends).
+--
+-- The column is nullable with no default, so every existing row keeps
+-- meaning "sent" and the change is a pure ALTER: no backfill, no table
+-- rewrite, no lock heavier than a metadata update.
+ALTER TABLE "newsletter_sends" ADD COLUMN IF NOT EXISTS "failed_at" timestamptz;

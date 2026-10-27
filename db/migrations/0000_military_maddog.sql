@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS "site_settings" (
 	"tagline" text,
 	"logo_url" text,
 	"favicon_url" text,
-	"active_theme_slug" text DEFAULT 'oboext' NOT NULL,
+	"active_theme_slug" text DEFAULT 'xoboe' NOT NULL,
 	"footer_text" text,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );

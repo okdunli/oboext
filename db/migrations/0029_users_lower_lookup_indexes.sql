@@ -1,0 +1,63 @@
+-- Expression indexes for the login lookup, which compares case-folded columns.
+--
+-- verifyCredentials (oboext/src/server/auth.ts) accepts either an email or a
+-- nickname and folds both sides before comparing:
+--
+--   WHERE lower(email) = lower($1)      -- identifier contains "@"
+--   WHERE lower(name)  = lower($1)      -- identifier is a nickname
+--
+-- users owns users_email_unique (from text("email").unique()) and
+-- users_name_idx (uniqueIndex on the raw column), and neither one can answer
+-- those two predicates: a plain index stores the column value, so an
+-- expression on that column is not an Index Cond - it has to be evaluated per
+-- row, which means reading every row. Measured with EXPLAIN (ANALYZE, BUFFERS)
+-- on a 20 000-user fixture, using exactly the SQL auth.ts emits:
+--
+--   email    -> Seq Scan on users
+--                Filter: (lower(email) = 'user18000@example.com'::text)
+--                Rows Removed by Filter: 17999
+--                Buffers: shared hit=248      Execution Time: 6.94 ms
+--   nickname -> Seq Scan on users
+--                Filter: (lower(name) = 'nick18000'::text)
+--                Rows Removed by Filter: 17999
+--                Buffers: shared hit=248      Execution Time: 4.52 ms
+--
+-- The cost is paid on every sign-in attempt, including the ones that fail -
+-- and a failed attempt is exactly what an attacker repeats, so this is the
+-- query shape a credential-stuffing run walks through. To confirm the seq scan
+-- came from lower() and not from a cold or unplanned table, the same probe ran
+-- the raw-equality form as a control:
+--
+--   Index Scan using users_email_unique
+--     Index Cond: (email = 'User18000@Example.COM')
+--     Buffers: shared hit=3                  Execution Time: 0.06 ms
+--
+-- i.e. the unique index is genuinely reachable and fast; the fold is what
+-- makes the planner blind to it. Indexing the folded expression restores both
+-- halves of the login path:
+--
+--   email    -> Index Scan using users_email_lower_idx
+--                Index Cond: (lower(email) = 'user18000@example.com'::text)
+--                Buffers: shared hit=1 read=2  Execution Time: 0.29 ms
+--   nickname -> Index Scan using users_name_lower_idx
+--                Index Cond: (lower(name) = 'nick18000'::text)
+--                Buffers: shared hit=1 read=2  Execution Time: 0.04 ms
+--
+-- 248 buffers down to 3, and the page reads stop growing with the user table.
+--
+-- NOT UNIQUE, deliberately. Uniqueness on the folded value cannot be enforced
+-- here without risking the migration itself: a database that predates the
+-- application-level check may already hold both Alice@example.com and
+-- alice@example.com, and a unique expression index would then fail to build
+-- and take the whole migration chain down with it. Case-insensitive uniqueness
+-- is guarded where it is checked with the same fold the login uses (the
+-- register/profile paths), and the row-level unique constraints on the raw
+-- columns stay in place. These two indexes only serve lookups.
+--
+-- Caveat, same as the other index migrations: CREATE INDEX takes a SHARE lock,
+-- blocking writes to users for the build's duration. Sub-second at this size;
+-- re-check the table size before running against a database that has grown.
+CREATE INDEX IF NOT EXISTS "users_email_lower_idx" ON "users" (lower("email"));
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "users_name_lower_idx" ON "users" (lower("name"));
+--> statement-breakpoint

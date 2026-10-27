@@ -1,0 +1,21 @@
+-- Index for the per-IP verification-code send cap (issueCode).
+--
+-- Every register / reset / bind / login code-send runs an hourly cap COUNT:
+--   SELECT count(*) FROM verify_codes WHERE ip = $1 AND created_at > $2
+-- (verify-codes.ts, IP_HOUR_CAP default 20). verify_codes accumulates one row
+-- per code ever sent (no pruning), and it has no index on ip, so that COUNT is
+-- a sequential scan on the code-send hot path - O(rows) per request, growing
+-- with every code the site has ever issued.
+--
+-- Companion to 0025 (the same missing-index shape on comments). Same honest
+-- framing as 0018 / 0020 / 0025: at current row counts the planner still
+-- prefers a scan, so this is insurance for growth. Composite (ip, created_at)
+-- because the query filters ip by equality then bounds created_at by range.
+--
+-- Caveat, same as the others: CREATE INDEX takes a SHARE lock, blocking writes
+-- to verify_codes for the build's duration. Sub-second at this size; re-check
+-- the table size before running against a database that has grown a lot.
+--
+-- NOT UNIQUE: one IP legitimately requests many codes.
+CREATE INDEX IF NOT EXISTS "verify_codes_ip_created_idx" ON "verify_codes" ("ip", "created_at" DESC);
+--> statement-breakpoint

@@ -1,0 +1,23 @@
+-- Index for the guest-comment flood check (createPublicComment).
+--
+-- Every guest comment submission runs a rate-limit COUNT:
+--   SELECT count(*) FROM comments WHERE ip = $1 AND created_at > $2
+-- (admin.ts, OBOEXT_COMMENT_RATE_MAX / _WINDOW_MIN, default 20 per 10 min).
+-- The comments table grows without bound (one row per comment) and has no index
+-- on ip, so that COUNT is a sequential scan on the write hot path - O(rows) per
+-- submission, which only gets worse as the blog accumulates comments.
+--
+-- Honest framing, same as 0018 / 0020: at current row counts the planner still
+-- prefers a scan, so this is insurance for growth - the cheap way to already
+-- have it once the table is large enough for a seq scan to hurt. Composite (ip,
+-- created_at) because the query filters ip by equality and then bounds
+-- created_at by range; a single-column ip index would still scan every row for
+-- that ip across all time.
+--
+-- Caveat, same as 0018 / 0020: CREATE INDEX takes a SHARE lock and blocks writes
+-- to comments for the duration of the build. Sub-second at this size; re-check
+-- the table size before running this against a database that has grown a lot.
+--
+-- NOT UNIQUE: one IP legitimately posts many comments.
+CREATE INDEX IF NOT EXISTS "comments_ip_created_idx" ON "comments" ("ip", "created_at" DESC);
+--> statement-breakpoint

@@ -1,5 +1,5 @@
--- extra20：安全事件流水（登录限流计数 + 后台安全日志）与文章 UV 独立访客列。
--- 全部语句幂等，pglite 与 postgres 双驱动均可重复执行。
+
+
 ALTER TABLE "posts" ADD COLUMN IF NOT EXISTS "unique_views" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "security_events" (
 	"id" serial PRIMARY KEY NOT NULL,

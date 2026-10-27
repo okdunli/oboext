@@ -1352,17 +1352,53 @@ if (!__seeded_${d.name}) { const __v_${d.name} = await $data(${fn}); set${capita
   const stateKeys = decls.filter((d) => d.kind !== "derived").map((d) => d.name);
   const bindBindings = [];
   let bindCounter = 0;
+  const compNames = new Set(roseImports.map((r) => r.name));
+  const propKeys = new Set(props.map((p) => p.name));
   const bindExpanded = wired.template.replace(
     /\sbind:(value|checked|this|open)\s*=\s*\{([\w$]+)(?:\(\))?\}/g,
     (whole, kind, name, offset, str) => {
-      if (!stateKeys.includes(name)) {
+      const tagStart = str.lastIndexOf("<", offset);
+      const tagText = tagStart >= 0 ? str.slice(tagStart, offset) : "";
+      const tagName = /^<([a-zA-Z][^\s/>]*)/.exec(tagText)?.[1] ?? "";
+      if (!stateKeys.includes(name) && !propKeys.has(name)) {
         throw new Error(
           `${filePath2}: bind:${kind}={${name}} must name a $state declaration` + (stateKeys.length ? ` (state keys here: ${stateKeys.join(", ")})` : " (this file declares no $state)")
         );
       }
       if (kind === "this") return ` data-bind-this="${name}"`;
-      const tagStart = str.lastIndexOf("<", offset);
-      const tagText = tagStart >= 0 ? str.slice(tagStart, offset) : "";
+      // A component's OWN prop (this file is the component): the edit reports
+      // out through the same on<Prop>Change callback the export targets use.
+      if (!stateKeys.includes(name)) {
+        const cb = "on" + capitalize(kind) + "Change";
+        const hnameC = `__rvbind_${scopeKey.replace(/\W/g, "_")}_${bindCounter++}`;
+        if (/^<select[\s>]/i.test(tagText) && /\smultiple\b/i.test(tagText)) {
+          bindBindings.push({ event: "change", fn: `${hnameC}: (e) => __p.${cb}?.(Array.from(e.target.selectedOptions, (o) => o.value))` });
+          return ` data-selmulti={(__rvlive('value', ${name}) || []).join(',')} data-on-change="${hnameC}"`;
+        }
+        if (kind === "checked") {
+          bindBindings.push({ event: "change", fn: `${hnameC}: (e) => __p.${cb}?.(e.target.checked)` });
+          return ` checked={__rvlive('checked', ${name})} data-on-change="${hnameC}"`;
+        }
+        if (kind === "open") {
+          bindBindings.push({ event: "toggle", fn: `${hnameC}: (e) => __p.${cb}?.(e.target.open)` });
+          return ` open={__rvlive('open', ${name})} data-on-toggle="${hnameC}"`;
+        }
+        bindBindings.push({ event: "input", fn: `${hnameC}: (e) => { const t = e.target; const raw = t.type === 'number' || t.type === 'range' ? t.valueAsNumber : t.value; __p.${cb}?.(typeof raw === 'number' && Number.isNaN(raw) ? null : raw); }` });
+        return ` value={__rvlive('value', ${name})} data-on-input="${hnameC}" data-on-change="${hnameC}"`;
+      }
+      // A component CALL SITE: the value rides in as the prop, the edit rides
+      // out through the callback - one inline closure per call site, so two
+      // instances never share a handler.
+      if (tagName && compNames.has(tagName)) {
+        const setterC = setterNames.get(name);
+        const cbC = "on" + capitalize(kind) + "Change";
+        // The setter IS the callback (arity matches) - and a bare identifier
+        // keeps the attr free of `>` so the tag scanner still sees the rest
+        // of the tag (an arrow's `>` would end the tag early). The __live-
+        // twin passes the state GETTER itself so the child's markers re-run
+        // on parent state changes (the plain prop is a mount-time snapshot).
+        return ` ${kind}={${name}()} __live-${kind}={${name}} ${cbC}={${setterC}}`;
+      }
       if (kind === "value" && /^<select[\s>]/i.test(tagText) && /\smultiple\b/i.test(tagText)) {
         const setterM = setterNames.get(name);
         const hnameM = `__rvbind_${scopeKey.replace(/\W/g, "_")}_${bindCounter++}`;
@@ -1397,23 +1433,72 @@ if (!__seeded_${d.name}) { const __v_${d.name} = await $data(${fn}); set${capita
   const groupBindings = [];
   let groupCounter = 0;
   const TAG_SCAN_RE = /<([a-zA-Z][^\s>/]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
-  const groupExpanded = (() => {
-    if (!bindExpanded.includes("bind:group")) return bindExpanded;
+  // A component's input rendering a PLAIN `value={prop}` is two-way too - the
+  // same contract the export targets infer with inputBoundProps (the canonical
+  // `<input value={value}>` component). Skips inputs the bind: expansion or a
+  // manual on:input already wired: one owner per input, never two.
+  const compValueExpanded = (() => {
+    if (!propKeys.size || !/<(input|textarea|select)[\s>]/i.test(bindExpanded)) return bindExpanded;
     let out = "";
-    let pos2 = 0;
+    let posV = 0;
     let m;
     TAG_SCAN_RE.lastIndex = 0;
     while (m = TAG_SCAN_RE.exec(bindExpanded)) {
       const [whole, tag, attrs, selfClose] = m;
+      if (!/^(input|textarea|select)$/i.test(tag)) continue;
+      if (/\sdata-on-input=|\sdata-selmulti=/.test(attrs)) continue;
+      const vm = /\svalue\s*=\s*\{([\w$]+)\}/.exec(attrs);
+      if (!vm || !propKeys.has(vm[1])) continue;
+      const prop = vm[1];
+      const hnameV = `__rvbind_${scopeKey.replace(/\W/g, "_")}_${bindCounter++}`;
+      bindBindings.push({
+        event: "input",
+        fn: `${hnameV}: (e) => { const t = e.target; const raw = t.type === 'number' || t.type === 'range' ? t.valueAsNumber : t.value; __p.onValueChange?.(typeof raw === 'number' && Number.isNaN(raw) ? null : raw); }`
+      });
+      const multi = /^select$/i.test(tag) && /\smultiple\b/i.test(attrs);
+      // Read through __rvlive so a __live-value twin prop (from a bind:
+      // call site) keeps the input in sync after mount; a plain prop falls
+      // back to the snapshot exactly as before.
+      const liveAttrs = attrs.replace(vm[0], ` value={__rvlive('value', ${prop})}`);
+      const extra = multi ? ` data-selmulti={(__rvlive('value', ${prop}) || []).join(',')} data-on-change="${hnameV}"` : ` data-on-input="${hnameV}" data-on-change="${hnameV}"`;
+      out += bindExpanded.slice(posV, m.index) + `<${tag}${liveAttrs}${extra}${selfClose}>`;
+      posV = m.index + whole.length;
+    }
+    if (posV === 0) return bindExpanded;
+    out += bindExpanded.slice(posV);
+    return out;
+  })();
+  const groupExpanded = (() => {
+    if (!compValueExpanded.includes("bind:group")) return compValueExpanded;
+    let out = "";
+    let pos2 = 0;
+    let m;
+    TAG_SCAN_RE.lastIndex = 0;
+    while (m = TAG_SCAN_RE.exec(compValueExpanded)) {
+      const [whole, tag, attrs, selfClose] = m;
       const gm = /\sbind:group\s*=\s*\{([\w$]+)(?:\(\))?\}/.exec(attrs);
       if (!gm) continue;
       const name = gm[1];
-      if (!stateKeys.includes(name)) {
+      const isPropG = !stateKeys.includes(name);
+      if (isPropG && !propKeys.has(name)) {
         throw new RoseError(
           "E-TEMPLATE",
           `${filePath2}: bind:group={${name}} must name a $state declaration`,
           { hint: "the group state holds the selected value (radio) or an ARRAY of checked values (checkbox) - declare it: let " + name + ' = $state("")' }
         );
+      }
+      // A component call site: the group VALUE rides in as the `group` prop,
+      // the selection reports out through onGroupChange.
+      if (!isPropG && compNames.has(tag)) {
+        const setterG = setterNames.get(name);
+        // Bare setter reference: arity matches the callback, and no `>` for
+        // the tag scanner to mistake for the end of the tag. The __live-
+        // twin passes the state GETTER so the child's checked expressions
+        // re-run when the parent's group state changes.
+        const newAttrsC = attrs.replace(gm[0], ` group={${name}()} __live-group={${name}} onGroupChange={${setterG}}`);
+        out += compValueExpanded.slice(pos2, m.index) + `<${tag}${newAttrsC}${selfClose}>`;
+        pos2 = m.index + whole.length;
+        continue;
       }
       if (!/\stype\s*=\s*["'](radio|checkbox)["']/.test(attrs)) {
         throw new RoseError(
@@ -1438,18 +1523,28 @@ if (!__seeded_${d.name}) { const __v_${d.name} = await $data(${fn}); set${capita
           { hint: "the group state alone decides which inputs are checked" }
         );
       }
-      const setter = setterNames.get(name);
+      const setter = isPropG ? "" : setterNames.get(name);
       const hname = `__rvbg_${scopeKey.replace(/\W/g, "_")}_${groupCounter++}`;
       const groupValue = JSON.stringify(vm[1] ?? vm[2]);
-      const checkedExpr = isArrayGroup ? `${name}().includes(${groupValue})` : `${name}() === ${groupValue}`;
-      const handlerBody = isArrayGroup ? `${setter}(e.target.checked ? [...${name}(), ${groupValue}] : ${name}().filter((x) => x !== ${groupValue}))` : `${setter}(e.target.value)`;
+      // A prop-sourced group reads through __rvlive: a __live-group twin
+      // (from a bind: call site) keeps checked markers and the handler's
+      // array merge on the CURRENT value, not the mount-time snapshot.
+      const gRead = isPropG ? `__rvlive('group', ${name})` : `${name}()`;
+      const checkedExpr = isArrayGroup
+        ? `${gRead}.includes(${groupValue})`
+        : `${gRead} === ${groupValue}`;
+      const handlerBody = isArrayGroup
+        ? (isPropG
+            ? `__p.onGroupChange?.(e.target.checked ? [...${gRead}, ${groupValue}] : ${gRead}.filter((x) => x !== ${groupValue}))`
+            : `${setter}(e.target.checked ? [...${name}(), ${groupValue}] : ${name}().filter((x) => x !== ${groupValue}))`)
+        : (isPropG ? `__p.onGroupChange?.(e.target.value)` : `${setter}(e.target.value)`);
       groupBindings.push({ event: "change", fn: `${hname}: (e) => { ${handlerBody}; }` });
       const newAttrs = attrs.replace(gm[0], ` checked={${checkedExpr}} data-on-change="${hname}"`);
-      out += bindExpanded.slice(pos2, m.index) + `<${tag}${newAttrs}${selfClose}>`;
+      out += compValueExpanded.slice(pos2, m.index) + `<${tag}${newAttrs}${selfClose}>`;
       pos2 = m.index + whole.length;
     }
-    if (pos2 === 0) return bindExpanded;
-    out += bindExpanded.slice(pos2);
+    if (pos2 === 0) return compValueExpanded;
+    out += compValueExpanded.slice(pos2);
     return out;
   })();
   const eventBindings = wired.bindings.concat(bindBindings, groupBindings);
@@ -2762,11 +2857,19 @@ function assertKnownDirectives(template, filePath2) {
   }
 }
 function rewriteQuotedExprAttrs(template, comps) {
-  const TAG_RE = /<([a-zA-Z][\w-]*)((?:\s+[\w:-]+(?:=(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*(\/?)>/g;
+  const TAG_RE = /<([a-zA-Z][\w-]*)((?:\s+[\w:-]+(?:=(?:"[^"]*"|'[^']*'|`[^`]*`|[^\s"'>]+))?)*)\s*(\/?)>/g;
   return template.replace(TAG_RE, (tag, name, attrs, selfClose) => {
     if (comps.has(name) || !/\{/.test(attrs)) return tag;
-    const rewritten = attrs.replace(/([\w:-]+)="([^"]*)"/g, (whole, attr, value) => {
-      if (!/\{/.test(value) || value.includes("`")) return whole;
+    // All three quote styles are rewritten. Only `="..."` was handled first, so
+    // a single-quoted value fell through to the TEXT path: it emitted a text
+    // marker INSIDE the attribute, which the client can never patch and which
+    // leaves the value holding comment markers instead of its content. A
+    // backtick value has the same flaw, plus one of its own: a value holding a
+    // space (`title=`a {x} b``) is not even matched by TAG_RE's unquoted branch
+    // (it stops at whitespace), so the whole tag skipped this pre-pass.
+    const rewritten = attrs.replace(/([\w:-]+)=("([^"]*)"|'([^']*)'|`([^`]*)`)/g, (whole, attr, _quoted, dq, sq, bt) => {
+      const value = dq ?? sq ?? bt ?? "";
+      if (!/\{/.test(value) || (bt === undefined && value.includes("`"))) return whole;
       const spans = templateExprSpans(value);
       if (spans.length === 0) return whole;
       let expr = "";
@@ -3079,12 +3182,37 @@ function compileTemplate(template, acc, closes, scope, depth, markers = true, co
       } else {
         if (before) result += emitChunk(before, acc, closes, scope);
         const after = remaining.substring(earliest.index + earliest.match[0].length);
-        const pair = after.length > 0 && !/^<[a-zA-Z/!]/.test(after) && !after.startsWith("{");
-        result += emitText(trimmed, acc, closes, scope, effMarkers, pair);
+        // An interpolation INSIDE a quoted attribute value (`style="... {x} ..."`)
+        // is not a text node: emitting it as one wraps the value in text
+        // markers, which both corrupts the attribute AND breaks every later
+        // attribute of the same tag (the marker contains '>', so the open-tag
+        // scan fails from there on). Emit the escaped value plainly instead.
+        // The shared rewriteQuotedExprAttrs pre-pass handles the common shapes;
+        // this is the fallback for the ones it leaves alone (a value holding a
+        // template literal). Keep it identical to index.ts - the two compilers
+        // must emit byte-for-byte the same markup.
+        const insideQuotedAttr = /=(["'])[^"']*$/.test(before);
+        if (insideQuotedAttr) {
+          result += `${acc} += esc(${trimmed});
+`;
+        } else {
+          const pair = after.length > 0 && !/^<[a-zA-Z/!]/.test(after) && !after.startsWith("{");
+          result += emitText(trimmed, acc, closes, scope, effMarkers, pair);
+        }
       }
       remaining = remaining.substring(earliest.index + earliest.match[0].length);
     }
   }
+  // An attribute written as `attr="..."` around an interpolation compiles to
+  // `acc += " attr=";` followed by a textMark() call - the marker then lands
+  // INSIDE the attribute value (and the marker contains '>', so the open-tag
+  // scan for every LATER attribute of the same tag fails too). Rewrite that
+  // shape into a proper attrMark() call. Kept identical to index.ts so both
+  // compilers emit byte-for-byte the same markup.
+  result = result.replace(
+    /\+= "\s*([a-zA-Z][\w-]*)=";\r?\n\s*\w+\s*\+=\s*textMark\((\w+), (.+?), 1, ([^;]+?)\);/g,
+    (_m, name, closes, fn, arg) => `+= attrMark(${closes}, ${fn}, '${name}', ${arg});`,
+  );
   return result;
 }
 function scanTagEnd(src, start) {
@@ -3473,6 +3601,7 @@ export ${isComponent ? "function" : "async function"} render(closes, children, _
   ${props.length > 0 ? "const __p = __props || {};" : ""}
   ${namedSlots ? "const __sl = __slots || {};" : ""}
   ${propsCode(props)}
+  ${props.length > 0 ? `const __rvlive = (k, v) => { const g = __p['__live-' + k]; return typeof g === 'function' ? g() : v; };` : ''}
   ${script}
   ${stateDeclsCode}
   ${dataDeclsCode}
@@ -3505,6 +3634,7 @@ export ${isComponent ? "function" : "async function"} render(closes, children, _
   ${props.length > 0 ? "const __p = __props || {};" : ""}
   ${namedSlots ? "const __sl = __slots || {};" : ""}
   ${propsCode(props)}
+  ${props.length > 0 ? `const __rvlive = (k, v) => { const g = __p['__live-' + k]; return typeof g === 'function' ? g() : v; };` : ''}
   ${script}
   ${stateDeclsCode}
   ${dataDeclsCode}
@@ -4458,7 +4588,7 @@ export async function renderPage(pathname, form) {
 
 async function renderPageIsolated(pathname, form) {
   clearRequestState();
-  // Cold-start readiness gate (oboext #8): await the app's published DB-ready promise before any $data() read.
+  // Cold-start readiness gate (Oboext #8): await the app's published DB-ready promise before any $data() read.
   const appReady = globalThis.__rosezmAppReady;
   if (appReady) await appReady;
   const route = routeClass(pathname).route;
@@ -4631,7 +4761,7 @@ export async function renderPageStream(pathname, write, shellOpen, clientTag) {
 
 async function renderPageStreamIsolated(pathname, write, shellOpen, clientTag) {
   clearRequestState();
-  // Cold-start readiness gate (oboext #8): same contract as renderPage \u2014 await the app's published DB-ready promise before streaming the shell.
+  // Cold-start readiness gate (Oboext #8): same contract as renderPage \u2014 await the app's published DB-ready promise before streaming the shell.
   const appReady = globalThis.__rosezmAppReady;
   if (appReady) await appReady;
   const route = routeClass(pathname).route;

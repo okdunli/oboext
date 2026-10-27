@@ -649,7 +649,7 @@ function defaultPostPage(parts: PostPageParts): string {
     `<div class="mt-3 flex flex-wrap items-center gap-4 text-sm text-[var(--muted)]">` +
     `<span class="df-meta-item">${lucideSvg("user", 14)}${author}</span>` +
     `<span class="df-meta-item">${lucideSvg("calendar", 14)}${fmtDate(p.publishedAt)}</span>` +
-    `<span class="df-meta-item" data-views-post="${p.id}">${lucideSvg("eye", 14)}<span data-views-count>${p.views}</span> ${T("post.reads", { n: p.views })}</span>` +
+    `<span class="df-meta-item" data-views-post="${p.id}">${lucideSvg("eye", 14)}<span data-views-count>${p.views}</span>${T("post.reads")}</span>` +
     (p.commentsCount > 0 ? `<span class="df-meta-item">${lucideSvg("message-circle", 14)}${T("post.comments", { n: p.commentsCount })}</span>` : "") +
     `</div>${meta}</header>` +
     (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="mb-6 w-full rounded-2xl border border-[var(--border)] object-cover"${R.imgPerfAttrs(p.featuredImage, { high: true, srcset: true })}>` : "") +

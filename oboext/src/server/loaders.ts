@@ -780,11 +780,29 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
         ? settings.postsPerPage || 10
         : settings.postsPerPage || 12;
   const page = pageNum(payload.page);
-  const { items, total } = await listPosts({
-    status: "published",
-    limit: perPage,
-    offset: (page - 1) * perPage,
-  });
+  // R284: the /en tree lists PAIRED en posts (they are self-contained
+  // documents with their own hreflang cluster) instead of re-listing the zh
+  // body under a prefixed URL. The zh tree is untouched; the slice happens
+  // in memory because windowed SQL for a synthetic subtree would need a
+  // paired-join query — at en-tree scale (dozens, not thousands) the simple
+  // slice is the leaner contract.
+  const enOnly = locale !== DEFAULT_LOCALE;
+  let window: { items: PostView[]; total: number };
+  if (enOnly) {
+    const paired = await listPosts({ status: "published", locale: "en", limit: 10000, windowCap: 10000 });
+    window = {
+      items: paired.items.slice((page - 1) * perPage, page * perPage),
+      total: paired.items.length,
+    };
+  } else {
+    window = await listPosts({
+      status: "published",
+      locale: DEFAULT_LOCALE,
+      limit: perPage,
+      offset: (page - 1) * perPage,
+    });
+  }
+  const { items, total } = window;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const blogIndex = blogIndexUrlFor(cfg);

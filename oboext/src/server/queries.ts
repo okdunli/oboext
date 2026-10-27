@@ -76,6 +76,8 @@ function withUsableCover<T extends { featuredImage?: string | null }>(view: T): 
 
 export type PostQuery = {
   status?: string;
+  /** R284: exact content-language filter ("zh-CN" | "en"); absent = all. */
+  locale?: string;
   authorId?: number;
   categoryId?: number;
   tagId?: number;
@@ -317,6 +319,8 @@ export async function listPostsRaw(
   const conditions: any[] = [];
 
   if (opts.status) conditions.push(eq(posts.status, opts.status as any));
+  // R284: exact content-language filter (validated by the callers that expose it).
+  if (opts.locale) conditions.push(eq(posts.locale, opts.locale));
   // scheduled: future-dated published posts stay out of every public listing
   if (opts.status === "published") conditions.push(publishedVisible);
   if (opts.authorId) conditions.push(eq(posts.authorId, opts.authorId));

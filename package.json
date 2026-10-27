@@ -5,6 +5,7 @@
   "description": "Fast & lightweight self-hosted dynamic content management system engine with tiny footprint, built-in admin panel and smooth content editing.",
   "type": "module",
   "scripts": {
+    "export:native": "node --import tsx tools/export-native.mts",
     "gen": "node tools/gen.mjs",
     "dev": "node tools/serve.mjs dev",
     "build": "node tools/build.mjs build",

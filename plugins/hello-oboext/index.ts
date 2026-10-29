@@ -27,7 +27,6 @@ export default definePlugin<Settings>({
 
       payload.html.push(`<script>(function(){
   var C=${cfg};
-  // 跳过后台，避免管理界面控制台被刷屏（仅在前台演示）。
   if(typeof location!=='undefined' && location.pathname.indexOf('/admin')===0) return;
   function pad(n){return n;}
   function ts(){
@@ -41,7 +40,6 @@ export default definePlugin<Settings>({
   if(C.showTime) lines.push('页面加载时间 '+ts());
   if(C.showUrl) lines.push('当前 URL '+location.href);
   var art=lines.join('\\n');
-  // %c 让字符画带品牌色与等宽字体，在 DevTools 里更清晰。
   console.log('%c'+art, 'color:#5b8cff;font-family:ui-monospace,Menlo,Consolas,monospace');
 })();</script>`);
       return payload;

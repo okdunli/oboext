@@ -2,7 +2,7 @@
   "slug": "hello-oboext",
   "name": "Hello Oboext",
   "description": "示例/默认插件：在前台页面的浏览器控制台（F12 → Console）输出品牌字符画或自定义文本，可选附带页面加载时间与当前 URL。演示「插件设置面板 + 客户端注入」的标准开发模式。",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Oboext",
   "icon": "Terminal",
   "hooks": [
@@ -26,7 +26,7 @@
           "type": "textarea",
           "default": "",
           "half": false,
-          "help": "留空则输出默认品牌字符画（oboext）。可填写你自己的字符画或任意文本，支持多行。"
+          "help": "留空则输出默认品牌字符画（Oboext）。可填写你自己的字符画或任意文本，支持多行。"
         }
       ]
     },
@@ -53,7 +53,7 @@
           "label": "输出程序版本号",
           "type": "switch",
           "default": true,
-          "help": "在字符画下方追加一行程序版本，例如：oboext v0.2.9"
+          "help": "在字符画下方追加一行程序版本，例如：Oboext v0.2.9"
         }
       ]
     }

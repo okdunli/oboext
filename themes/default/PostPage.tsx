@@ -22,7 +22,7 @@ import { THEME_SLUG } from "@/themes/default";
 export const dynamic = "force-dynamic";
 
 /**
- * oboext default blog post page.
+ * Oboext default blog post page.
  */
 export default async function oboextPostPage({ params }: { params: { slug: string } }) {
   let post;
@@ -41,6 +41,8 @@ export default async function oboextPostPage({ params }: { params: { slug: strin
   const settings = await getSettings();
   const canonical = `${process.env.NEXT_PUBLIC_SITE_URL || ""}/blog/${post.slug}`;
 
+  // Run the content through the plugin-aware pipeline: shortcodes expand,
+  // `content.html` filters apply, and enabled plugins are loaded first.
   const html = await renderContent(post.content, {
     kind: "post",
     postId: post.id,
@@ -48,7 +50,10 @@ export default async function oboextPostPage({ params }: { params: { slug: strin
     siteTitle: settings.siteTitle,
   });
   const plain = renderPlainText(post.content);
+  // Plugins append rows (e.g. reading-time) to the post meta line.
   const meta = await buildPostMeta(post, plain);
+  // Plugin <head> nodes (e.g. seo-schema JSON-LD) are emitted once by the
+  // public catch-all page, not per theme.
 
   return (
     <>

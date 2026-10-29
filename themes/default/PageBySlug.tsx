@@ -8,7 +8,7 @@ import Comments from "@/components/shared/CommentsLazy";
 export const dynamic = "force-dynamic";
 
 /**
- * oboext default page view.
+ * Oboext default page view.
  */
 export default async function oboextPageBySlug({ params }: { params: { slug: string } }) {
   let page;
@@ -30,6 +30,7 @@ export default async function oboextPageBySlug({ params }: { params: { slug: str
     slug: page.slug,
     siteTitle: settings.siteTitle,
   });
+  // Plugin <head> nodes are emitted once by the public catch-all page.
 
   return (
     <>

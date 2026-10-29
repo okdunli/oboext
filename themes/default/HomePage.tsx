@@ -8,7 +8,7 @@ import Sidebar from "@/components/shared/Sidebar";
 export const dynamic = "force-dynamic";
 
 /**
- * oboext default homepage — featured post + grid + sidebar.
+ * Oboext default homepage — featured post + grid + sidebar.
  */
 export default async function oboextHomePage() {
   const [{ items }, settings] = await Promise.all([

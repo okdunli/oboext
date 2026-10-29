@@ -1,5 +1,5 @@
 /**
- * oboext Default Theme — original dark blog theme.
+ * Oboext Default Theme — original dark blog theme.
  */
 export const THEME_SLUG = "default";
 export { default as PublicLayout } from "./Layout";

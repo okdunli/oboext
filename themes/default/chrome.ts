@@ -4,6 +4,7 @@ import path from "path";
 import {
   DEFAULT_LOCALE,
   R,
+  authorByline,
   catIconName,
   dfIconAccent,
   dfSearchIcon,
@@ -250,9 +251,16 @@ function defaultCatPill(c: { name: string; url?: string; icon?: string | null })
     ? `<a href="${esc(c.url)}" class="${cls}">${ic}${label}</a>`
     : `<span class="${cls}">${ic}${label}</span>`;
 }
+/**
+ * R180 linked the byline into the new `/author/<id>` archives; R181 moved the
+ * byline itself into the program (`authorByline`), so the URL contract lives in
+ * one place and every theme gets the same link. What stays here is only this
+ * theme's hover style.
+ */
+const DEFAULT_AUTHOR_CLS = "transition hover:text-[var(--accent)]";
 function defaultPostCard(p: PostView, idx: number, t?: Translate): string {
   const cats = ((p.categories || []).slice(0, 2).map(defaultCatPill)).join("");
-  const author = esc(p.author?.name ?? (t ?? makeT(DEFAULT_LOCALE))("post.author_unknown"));
+  const author = authorByline(p, (t ?? makeT(DEFAULT_LOCALE))("post.author_unknown"), DEFAULT_AUTHOR_CLS);
   const comments =
     p.commentsCount > 0
       ? `<span class="df-meta-item">${lucideSvg("message-circle", 13)}${(t ?? makeT(DEFAULT_LOCALE))("post.comments", { n: p.commentsCount })}</span>`
@@ -608,7 +616,7 @@ function defaultPostPage(parts: PostPageParts): string {
   const T: Translate = (k, v) => tr(parts.settings, k, v);
   const p = parts.post;
   const cats = (p.categories || []).map(defaultCatPill).join("");
-  const author = esc(p.author?.name ?? T("post.author_unknown"));
+  const author = authorByline(p, T("post.author_unknown"), DEFAULT_AUTHOR_CLS);
   const meta = parts.defMetaHtml || "";
   const tags = parts.defTagsHtml || "";
   const firstCat = (p.categories || [])[0];
@@ -656,6 +664,7 @@ function defaultPostPage(parts: PostPageParts): string {
     tocHtml +
     `<div class="prose-cms">${parts.bodyHtml}</div>` +
     (tags || "") +
+    (parts.pairLink || "") +
     defaultShareButtons(p.title, parts.canonical || p.url, T) +
     defaultRelatedSection(parts.relatedTaxonomy || [], T) +
     (parts.postBottom || "") +

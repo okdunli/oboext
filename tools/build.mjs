@@ -3,16 +3,16 @@
  * Staging build wrapper for Windows vault folders.
  *
  * This project lives inside a cloud-synced folder (Nutstore indexes new
- * files). rosezm emits many intermediate modules into dist/.build and
+ * files). Rosezm emits many intermediate modules into dist/.build and
  * removes them immediately; the sync watcher still holds handles on those
  * fresh .js files, so the delete fails with EBUSY every time. The framework
  * stays pristine - we stage the build in a directory the watcher does not
  * monitor:
  *
  *   stage/
- *     node_modules -> junction to project (deps are only read)
- *     src          -> junction to project (framework + server code)
- *     seed         -> junction to project (theme source/assets, read only)
+ *     node_modules -> junction to project (deps and the rosezm package, read only)
+ *     themes       -> junction to project (theme source/assets, read only)
+ *     plugins      -> junction to project (plugin source/assets, read only)
  *     oboext/     real copy (gen writes public resources; compiler writes dist)
  *     tools/       real copy (import.meta-based ROOT must resolve in stage)
  *     *.json       real copy
@@ -86,16 +86,13 @@ function run(args, cwd) {
   return r;
 }
 
-const binField = JSON.parse(readFileSync(join(ROOT, 'node_modules/tsx/package.json'), 'utf8')).bin;
-const tsxCli = join(ROOT, 'node_modules/tsx', typeof binField === 'string' ? binField : binField.tsx);
-
 console.log('[build] staging in', STAGE);
 // The junctions below link into the REAL project. rimraf semantics for a
 // junction differ across Node versions and one run followed the link and
 // emptied src/ in the vault, so each junction is unlinked FIRST - rmSync
 // with force on a symlink/junction removes the link itself, never the
 // target - and only then is the stage root removed.
-for (const name of ['node_modules', 'src', 'themes', 'plugins', 'oboext', 'tools', 'dist', 'seed']) {
+for (const name of ['node_modules', 'themes', 'plugins', 'oboext', 'tools', 'dist']) {
   try { rmSync(join(STAGE, name), { force: true }); } catch { /* link missing, fine */ }
 }
 retry('stage reset', () => rmSync(STAGE, { recursive: true, force: true }));
@@ -106,7 +103,7 @@ mkdirSync(STAGE, { recursive: true });
 // self-contained. `seed` is intentionally NOT linked - it holds only the demo
 // fixture (seed-source.json) and nothing on the asset or build path reads it,
 // so an absent seed/ cannot fail the build.
-for (const name of ['node_modules', 'src', 'themes', 'plugins']) {
+for (const name of ['node_modules', 'themes', 'plugins']) {
   if (existsSync(join(ROOT, name))) junction(join(ROOT, name), join(STAGE, name));
 }
 for (const name of ['package.json', 'tsconfig.json']) {
@@ -119,8 +116,14 @@ cpSync(join(ROOT, 'tools'), join(STAGE, 'tools'), { recursive: true });
 let r = run([join(STAGE, 'tools', 'gen.mjs')], STAGE);
 if (r.status !== 0) process.exit(r.status ?? 1);
 
-// 2) rosezm production build (in stage: no cloud watcher, no EBUSY)
-r = run([tsxCli, 'src/cli/index.ts', 'build', 'oboext'], STAGE);
+// 2) Rosezm production build (in stage: no cloud watcher, no EBUSY)
+// rosezm_BUILDING=1: db.ts guards its eager DB warmup and the retention boot on
+// this flag, and db/ is deliberately absent from the stage (smoke R190). Nothing
+// in the framework sets the flag, so without it the build opened a PGlite
+// cluster it never used and failed migrations - the "retention did not start:
+// Can't find meta/_journal.json file" lines in the build log.
+process.env.rosezm_BUILDING = '1';
+r = run([join(STAGE, 'node_modules', 'rosezm', 'dist-cli', 'rosezm.mjs'), 'build', 'oboext'], STAGE);
 if (r.status !== 0) process.exit(r.status ?? 1);
 
 // 3) mirror finished artifacts back into the vault project
@@ -156,7 +159,7 @@ retry('public mirror', () =>
 // there are ~1300 SVGs under oboext/public/icons alone - and the generated
 // config.json falls back to a catch-all 404 route for non-/api paths.
 //
-// The app's assets live in oboext/public because that is where the rosezm
+// The app's assets live in oboext/public because that is where the Rosezm
 // compiler and tools/gen.mjs write them, and the URLs are /public/** (121
 // references across the server code and themes, plus filesystem reads like
 // oboext/public/icons). Moving the directory would churn all of them; instead
@@ -172,7 +175,7 @@ retry('deploy-root public', () => {
 console.log(`[build] deploy-root public/ -> ${countFiles(rootPublic)} files (Vercel static glob)`);
 
 // The Vercel lambda always names its handler `server.js`, and the bundle keys
-// files by basename, so `dist/server.js` (the rosezm application module: 39
+// files by basename, so `dist/server.js` (the Rosezm application module: 39
 // named exports, no default) collides with - and wins over - the real entry.
 // The launcher then imports a module whose default export is neither a function
 // nor a server, and every request fails at cold start with
@@ -182,13 +185,13 @@ console.log(`[build] deploy-root public/ -> ${countFiles(rootPublic)} files (Ver
 // export makes whichever file wins the key collision satisfy the contract.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// R58: the framework tree (oboext/oboext/src) now carries the fixes these two
-// build-time patches used to inject - rosezm BUG.md W (generation guard +
+// R58: the installed Rosezm package now carries the fixes these two
+// build-time patches used to inject - Rosezm BUG.md W (generation guard +
 // finish-hook invalidation, R56) and BUG.md Y (set-cookie as a list header,
 // R57) are upstream, and the prod-server exposes the app-level commit-point
 // hook as globalThis.__rosezmInvalidateHot. Both patches are REMOVED: their
 // anchors no longer exist in the bundle, and the framework implementation
-// supersedes them (src/server/cache.ts calls the framework hook directly).
+// supersedes them (oboext/src/server/cache.ts calls the framework hook directly).
 // ---------------------------------------------------------------------------
 const distServer = join(ROOT, 'dist', 'server.js');
 if (existsSync(distServer)) {
@@ -207,7 +210,7 @@ if (existsSync(distServer)) {
       "  if (!__oboextServer || typeof __oboextServer.emit !== 'function') {",
       '    res.statusCode = 500;',
       "    res.setHeader('content-type', 'text/plain; charset=utf-8');",
-      "    res.end('oboext server bundle failed to load');",
+      "    res.end('Oboext server bundle failed to load');",
       '    return;',
       '  }',
       "  __oboextServer.emit('request', req, res);",

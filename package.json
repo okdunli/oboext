@@ -27,7 +27,8 @@
     "drizzle-orm": "^0.45.3",
     "esbuild": "^0.24.0",
     "graphql": "^17.0.2",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "rosezm": "^0.2.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

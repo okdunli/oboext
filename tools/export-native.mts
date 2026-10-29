@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Native export wrapper for Oboext.
 //
-// The vendored rosezm ships a 14-target exporter (WeChat/QQ/Alipay/
+// Rosezm ships a 14-target exporter (WeChat/QQ/Alipay/
 // Baidu/Douyin mini programs, Flutter, Android, HarmonyOS, Xcode, Electron,
 // Python/.NET/Java/C++ desktop). This tool points it at the Oboext app source
 // and records which server the exported client should call:
@@ -11,7 +11,7 @@
 // The exporter reads the .rose sources under oboext/; run `node tools/build.mjs
 // build` first so routes.ts is current. Output lands in oboext/.rosezm-export
 // (gitignored) unless --out says otherwise.
-import { exportProject, targetList, TARGETS, type TargetName } from "../src/export/index.js";
+import { exportProject, targetList, TARGETS, type TargetName } from "rosezm/export";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 

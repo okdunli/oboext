@@ -1,7 +1,5 @@
 // Admin sidebar menu model + per-admin navigation preferences.
-import { eq } from "drizzle-orm";
-import { db } from "./db.js";
-import { options } from "./schema.js";
+import { getOption, setOption } from "./options.js";
 import { ServiceError } from "./admin.js";
 import { admIcon } from "./icons.js";
 import type { Role } from "./schema.js";
@@ -191,8 +189,21 @@ export type AdminMenuExtras = {
   pluginSections: AdminMenuSection[];
 };
 
+// The admin shell renders this on EVERY page (admin.session -> navRaw), and
+// listPlugins() re-reads the whole plugins table plus a settings resolution per
+// row each time. Nothing here varies between requests - it only changes when a
+// plugin is toggled, installed, or contributes a different menu - so a short
+// TTL memo (the same 5s window the option store and hotCache already use) keeps
+// that select off the request path. A toggle/install therefore shows up in the
+// sidebar within 5s — the same eventual-consistency bound every other cached
+// read here ships with. Wiring an explicit invalidation would close that gap but
+// needs an admin-menu -> plugins -> plugin-loader -> admin-menu import cycle.
+const EXTRAS_TTL_MS = 5_000;
+let extrasMemo: { at: number; value: AdminMenuExtras } | null = null;
+
 // Collect plugin/theme menu contributions (original parity: collectAdminMenuExtras).
 export async function collectAdminMenuExtras(): Promise<AdminMenuExtras> {
+  if (extrasMemo && Date.now() - extrasMemo.at < EXTRAS_TTL_MS) return extrasMemo.value;
   await ensurePluginsLoaded();
   const [{ items }, pluginList] = await Promise.all([
     applyAsyncFilters(HOOKS.adminMenu, { items: [] as AdminMenuEntry[] }),
@@ -213,7 +224,13 @@ export async function collectAdminMenuExtras(): Promise<AdminMenuExtras> {
       pluginNav.push(entry);
     }
   }
-  return { pluginNav, pluginPanels, pluginSections: [...sectionMap.values()] };
+  const value: AdminMenuExtras = {
+    pluginNav,
+    pluginPanels,
+    pluginSections: [...sectionMap.values()],
+  };
+  extrasMemo = { at: Date.now(), value };
+  return value;
 }
 
 const EMPTY_EXTRAS: AdminMenuExtras = { pluginNav: [], pluginPanels: [], pluginSections: [] };
@@ -296,14 +313,13 @@ export function filterGroupsForShell(
 export type MenuPrefs = { hiddenHrefs: string[]; homePath: string };
 
 export async function getAdminMenuPrefs(): Promise<MenuPrefs> {
+  // Two rows the admin shell reads on EVERY page render. Going through the
+  // option store's TTL memo (5s, same eventual-consistency contract as
+  // hotCache and the permalink memo) instead of hand-rolled selects keeps
+  // those round trips off the request path.
   const read = async (key: string): Promise<unknown> => {
     try {
-      const rows = await db
-        .select({ value: options.value })
-        .from(options)
-        .where(eq(options.key, key))
-        .limit(1);
-      return rows[0]?.value;
+      return await getOption<unknown>(key);
     } catch {
       return undefined; // fresh/empty options table -> defaults
     }
@@ -358,21 +374,14 @@ export async function saveAdminMenuPrefs(
     ),
   ];
 
+  // setOption(), not a raw upsert: it refreshes the memo the reads above now
+  // serve from, so saving the menu takes effect on this instance immediately
+  // (the 5s TTL only bounds the other instances).
   await Promise.all([
-    upsertOption(OPTION_HIDDEN, hiddenHrefs),
-    upsertOption(OPTION_HOME, home),
+    setOption(OPTION_HIDDEN, hiddenHrefs),
+    setOption(OPTION_HOME, home),
   ]);
   return { hiddenHrefs, homePath: home };
-}
-
-async function upsertOption(key: string, value: unknown): Promise<void> {
-  await db
-    .insert(options)
-    .values({ key, value, updatedAt: new Date() })
-    .onConflictDoUpdate({
-      target: options.key,
-      set: { value, updatedAt: new Date() },
-    });
 }
 
 // ----------------------------------------------------------------- sidebar VM

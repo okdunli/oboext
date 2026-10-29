@@ -187,7 +187,26 @@ export function uploadsAbsPath(url: string): string | null {
  * text upload) rode the wire raw. The compressed form is memoized per
  * file+mtime; uploads are written once, so the map stays small.
  */
-const uploadsCompressed = new Map<string, { mtimeMs: number; br?: Buffer; gzip?: Buffer }>();
+
+type CompressedEntry = { mtimeMs: number; br?: Buffer; gzip?: Buffer };
+
+/** Cap the compressed-body memo at CAP entries. Insertion-ordered Maps make
+ *  delete+set an LRU touch; the oldest entry (first key) is evicted instead
+ *  of dropping the whole cache - a clear() here used to throw away up to 4000
+ *  brotli bodies (one big media file = one CPU-heavy resync) on the next
+ *  request after a cold flush. */
+const COMPRESSED_CAP = 4000;
+function lruSet(map: Map<string, CompressedEntry>, key: string, entry: CompressedEntry): void {
+  map.delete(key);
+  while (map.size >= COMPRESSED_CAP) {
+    const oldest = map.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+  map.set(key, entry);
+}
+
+const uploadsCompressed = new Map<string, CompressedEntry>();
 
 export async function serveUpload(urlPath: string, method = "GET", acceptEncoding: string | null = null): Promise<Response> {
   const notFound = () =>
@@ -205,7 +224,7 @@ export async function serveUpload(urlPath: string, method = "GET", acceptEncodin
     const ext = path.extname(target).toLowerCase();
     // HEAD describes the same representation GET would send.
     const enc = pickPublicEncoding(acceptEncoding, ext);
-    let data = await fs.readFile(target);
+    let data: Buffer = await fs.readFile(target);
     let encoded = false;
     if (enc) {
       const memo = uploadsCompressed.get(target);
@@ -214,10 +233,9 @@ export async function serveUpload(urlPath: string, method = "GET", acceptEncodin
       if (enc === "br") fresh.br ??= zlib.brotliCompressSync(data);
       else fresh.gzip ??= zlib.gzipSync(data);
       if (!hit) {
-        if (uploadsCompressed.size > 4000) uploadsCompressed.clear();
-        uploadsCompressed.set(target, fresh);
+        lruSet(uploadsCompressed, target, fresh);
       }
-      data = fresh[enc];
+      data = fresh[enc] as Buffer;
       encoded = true;
     }
     const headers: Record<string, string> = {
@@ -265,7 +283,7 @@ export async function serveUpload(urlPath: string, method = "GET", acceptEncodin
  * brotli/gzip encoded per Accept-Encoding, memoized per file+mtime.
  */
 const PUBLIC_COMPRESSIBLE = new Set([".css", ".js", ".mjs", ".json", ".svg", ".txt", ".csv", ".md", ".webmanifest"]);
-const publicCompressed = new Map<string, { mtimeMs: number; br?: Buffer; gzip?: Buffer }>();
+const publicCompressed = new Map<string, CompressedEntry>();
 
 function pickPublicEncoding(acceptEncoding: string | null, ext: string): "br" | "gzip" | null {
   if (!PUBLIC_COMPRESSIBLE.has(ext)) return null;
@@ -295,7 +313,7 @@ export async function servePublic(urlPath: string, method = "GET", acceptEncodin
     // HEAD describes the same representation GET would send (standard static
     // behavior), so the encoding is negotiated for both methods.
     const enc = pickPublicEncoding(acceptEncoding, ext);
-    let data = await fs.readFile(target);
+    let data: Buffer = await fs.readFile(target);
     let encoded = false;
     if (enc) {
       const memo = publicCompressed.get(target);
@@ -305,10 +323,9 @@ export async function servePublic(urlPath: string, method = "GET", acceptEncodin
       else fresh.gzip ??= zlib.gzipSync(data);
       if (!hit) {
         // One entry per file; a rebuild changes mtime and this map cannot grow past the asset count.
-        if (publicCompressed.size > 4000) publicCompressed.clear();
-        publicCompressed.set(target, fresh);
+        lruSet(publicCompressed, target, fresh);
       }
-      data = fresh[enc];
+      data = fresh[enc] as Buffer;
       encoded = true;
     }
     const headers: Record<string, string> = {

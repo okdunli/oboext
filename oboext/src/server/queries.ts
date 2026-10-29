@@ -749,7 +749,7 @@ export async function listPostsRaw(
   // shape keeps list queries as light as the content-blanking above intends.
   const postShape: typeof posts = opts.full
     ? posts
-    : ({ ...getTableColumns(posts), content: sql<string>`''`, bodyPlain: sql<string>`NULL` } as typeof posts);
+    : ({ ...getTableColumns(posts), content: sql<string>`''`, bodyPlain: sql<string>`NULL` } as unknown as typeof posts);
   const rowShape = { post: postShape, authorName: users.name, authorEmail: users.email, authorId: users.id };
   type JoinedRow = { post: Post; authorName: string | null; authorEmail: string | null; authorId: number | null };
 
@@ -940,7 +940,9 @@ export async function getPostRow(tail: string, opts: { preview?: boolean } = {})
   // column wins, which is the row the old first-success loop stopped on.
   const cols = { slug: posts.slug, pinyin: posts.pinyinSlug, initial: posts.initialSlug } as const;
   type Col = keyof typeof cols;
-  const prefOrder: Col[] =
+  // "id" is not a text column - it rides the same preference list as a branch.
+  type Pref = Col | "id";
+  const prefOrder: Pref[] =
     cfg.postMode === "pinyin"
       ? ["pinyin", "slug", "initial"]
       : cfg.postMode === "initial"
@@ -1391,9 +1393,12 @@ export type ArchiveItem = {
 };
 
 export async function archiveItems(
-  opts: { year?: number; month?: number; limit?: number; offset?: number } = {},
+  opts: { year?: number; month?: number; limit?: number; offset?: number; locale?: string } = {},
 ): Promise<ArchiveItem[]> {
   const conditions: any[] = [eq(posts.status, "published"), publishedVisible];
+  // R305: the archive is a language tree too - /en/archives lists the English
+  // articles, /archives the Chinese ones.
+  if (opts.locale) conditions.push(eq(posts.locale, opts.locale));
   if (opts.year) conditions.push(sql`EXTRACT(YEAR FROM ${posts.publishedAt}) = ${opts.year}`);
   if (opts.month) conditions.push(sql`EXTRACT(MONTH FROM ${posts.publishedAt}) = ${opts.month}`);
   const rows = await db

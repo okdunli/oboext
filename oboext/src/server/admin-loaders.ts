@@ -207,10 +207,13 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
     csrfHref: string;
     adminHref: string;
     autosaveHref: string;
-  } = { user, needsSetup: !(await hasAnyUser()) };
-  out.csrfHref = publicAssetHref("csrf.js");
-  out.adminHref = publicAssetHref("admin.js");
-  out.autosaveHref = publicAssetHref("autosave.js");
+  } = {
+    user,
+    needsSetup: !(await hasAnyUser()),
+    csrfHref: publicAssetHref("csrf.js"),
+    adminHref: publicAssetHref("admin.js"),
+    autosaveHref: publicAssetHref("autosave.js"),
+  };
   if (user) {
     const [prefs, extras] = await Promise.all([
       getAdminMenuPrefs(),
@@ -910,7 +913,7 @@ export async function adminSearchTerms(p: unknown, ctx: Ctx) {
 export async function adminWebmentions(p: any, ctx: Ctx) {
   const user = requireUser(ctx);
   requireAdminOnly(user);
-  const t = makeT(acceptLanguageLocale(ctx));
+  const t = makeT(acceptLanguageLocale(ctx.acceptLanguage ?? ""));
   const page = pageNum(p?.page);
   const limit = 30;
   const status = String(p?.status || "").trim();

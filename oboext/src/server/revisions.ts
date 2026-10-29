@@ -5,7 +5,7 @@
 // target (OBOEXT_REVISION_KEEP, default 30).
 import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import { db } from "./db.js";
-import { contentRevisions } from "./schema.js";
+import { contentRevisions, type Block } from "./schema.js";
 import type { SessionUser } from "./auth.js";
 import { ServiceError } from "./errors.js";
 import { createLogger } from "./logger.js";
@@ -47,7 +47,7 @@ export function buildRevisionRow(
   authorId: number | null;
   title: string;
   excerpt: string | null;
-  content: unknown[];
+  content: Block[];
   status: string;
 } {
   return {

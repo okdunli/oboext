@@ -37,6 +37,7 @@ import { resolveVirtualRoute, type VirtualSiteRoute } from "./virtual-routes.js"
 import { resolveCommentConfig } from "./comments-config.js";
 import { registerView } from "./register-view.js";
 import { getPublishedPageRow, hydrate as hydratePage, listPublishedPages } from "./pages.js";
+import type { Page } from "./schema.js";
 import * as R from "./render.js";
 import { adjacentHtml, adjacentKeyOf, adjacentRelLinks } from "./adjacent.js";
 import * as admin from "./admin-loaders.js";
@@ -1434,7 +1435,7 @@ async function authorList(payload: { authorId: number; page?: number }, ctx: Ctx
   };
 }
 
-async function search(payload: { q?: string; page?: number; all?: boolean }, ctx?: Ctx) {
+async function search(payload: { q?: string; page?: unknown; all?: boolean }, ctx?: Ctx) {
   const locale = localeOf(ctx);
   const t = makeT(locale);
   const q = (payload.q ?? "").trim();
@@ -1914,7 +1915,7 @@ async function postDetail(
 // -------------------------------------------------------------- page detail
 
 async function pageDetail(
-  payload: { slug: string; preloaded?: import("./pages.js").Page | null },
+  payload: { slug: string; preloaded?: Page | null },
   ctx: Ctx,
 ) {
   // Same reuse contract as postDetail: resolveSitePath already fetched the
@@ -2937,7 +2938,8 @@ async function notFound(_p: unknown, _ctx: Ctx) {
 
 // ---------------------------------------------------- root catch-all resolver
 
-function virtualRouteView(route: VirtualSiteRoute, ctx: Ctx) {
+async function virtualRouteView(route: VirtualSiteRoute, ctx: Ctx) {
+  const settings = await getSettings();
   const title = route.seoTitle || route.title;
   const desc = route.seoDescription ?? "";
   const kw = route.seoKeywords ?? "";
@@ -3157,7 +3159,7 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
       if (segs.length) await memoQuery(missKey, PATH_MISS_TTL, async () => true);
       return null;
     }
-    return { kind: "virtual", ...virtualRouteView(virtual, ctx) };
+    return { kind: "virtual", ...(await virtualRouteView(virtual, ctx)) };
   }
   const maintenance = await maintenanceGate((ctx.user as any) ?? null);
   if (maintenance) {

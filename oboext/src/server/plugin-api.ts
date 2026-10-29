@@ -50,6 +50,6 @@ export function createContext<S = Record<string, unknown>>(
     doAction,
     applyFilters,
     HOOKS,
-    log: (msg: string, ...args: unknown[]) => log.child(slug).info(msg, ...args),
+    log: (msg: unknown, ...args: unknown[]) => { log.child(slug).info(String(msg), ...args); },
   };
 }

@@ -1283,7 +1283,7 @@ export function ctxLocale(ctx?: { locale?: string } | null): Locale {
 export function headerLocale(req: {
   headers: { get(name: string): string | null };
 }): Locale {
-  return ctxLocale({ locale: req.headers.get("x-locale") });
+  return ctxLocale({ locale: req.headers.get("x-locale") ?? undefined });
 }
 
 /**

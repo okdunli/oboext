@@ -155,7 +155,7 @@ type KvApi = {
   has(key: string): boolean;
 };
 
-function kvApi(): KvApi | undefined {
+function kvApi(): { kv?: KvApi } | undefined {
   return (globalThis as Record<string, unknown>).__rosezmKvApi as
     | { kv?: KvApi }
     | undefined;
@@ -163,13 +163,13 @@ function kvApi(): KvApi | undefined {
 
 /** Read a loader KV entry (undefined when the framework shipped no KV). */
 export function kvGet<T>(key: string): T | undefined {
-  return kvApi()?.kv.get(key) as T | undefined;
+  return kvApi()?.kv?.get(key) as T | undefined;
 }
 
 /** Write a loader KV entry; the key is registered for content-write invalidation. */
 export function kvSet(key: string, value: unknown, ttlSeconds: number): void {
   kvKeys.add(key);
-  kvApi()?.kv.set(key, value, ttlSeconds);
+  kvApi()?.kv?.set(key, value, ttlSeconds);
 }
 
 /** Drop every loader KV entry - the KV half of a content write. */

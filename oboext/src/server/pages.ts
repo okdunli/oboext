@@ -299,7 +299,7 @@ export async function adminListPages(
         ...getTableColumns(pagesTable),
         content: sql<string>`''`,
         bodyPlain: sql<string>`NULL`,
-      } as typeof pagesTable,
+      } as unknown as typeof pagesTable,
       updatedAtText: sql<string>`${pagesTable.updatedAt}::text`,
     })
     .from(pagesTable)

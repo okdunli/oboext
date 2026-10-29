@@ -362,7 +362,7 @@ export async function adminListPosts(user: SessionUser, f: PostListFilter = {}) 
   // from adminGetPost (single row).
   const rowsQ = db
     .select({
-      post: { ...getTableColumns(posts), content: sql<string>`''`, bodyPlain: sql<string>`NULL` } as typeof posts,
+      post: { ...getTableColumns(posts), content: sql<string>`''`, bodyPlain: sql<string>`NULL` } as unknown as typeof posts,
       authorName: users.name,
       updatedAtText: sql<string>`${posts.updatedAt}::text`,
     })

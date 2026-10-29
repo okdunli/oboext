@@ -12,6 +12,7 @@
 // build` first so routes.ts is current. Output lands in oboext/.rosezm-export
 // (gitignored) unless --out says otherwise.
 import { exportProject, targetList, TARGETS, type TargetName } from "rosezm/export";
+import { applyExportStyles } from "./export-style.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,6 +50,11 @@ const result = await exportProject(target as TargetName, PROJECT, {
   apiBase,
   outRoot: flags.out ? path.resolve(flags.out) : undefined,
 });
+
+// The exporter only carries .rose <style> blocks, so the site's skin would be
+// missing (BUG.md CF). Append it after the export, filtered for the target.
+const skin = applyExportStyles(result.outDir, target);
+if (skin) console.log(`[export] skin: +${skin.bytes} bytes -> ${skin.file}`);
 
 console.log(`[export] ${target} -> ${path.relative(ROOT, result.outDir)}`);
 console.log(`[export] pages: ${result.pages.length}, components: ${result.components.length}`);

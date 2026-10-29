@@ -72,6 +72,7 @@
   <script src={session().csrfHref} defer></script>
   <script src={session().adminHref} defer></script>
   <script src={session().autosaveHref} defer></script>
+  <script src={session().liveHref} defer></script>
 </head>
 
 {#if authed()}

@@ -207,12 +207,14 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
     csrfHref: string;
     adminHref: string;
     autosaveHref: string;
+    liveHref: string;
   } = {
     user,
     needsSetup: !(await hasAnyUser()),
     csrfHref: publicAssetHref("csrf.js"),
     adminHref: publicAssetHref("admin.js"),
     autosaveHref: publicAssetHref("autosave.js"),
+    liveHref: publicAssetHref("admin-live.js"),
   };
   if (user) {
     const [prefs, extras] = await Promise.all([
@@ -277,17 +279,37 @@ async function adminTopSourcePosts(): Promise<AdminSourcePost[]> {
 /**
  * 近 7 天（含今天）文章/评论的每日新增，日期标签形如 "2026-10-20"，升序 7 项。
  * ISO 日期而非 "MM-DD"：跨年时 "MM-DD" 字符串不随时间升序，页面与测试都按
- * 字符串序读它。切日按服务器本地时区（JS Date 的本地日历日）进行 - timestamptz 列取回
- * 后由 Node 归日，不依赖数据库的 TimeZone 设置。posts 全部按 created_at
- * 归日；comments 只统计 status='published'。窗口外或缺失的日子补 0。
+ * 字符串序读它。切日按站点时区设置（site_settings.timezone，IANA 名，默认
+ * Asia/Shanghai）进行 - timestamptz 列取回后由 Node 归日，不依赖数据库的
+ * TimeZone 设置。时区非法/缺失时回退服务器本地时区（R336 前的唯一行为）。
+ * posts 全部按 created_at 归日；comments 只统计 status='published'。
+ * 查询窗取 8 个 UTC 日（覆盖任何时区偏移，最大 ±14h），窗外的行由归日查表
+ * 自然丢弃。窗口外或缺失的日子补 0。
  */
+
+/** "YYYY-MM-DD" in `tz` (en-CA gives ISO-order parts); invalid/missing tz ->
+ *  the server-local calendar day, the pre-R339 behavior. */
+export function zonedDayLabel(dt: Date, tz?: string | null): string {
+  if (tz) {
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+      }).format(dt);
+    } catch {
+      // fall through: an admin typo must not 500 the dashboard
+    }
+  }
+  return (
+    dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0")
+  );
+}
+
 async function adminDashboardTrends(): Promise<AdminTrendDay[]> {
+  const { timezone } = await getSettings();
+  const tz = typeof timezone === "string" ? timezone.trim() : "";
   const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const start = new Date(today);
-  start.setDate(start.getDate() - 6);
-  const label = (dt: Date) =>
-    dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
+  const todayLabel = zonedDayLabel(today, tz);
+  const start = new Date(Date.now() - 8 * 86_400_000);
   const [postRows, commentRows] = await Promise.all([
     db.select({ createdAt: posts.createdAt }).from(posts).where(gte(posts.createdAt, start)),
     db
@@ -297,17 +319,18 @@ async function adminDashboardTrends(): Promise<AdminTrendDay[]> {
   ]);
   const days: AdminTrendDay[] = [];
   const byDay = new Map<string, AdminTrendDay>();
-  for (let i = 0; i < 7; i++) {
-    const row: AdminTrendDay = {
-      d: label(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)),
-      posts: 0,
-      comments: 0,
-    };
+  // The 7 labels walk back from the site-tz "today" in label space (UTC-anchored
+  // day steps), so a +14h site never skips or duplicates a day at the seam.
+  const anchor = new Date(`${todayLabel}T00:00:00Z`);
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(anchor);
+    d.setUTCDate(d.getUTCDate() - i);
+    const row: AdminTrendDay = { d: d.toISOString().slice(0, 10), posts: 0, comments: 0 };
     days.push(row);
     byDay.set(row.d, row);
   }
   const bump = (createdAt: unknown, key: "posts" | "comments") => {
-    const row = byDay.get(label(new Date(createdAt as string | number | Date)));
+    const row = byDay.get(zonedDayLabel(new Date(createdAt as string | number | Date), tz));
     if (row) row[key] += 1;
   };
   for (const r of postRows) bump(r.createdAt, "posts");

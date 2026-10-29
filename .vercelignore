@@ -1,8 +1,8 @@
 # Vercel deploy exclusion.
 #
-# dist/server.js is the rosezm *application* module (render/db/schema, 39 named
+# dist/server.js is the Rosezm *application* module (render/db/schema, 39 named
 # exports, no default export). It exists for the edge adapter
-# (src/cli/edge.ts createEdgeHandler -> import(outDir + '/server.js')), NOT for
+# (the rosezm package's createEdgeHandler -> import(outDir + '/server.js')), NOT
 # the Vercel lambda: the lambda entrypoint (index.js) loads dist/prod.mjs, which
 # is self-contained and imports only node builtins plus ./client.js.
 #

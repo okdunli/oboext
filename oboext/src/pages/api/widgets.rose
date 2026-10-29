@@ -1,8 +1,5 @@
 <script>
-  // /api/widgets
-  //   GET  ?theme=<slug> areas + types + instances (settings:manage)
-  //   POST create an instance {area,type,themeSlug?,title?,config?}
-  //   PATCH {ids:number[]} persist one area's ordering
+  // /api/widgets GET ?theme=<slug> areas + types + instances (settings:manage) POST create an instance {area,type,themeSlug?,title?,config?}.
   import { apiGate, readBody, jsonFail, requireCap } from "@server/admin";
   import {
     WIDGET_AREAS,

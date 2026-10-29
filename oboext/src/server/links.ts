@@ -188,6 +188,21 @@ export function tagUrlFor(cfg: PermalinkConfig, tag: { slug: string }): string {
   return joinPath([...baseSegs(cfg.tagBase), tag.slug]);
 }
 
+/**
+ * R180: the author archive lives at `/author/<numeric id>` — WordPress's own
+ * shape, deliberately not configurable and deliberately not slug-based:
+ * `users.name` carries a unique index but there is no slug column, and an
+ * email is a private address the site must never publish. The numeric id is
+ * the only stable public handle that leaks nothing, and the two-segment form
+ * cannot collide with a root-level post/page/category/tag slug, all of which
+ * are single segments.
+ */
+export const AUTHOR_BASE_SEGMENT = "author";
+
+export function authorUrlFor(id: number): string {
+  return `/${AUTHOR_BASE_SEGMENT}/${id}`;
+}
+
 export function blogIndexUrlFor(cfg: PermalinkConfig): string {
   const segs = baseSegs(cfg.postBase);
 
@@ -195,6 +210,16 @@ export function blogIndexUrlFor(cfg: PermalinkConfig): string {
 }
 
 export const ROOT_BLOG_INDEX_SEGMENT = "blog";
+
+/**
+ * The public page directory (`/pages` by default). "" when the page prefix is
+ * disabled: with no base, every page slug already owns the root, and an index
+ * URL there would shadow a page literally slugged "pages".
+ */
+export function pageIndexUrlFor(cfg: PermalinkConfig): string {
+  const segs = baseSegs(cfg.pageBase);
+  return segs.length ? joinPath(segs) : "";
+}
 
 /** Pagination href: page 1 is the plain path, later pages carry ?page=. */
 export function paginate(path: string, page: number): string {
@@ -357,10 +382,12 @@ async function fetchPostByTail(
 export type SitePathResolution =
   | { kind: "home" }
   | { kind: "blogIndex" }
+  | { kind: "pageIndex" }
   | { kind: "post"; post: PostRow }
   | { kind: "page"; page: Page }
   | { kind: "category"; category: Category }
-  | { kind: "tag"; tag: Tag };
+  | { kind: "tag"; tag: Tag }
+  | { kind: "author"; authorId: number };
 
 function startsWith(segs: string[], prefix: string[]): boolean {
   return prefix.length > 0 && prefix.every((s, i) => s === segs[i]);
@@ -406,6 +433,14 @@ export async function resolveSitePath(
   // Post listing index: exact match of a non-empty post base.
   if (pb.length && segments.length === pb.length && startsWith(segments, pb)) {
     return { kind: "blogIndex" };
+  }
+
+  // Page directory index: exact match of a non-empty page base. Without this
+  // branch the bare `/pages` fell through to the root-level slug probes and
+  // 404'd, so the whole page tree had no entry point a visitor or a crawler
+  // could follow — only the sitemap knew those URLs existed.
+  if (pgb.length && segments.length === pgb.length && startsWith(segments, pgb)) {
+    return { kind: "pageIndex" };
   }
 
   // Prefixed entities.
@@ -475,6 +510,20 @@ export async function resolveSitePath(
   if (pb.length === 0 && segments.length === tailMatcher.segCount) {
     const post = await fetchPostByTail(segments, cfg);
     if (post) return { kind: "post", post };
+  }
+
+  // R180 author archive. Checked last on purpose: when the post base is empty
+  // AND the pattern is two segments, a real post could legitimately own
+  // `/author/1234`, and content always beats an archive listing. The id shape
+  // is what makes this free — `/author/<digits>` is only ever an author, so a
+  // scanner sending `/author/select+1` falls through to the cached 404 without
+  // touching the users table.
+  if (
+    segments.length === 2 &&
+    segments[0] === AUTHOR_BASE_SEGMENT &&
+    /^\d{1,9}$/.test(segments[1])
+  ) {
+    return { kind: "author", authorId: Number(segments[1]) };
   }
 
   return null;

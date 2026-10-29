@@ -3,7 +3,16 @@
   // dryRun=1 returns the plan only (counts, conflicts, issues); otherwise the
   // plan is applied through the normal create/update paths.
   import { apiGate, jsonFail, requireCap } from "@server/admin";
-  import { buildImportPlan, applyImport, summarizePlan, IMPORT_MAX_BYTES } from "@server/import";
+  import {
+    buildImportPlan,
+    buildMarkdownBundlePlan,
+    isMarkdownBundleEntry,
+    applyImport,
+    summarizePlan,
+    IMPORT_MAX_BYTES,
+    IMPORT_ZIP_MAX_TOTAL_BYTES,
+  } from "@server/import";
+  import { unzip } from "@server/package-install";
   import { invalidateContentCaches } from "@server/cache";
 
   export async function POST(request) {
@@ -19,13 +28,26 @@
       if (!(file instanceof File) || file.size === 0) {
         return jsonFail("请选择有效的导入文件", 400);
       }
+      // A ZIP bundle carries one Markdown file per post (Hugo/Hexo/Jekyll
+      // content folders, Obsidian vaults); everything else stays text.
+      const isZip = /\.zip$/i.test(file.name) || /\bzip\b/i.test(file.type || "");
       if (file.size > IMPORT_MAX_BYTES) {
-        return jsonFail("文件过大（上限 2MB）", 400);
+        const label = isZip ? "压缩包" : "文件";
+        return jsonFail(
+          `${label}过大（上限 ${Math.round(IMPORT_MAX_BYTES / 1024 / 1024)}MB）`,
+          400,
+        );
       }
       const policy = form.get("policy") === "overwrite" ? "overwrite" : "skip";
       const dryRun = form.get("dryRun") === "1";
-      const text = await file.text();
-      const plan = await buildImportPlan(text);
+      const plan = isZip
+        ? await buildMarkdownBundlePlan(
+            unzip(Buffer.from(await file.arrayBuffer()), {
+              include: isMarkdownBundleEntry,
+              maxTotalBytes: IMPORT_ZIP_MAX_TOTAL_BYTES,
+            }),
+          )
+        : await buildImportPlan(await file.text());
       if (dryRun) {
         return { dryRun: true, ...summarizePlan(plan), issues: [...plan.posts.issues, ...plan.pages.issues] };
       }

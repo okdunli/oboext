@@ -68,6 +68,7 @@ export const zhCatalog: Record<string, string> = {
   "pseudo.empty_home": "还没有文章。先去 admin 发布一篇吧。",
   "post.reads_tip": "已读",
   "post.likes_tip": "点赞",
+  "post.read_translation": "读英文版 →",
   "post.gallery": "浏览相册",
   "post.back_list": "返回列表",
   "comments.closed": "评论已关闭。",
@@ -120,6 +121,11 @@ export const zhCatalog: Record<string, string> = {
   "sidebar.no_posts": "暂无文章",
   "sidebar.home": "首页",
   "sidebar.all_posts": "所有文章",
+  "sidebar.all_pages": "所有页面",
+  "pages.title": "页面",
+  "pages.count": "共 {n} 个页面",
+  "pages.empty": "还没有已发布的页面。",
+  "crumb.pages": "页面",
   "nav.menu_open": "打开菜单",
   "cat.expand": "展开/收起 {name}",
   "cat.aria": "{name}分类页",
@@ -140,7 +146,11 @@ export const zhCatalog: Record<string, string> = {
   "list.sub": "共 {n} 篇 · 第 {page}/{total} 页",
   "list.category_title": "分类：{name}",
   "list.tag_title": "标签：#{name}",
+  "list.author_title": "作者：{name}",
   "list.seo_title": "文章 - {site}",
+  "list.seo_page": "第 {n} 页",
+  "feed.comments_title": "{site} — 评论",
+  "feed.taxonomy_title": "{site} — {name}",
   "head.all_posts": "所有文章",
   "reg.title": "注册账号",
   "reg.optional": "（可选）",
@@ -364,6 +374,9 @@ export const zhCatalog: Record<string, string> = {
 "api.comment_too_long": "评论内容过长",
 "api.comment_name_email": "请填写昵称和邮箱",
 "api.comment_url": "请填写链接",
+  "api.comment_rate_limited": "评论过于频繁，请稍后再试",
+  "api.media_type": "不支持的文件类型",
+  "api.media_too_large": "文件过大",
   "format.standard": "标准",
   "format.aside": "日志",
   "format.quote": "引语",
@@ -413,12 +426,12 @@ export const zhCatalog: Record<string, string> = {
   "pjax.total": "共 {n} 篇，按 Enter 查看全部",
   "pjax.toc": "目录",
   "theme.poster": "生成海报",
+  "theme.poster_soon": "海报功能将在后续版本上线",
   "theme.share_weibo": "分享到微博",
   "theme.share_qq": "分享到QQ",
   "theme.share_qzone": "分享到QQ空间",
   "theme.like": "点赞",
   "theme.liked": "已点赞",
-  "theme.poster_soon": "海报功能将在后续版本上线",
   "theme.already_liked": "您已经点过赞了",
   "theme.liking": "正在处理点赞...",
   "theme.like_ok": "点赞成功！",
@@ -477,6 +490,72 @@ export const zhCatalog: Record<string, string> = {
   "notify.body": "您正在进行{label}操作，验证码：{code}，10 分钟内有效，请勿泄露给他人。",
   "notify.html_lead": "您正在进行{label}操作，验证码为：",
   "notify.html_foot": "10 分钟内有效，请勿泄露给他人。如非本人操作请忽略此邮件。",
+  // ---- newsletter subscription flow (this round the api routes answer with
+  // 302 ?subscribed=1 style params only; the keys are pre-provisioned so the
+  // page surfaces can bind them next round without another catalog edit) ----
+  "newsletter.subscribed": "订阅成功",
+  "newsletter.confirm_pending": "确认邮件已发送，请查收邮箱完成订阅",
+  "newsletter.unsubscribed": "已退订",
+  "newsletter.invalid_token": "链接无效或已过期",
+  "newsletter.mail_confirm_subject": "确认订阅【{site}】",
+  "newsletter.mail_confirm_lead": "您正在订阅「{site}」的文章更新，点击下面的链接完成确认：",
+  "newsletter.mail_confirm_cta": "确认订阅",
+  "newsletter.mail_post_subject": "【{site}】新文章：{title}",
+  "newsletter.mail_post_lead": "您订阅的站点发布了新文章：",
+  "newsletter.mail_foot": "如不想再收到此类邮件，请回复本邮件或联系站长。",
+  // ---- public subscribe page (/newsletter) ----
+  "newsletter.title": "订阅 Newsletter",
+  "newsletter.lead": "留下邮箱地址，站点有新文章时我们会发一封邮件通知你。首次订阅需要点击确认邮件中的链接完成验证。",
+  "newsletter.email_label": "邮箱地址",
+  "newsletter.placeholder": "你的邮箱",
+  "newsletter.submit": "订阅",
+  "newsletter.failed": "请求失败，请稍后重试",
+  "newsletter.footer_link": "订阅 Newsletter",
+  // ---- newsletter admin screen (/admin/newsletter) ----
+  "newsletter.admin_title": "Newsletter",
+  "newsletter.admin_col_email": "邮箱",
+  "newsletter.admin_col_locale": "语言",
+  "newsletter.admin_col_status": "状态",
+  "newsletter.admin_col_created": "订阅时间",
+  "newsletter.admin_stat_total": "订阅总数",
+  "newsletter.admin_stat_confirmed": "已确认",
+  "newsletter.admin_stat_unsub": "已退订",
+  "newsletter.admin_badge_confirmed": "已确认",
+  "newsletter.admin_badge_pending": "待确认",
+  "newsletter.admin_badge_unsub": "已退订",
+  "newsletter.admin_empty": "还没有订阅者。",
+  "newsletter.admin_hint_mask": "出于隐私考虑，列表中的邮箱已做部分遮蔽。",
+  "newsletter.admin_failed": "发送失败",
+  "newsletter.admin_failed_lead": "以下发送未成功。修复邮箱或 SMTP 后可一键重试；重试会立即重新投递，不会重复发给已成功的订阅者。",
+  "newsletter.admin_no_failed": "没有需要重试的失败发送。",
+  "newsletter.admin_col_post": "文章",
+  "newsletter.admin_col_failed_at": "失败时间",
+  "newsletter.admin_retry": "重试失败发送",
+  "newsletter.admin_retry_confirm": "重新发送全部失败的邮件？已成功送达的订阅者不会重复收到。",
+  "newsletter.admin_retry_done": "已重试 {n} 条，成功 {m} 条",
+  "newsletter.admin_retry_error": "重试请求失败",
+  // ---- search hot-terms admin screen (/admin/search-terms) ----
+  "searchterm.admin_title": "搜索热词",
+  "searchterm.admin_lead": "读者在站内搜索过的词，按命中次数排序；次数不高却搜不到结果的词，就是最该补的内容。",
+  "searchterm.admin_col_term": "搜索词",
+  "searchterm.admin_col_hits": "次数",
+  "searchterm.admin_col_locale": "语言",
+  "searchterm.admin_col_last": "最后搜索",
+  "searchterm.admin_empty": "还没有搜索记录。前台一有搜索，这里会自动累计。",
+  "webmention.admin_title": "Webmention 收件箱",
+  "webmention.admin_lead": "其他站点提及你时的记录；通过审核后才会出现在评论区。",
+  "webmention.admin_col_source": "来源站点",
+  "webmention.admin_col_target": "指向页面",
+  "webmention.admin_col_post": "文章",
+  "webmention.admin_col_status": "状态",
+  "webmention.admin_col_time": "时间",
+  "webmention.admin_empty": "还没有收到任何 Webmention。",
+  "webmention.admin_st_pending": "待审核",
+  "webmention.admin_st_accepted": "已通过",
+  "webmention.admin_st_rejected": "已拒绝",
+  "webmention.admin_approve": "通过",
+  "webmention.admin_reject": "拒绝",
+  "webmention.admin_filter_all": "全部",
 };
 
 /** English overlays. Missing keys fall back to zhCatalog by design. */
@@ -523,6 +602,7 @@ export const enCatalog: Record<string, string> = {
   "pseudo.empty_home": "No posts yet. Publish one from the admin.",
   "post.reads_tip": "Reads",
   "post.likes_tip": "Likes",
+  "post.read_translation": "Read the English version →",
   "post.gallery": "Browse gallery",
   "post.back_list": "Back to list",
   "comments.closed": "Comments are closed.",
@@ -575,6 +655,11 @@ export const enCatalog: Record<string, string> = {
   "sidebar.no_posts": "No posts",
   "sidebar.home": "Home",
   "sidebar.all_posts": "All posts",
+  "sidebar.all_pages": "All pages",
+  "pages.title": "Pages",
+  "pages.count": "{n} pages",
+  "pages.empty": "No published pages yet.",
+  "crumb.pages": "Pages",
   "nav.menu_open": "Open menu",
   "cat.expand": "Expand/collapse {name}",
   "cat.aria": "{name} category page",
@@ -595,7 +680,11 @@ export const enCatalog: Record<string, string> = {
   "list.sub": "{n} posts · page {page} of {total}",
   "list.category_title": "Category: {name}",
   "list.tag_title": "Tag: #{name}",
+  "list.author_title": "Author: {name}",
   "list.seo_title": "Posts - {site}",
+  "list.seo_page": "Page {n}",
+  "feed.comments_title": "{site} — Comments",
+  "feed.taxonomy_title": "{site} — {name}",
   "head.all_posts": "All posts",
   "reg.title": "Create account",
   "reg.optional": "(optional)",
@@ -812,6 +901,9 @@ export const enCatalog: Record<string, string> = {
 "api.comment_too_long": "Comment is too long",
 "api.comment_name_email": "Nickname and email are required",
 "api.comment_url": "Link is required",
+  "api.comment_rate_limited": "You are commenting too fast, please slow down",
+  "api.media_type": "Unsupported file type",
+  "api.media_too_large": "File is too large",
   "format.standard": "Standard",
   "format.aside": "Aside",
   "format.quote": "Quote",
@@ -861,12 +953,12 @@ export const enCatalog: Record<string, string> = {
   "pjax.total": "{n} posts in total, press Enter to see all",
   "pjax.toc": "Contents",
   "theme.poster": "Generate poster",
+  "theme.poster_soon": "The poster feature is coming soon",
   "theme.share_weibo": "Share to Weibo",
   "theme.share_qq": "Share to QQ",
   "theme.share_qzone": "Share to Qzone",
   "theme.like": "Like",
   "theme.liked": "Liked",
-  "theme.poster_soon": "The poster feature is coming soon",
   "theme.already_liked": "You have already liked this",
   "theme.liking": "Liking...",
   "theme.like_ok": "Liked!",
@@ -925,6 +1017,70 @@ export const enCatalog: Record<string, string> = {
   "notify.body": "Your verification code for {label} is: {code}. It is valid for 10 minutes. Do not share it with anyone.",
   "notify.html_lead": "Verification code for {label}:",
   "notify.html_foot": "Valid for 10 minutes. Do not share it with anyone. If this wasn't you, please ignore this email.",
+  // ---- newsletter subscription flow (mirror of the zh block above) ----
+  "newsletter.subscribed": "Subscribed",
+  "newsletter.confirm_pending": "A confirmation email is on its way. Open it to finish subscribing.",
+  "newsletter.unsubscribed": "Unsubscribed",
+  "newsletter.invalid_token": "This link is invalid or has expired",
+  "newsletter.mail_confirm_subject": "Confirm your subscription to {site}",
+  "newsletter.mail_confirm_lead": "You asked to follow new posts on “{site}”. Confirm with the link below:",
+  "newsletter.mail_confirm_cta": "Confirm subscription",
+  "newsletter.mail_post_subject": "[{site}] New post: {title}",
+  "newsletter.mail_post_lead": "A new post was published on the site you follow:",
+  "newsletter.mail_foot": "If you no longer wish to receive these emails, reply to this email or contact the site owner.",
+  // ---- public subscribe page (/newsletter) ----
+  "newsletter.title": "Subscribe to the newsletter",
+  "newsletter.lead": "Leave your email address and we will mail you when a new post goes out. The first subscription needs a click on the confirmation link.",
+  "newsletter.email_label": "Email address",
+  "newsletter.placeholder": "Your email address",
+  "newsletter.submit": "Subscribe",
+  "newsletter.failed": "Request failed, please try again later",
+  "newsletter.footer_link": "Subscribe to the newsletter",
+  // ---- newsletter admin screen (mirror of the zh block above) ----
+  "newsletter.admin_title": "Newsletter",
+  "newsletter.admin_col_email": "Email",
+  "newsletter.admin_col_locale": "Language",
+  "newsletter.admin_col_status": "Status",
+  "newsletter.admin_col_created": "Subscribed at",
+  "newsletter.admin_stat_total": "Subscribers",
+  "newsletter.admin_stat_confirmed": "Confirmed",
+  "newsletter.admin_stat_unsub": "Unsubscribed",
+  "newsletter.admin_badge_confirmed": "Confirmed",
+  "newsletter.admin_badge_pending": "Pending",
+  "newsletter.admin_badge_unsub": "Unsubscribed",
+  "newsletter.admin_empty": "No subscribers yet.",
+  "newsletter.admin_hint_mask": "For privacy, email addresses are partially masked in this list.",
+  "newsletter.admin_failed": "Failed sends",
+  "newsletter.admin_failed_lead": "These deliveries did not go out. Fix the address or SMTP settings, then retry: the pass re-sends only the failed rows, so subscribers who already got the mail are not mailed twice.",
+  "newsletter.admin_no_failed": "Nothing waiting to be retried.",
+  "newsletter.admin_col_post": "Post",
+  "newsletter.admin_col_failed_at": "Failed at",
+  "newsletter.admin_retry": "Retry failed sends",
+  "newsletter.admin_retry_confirm": "Re-send every failed mail? Subscribers who already received it will not be mailed again.",
+  "newsletter.admin_retry_done": "Retried {n}, delivered {m}",
+  "newsletter.admin_retry_error": "Retry request failed",
+  // ---- search hot-terms admin screen (mirror of the zh block above) ----
+  "searchterm.admin_title": "Search terms",
+  "searchterm.admin_lead": "What readers searched on the site, sorted by hits; a term that hits little — or nothing — marks a content gap.",
+  "searchterm.admin_col_term": "Term",
+  "searchterm.admin_col_hits": "Hits",
+  "searchterm.admin_col_locale": "Language",
+  "searchterm.admin_col_last": "Last searched",
+  "searchterm.admin_empty": "No searches recorded yet. Terms appear as soon as readers search the site.",
+  "webmention.admin_title": "Webmention inbox",
+  "webmention.admin_lead": "Mentions from other sites; a mention only reaches the comments once you approve it.",
+  "webmention.admin_col_source": "Source site",
+  "webmention.admin_col_target": "Points at",
+  "webmention.admin_col_post": "Post",
+  "webmention.admin_col_status": "Status",
+  "webmention.admin_col_time": "When",
+  "webmention.admin_empty": "No webmentions yet.",
+  "webmention.admin_st_pending": "Pending",
+  "webmention.admin_st_accepted": "Approved",
+  "webmention.admin_st_rejected": "Rejected",
+  "webmention.admin_approve": "Approve",
+  "webmention.admin_reject": "Reject",
+  "webmention.admin_filter_all": "All",
 };
 
 /** The catalog for a locale: English overlaid on the Chinese defaults. */
@@ -1226,48 +1382,78 @@ const NO_PREFIX_SEGMENTS = new Set([
  */
 export function prefixLocaleUrls(html: string, locale: Locale): string {
   if (!html || locale === DEFAULT_LOCALE) return html;
-  return html.replace(/(href|action)="(\/[^"]*)"/g, (full, attr: string, urlPath: string) => {
-    if (urlPath.startsWith("//")) return full;
-    const seg = urlPath.slice(1).split(/[/?#]/)[0];
-    if (NO_PREFIX_SEGMENTS.has(seg)) return full;
-    if (urlPath === "/") return `${attr}="/en/"`;
-    return `${attr}="/en${urlPath}"`;
-  });
+  // R280: anchors carrying data-locale-keep name documents in ANOTHER locale
+  // (a translation pair's counterpart). Their href already describes the
+  // destination's own tree; re-prefixing to the current locale would turn
+  // "read the English version" into the same-language page. Split first so
+  // the skip can look at the anchor's own attribute run.
+  const parts = html.split(/(?=<a\s)/);
+  return parts
+    .map((chunk) =>
+      chunk.startsWith("<a") && chunk.includes("data-locale-keep")
+        ? chunk
+        : chunk.replace(/(href|action)="(\/[^"]*)"/g, (full, attr: string, urlPath: string) => {
+            if (urlPath.startsWith("//")) return full;
+            const seg = urlPath.slice(1).split(/[/?#]/)[0];
+            if (NO_PREFIX_SEGMENTS.has(seg)) return full;
+            if (urlPath === "/") return `${attr}="/en/"`;
+            return `${attr}="/en${urlPath}"`;
+          }),
+    )
+    .join("");
 }
 
 /**
- * The self-referencing canonical path for a page in a given locale: the
- * default locale keeps the bare path, a prefixed locale gets it back.
+ * Whether real per-locale content EXISTS (any post carries a translation
+ * pairing). i18n stays dependency-free: the data layer (loaders) probes the
+ * DB and calls setPairingActive(); canonicalPath/hreflangLinks read the flag.
+ * Default false = R269 semantics (merge + no cluster).
+ */
+let pairingActive = false;
+export function setPairingActive(on: boolean): void {
+  pairingActive = on;
+}
+export function isPairingActive(): boolean {
+  return pairingActive || process.env.OBOEXT_HREFLANG_CLUSTER === "1";
+}
+
+/**
+ * The canonical path for a page in a given locale.
  *
- * This is what makes the English tree indexable in its own right. Canonicalising
- * /en/* to the zh-CN URL tells a crawler the English pages are duplicates of the
- * Chinese ones, which drops them from the index entirely — they are
- * TRANSLATIONS, not duplicates, so the canonical must be self-referencing and
- * the hreflang cluster (see hreflangLinks) does the pairing.
+ * NO pairing (default, R269): /en/x and /x are one document — the canonical
+ * MERGES into the default URL; the prefixed form stays navigational only.
+ * PAIRING ACTIVE (R274: at least one translation pair exists): each locale's
+ * URL is its own document again, so the canonical goes back to
+ * self-referencing and hreflangLinks declares the true pair.
  *
- * The result is the FINAL url: "/" becomes "/en" rather than "/en/", because
- * the trailing-slash form answers a 308 — a canonical or an hreflang that
- * redirects is a wasted hop and a weaker signal.
+ * The call contract is unchanged for every caller: build the canonical with
+ * the request's locale exactly as before. The trailing-slash rule: "/" stays
+ * "/" for the default locale and becomes "/en" when self-referencing (the
+ * slash form answers a 308).
  */
 export function canonicalPath(path: string, locale: Locale): string {
   if (locale === DEFAULT_LOCALE) return path;
+  if (!isPairingActive()) return path; // R269 merge
   const p = path === "/" ? "" : path;
   return `/${locale}${p}`;
 }
 
 /**
- * hreflang alternates for the document head: both locales plus x-default.
- * The paths are the FINAL ones (no trailing slash), so a crawler reaches each
- * alternate without a redirect hop; the canonical is self-referencing per
- * locale (see canonicalPath), which is what pairs a translation with its
- * original instead of declaring it a duplicate.
+ * hreflang alternates for the document head.
+ *
+ * NO pairing: EMPTY. The en URL's canonical merges into the default, so
+ * declaring it as an alternate would contradict our own canonical (R269).
+ *
+ * PAIRING ACTIVE: both locales plus x-default, self-canonicalising per
+ * locale — the original rule ("every listed alternate must confirm the page
+ * back") is satisfiable again because each URL now has its own body. The
+ * head block dedupes by name|rel, so a distinct name per link keeps all
+ * three from collapsing into one.
  */
 export function hreflangLinks(origin: string, path: string): string {
+  if (!isPairingActive()) return "";
   const base = `${origin || ""}${path}`;
   const en = `${origin || ""}${canonicalPath(path, "en")}`;
-  // Head blocks dedupe by name|property|rel|charset (first wins), so three
-  // bare rel="alternate" links would collapse into one and could evict the
-  // RSS alternate from the same head. A distinct name per link keeps them.
   return (
     `<link name="hreflang-zh-CN" rel="alternate" hreflang="zh-CN" href="${base}">` +
     `<link name="hreflang-en" rel="alternate" hreflang="en" href="${en}">` +

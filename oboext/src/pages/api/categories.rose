@@ -35,6 +35,11 @@
     return apiGate(async () => {
       const body = await readBody(request);
       const ids = Array.isArray(body && body.ids) ? body.ids : [];
+      if (ids.length > 500)
+        return new Response(JSON.stringify({ error: "批量操作一次最多 500 项" }), {
+          status: 422,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
       const res = await bulkDeleteCategories(getContext().user, ids);
       return new Response(JSON.stringify(res), {
         headers: { "content-type": "application/json; charset=utf-8" },

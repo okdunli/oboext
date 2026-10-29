@@ -1,8 +1,4 @@
-/**
- * Server-only avatar URL resolver (parity with oboext lib/avatar.ts).
- * Supports Gravatar and its CN mirrors; numeric @qq.com mailboxes resolve
- * straight to qlogo. Uses node:crypto — never import from client code.
- */
+// Server-only avatar URL resolver (parity with Oboext lib/avatar.ts). Uses node:crypto — never import from client code.
 import { createHash } from "crypto";
 
 export type AvatarSource =

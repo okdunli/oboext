@@ -1,4 +1,4 @@
-// rosezm single-binary server.
+// Rosezm single-binary server.
 //
 // Embeds the built site (dist/) into one static Go binary - no Node, no
 // runtime dependencies, nothing to install on the target machine:
@@ -362,6 +362,7 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(b.String()))
 }
 
+
 //
 // The binary is immutable by design: it serves exactly what the build baked.
 // A real app also has live routes - POST server actions, /api handlers that
@@ -393,7 +394,7 @@ func setupUpstream() {
 	upstreamProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		// The error trail: a dead backend must be visible in the logs, not
 		// silently turned into a 502 nobody can explain.
-		log.Printf("rosezm error: upstream %s failed for %s %s: %v", u, r.Method, r.URL.Path, err)
+		log.Printf("Rosezm error: upstream %s failed for %s %s: %v", u, r.Method, r.URL.Path, err)
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 	}
 	log.Printf("rosezm: hybrid mode - non-GET requests and unbaked /api routes proxy to %s", u)
@@ -466,6 +467,6 @@ func main() {
 		port = "8080"
 	}
 	http.HandleFunc("/", observe(handler))
-	log.Printf("rosezm single-binary server listening on :%s", port)
+	log.Printf("Rosezm single-binary server listening on :%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

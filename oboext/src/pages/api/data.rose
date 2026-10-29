@@ -32,7 +32,7 @@
     await syncPlugins();
     await ensurePluginsLoaded();
   }).catch((err) => {
-    log.error("[oboext] database init failed:", err);
+    log.error("[Oboext] database init failed:", err);
     throw err;
   }));
 
@@ -47,11 +47,11 @@
       dispatch: (slug, path, request) => dispatchPluginApi(slug, path, request),
     },
     uploads: {
-      serve: (pathname, method) => serveUpload(pathname, method),
+      serve: (pathname, method, acceptEncoding) => serveUpload(pathname, method, acceptEncoding),
     },
     // Safety net for the app's own compiled assets, linked as /public/** (admin.css, admin.js, comments.js, icons/**, theme-*.js, vendor/**).
     publicStatic: {
-      serve: (pathname, method) => servePublic(pathname, method),
+      serve: (pathname, method, acceptEncoding) => servePublic(pathname, method, acceptEncoding),
     },
     // Hook-based sitemap: buildSitemapDocument runs sitemap.urls + sitemap.document filters (sitemap-plus and friends extend it)
     sitemap: {
@@ -80,6 +80,11 @@
     // warmup (and everything built on it) never actually ran.
     warmUrls: async () => {
       await ready();
+      // R274: warmEntityUrls now runs warmReadWave internally? No — it does
+      // not; run the wave (which probes the pairing flag) before building
+      // the URL list so a paired site boots with self-canonical /en.
+      const { warmReadWave } = await import("@server/loaders");
+      await warmReadWave();
       return warmEntityUrls();
     },
     // /admin <-> /admin/dashboard swap driven by the adminHomePath preference
@@ -100,32 +105,47 @@
     },
   };
 
-  export async function GET(request) {
-    await ready();
-    const u = new URL(request.url);
-    const key = u.searchParams.get("r") || "";
-    let payload = {};
-    try {
-      payload = JSON.parse(u.searchParams.get("d") || "{}");
-    } catch (e) {}
-    const ctx = getContext();
-    // The registry mixes public loaders (home, resolve, . ) with admin screens.
-    if (key.indexOf("admin.") === 0 && !(ctx as Record<string, unknown>).user) {
-      return new Response(JSON.stringify({ error: "unauthorized" }), {
-        status: 401,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "no-store",
-        },
-      });
-    }
-    const data = await dispatch(key, payload, ctx);
-    return new Response(JSON.stringify(data), {
-      status: 200,
+  // R161: the two guards below are about FAILURE SHAPES, not authorization.
+  //   - a thrown loader used to escape this handler entirely and the framework
+  //     answered with its HTML error page, so the browser's JSON.parse threw a
+  //     second, unrelated error and the page silently bricked;
+  //   - `d` is a client-supplied JSON blob parsed on every navigation - a
+  //     multi-megabyte value is pure parse/GC work with no legitimate caller
+  //     (the loaders' payloads are a handful of fields).
+  const DATA_PAYLOAD_MAX = 8192;
+  const jsonOut = (data, status = 200) =>
+    new Response(JSON.stringify(data), {
+      status,
       headers: {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",
       },
     });
+
+  export async function GET(request) {
+    await ready();
+    const u = new URL(request.url);
+    const key = (u.searchParams.get("r") || "").slice(0, 200);
+    const rawD = u.searchParams.get("d") || "{}";
+    if (rawD.length > DATA_PAYLOAD_MAX) {
+      return jsonOut({ error: "payload_too_large" }, 400);
+    }
+    let payload = {};
+    try {
+      payload = JSON.parse(rawD);
+    } catch (e) {}
+    const ctx = getContext();
+    // The registry mixes public loaders (home, resolve, . ) with admin screens.
+    if (key.indexOf("admin.") === 0 && !(ctx as Record<string, unknown>).user) {
+      return jsonOut({ error: "unauthorized" }, 401);
+    }
+    let data;
+    try {
+      data = await dispatch(key, payload, ctx);
+    } catch (err) {
+      log.error("[Oboext] data dispatch failed for", key, err);
+      return jsonOut({ error: "dispatch_failed" }, 500);
+    }
+    return jsonOut(data);
   }
 </script>

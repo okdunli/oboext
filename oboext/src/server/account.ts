@@ -9,7 +9,8 @@ import { ServiceError } from "./errors.js";
 import { passwordError } from "./password-policy.js";
 import { HOOKS, applyAsyncFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
-import { getPublicRegisterConfig } from "./members.js";
+import { getPublicRegisterConfig, NAME_RE, NAME_INVALID_MSG } from "./members.js";
+import { invalidateContentCaches } from "./cache.js";
 import type { VirtualSiteRoute } from "./virtual-routes.js";
 
 // --------------------------------------------------------- self-service CRUD
@@ -35,6 +36,10 @@ export async function changeOwnProfile(
   const email = input.email.trim();
   const phone = input.phone === undefined ? target.phone : input.phone || null;
   if (!name) throw new ServiceError("昵称不能为空", 422);
+  // Same nickname rule registration enforces: a profile edit used to accept any
+  // non-empty string (1-char, 5000-char, spaces, "@"), and the name is rendered
+  // into HTML, so it must satisfy NAME_RE here too.
+  if (!NAME_RE.test(name)) throw new ServiceError(NAME_INVALID_MSG, 422, "api.name_invalid");
   if (email !== target.email) {
     const [exists] = await db
       .select({ id: users.id })
@@ -54,6 +59,13 @@ export async function changeOwnProfile(
     .set({ name, email, phone, updatedAt: new Date() })
     .where(eq(users.id, actor.id))
     .returning();
+  // R149: name/email live in SessionUser (verifyToken memoizes it under
+  // `sess:`) AND they render into hydrated post views as the author name -
+  // this write path did not invalidate at all, so a self-rename served the old
+  // identity from both the memo and the response hot cache until their
+  // windows. invalidateContentCaches() is the same commit-point call the
+  // admin updateUser makes for a rename: memo prefix + KV + render/hot caches.
+  invalidateContentCaches();
   return {
     id: row.id,
     name: row.name,

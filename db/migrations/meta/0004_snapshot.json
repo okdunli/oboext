@@ -1204,7 +1204,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'oboext'"
+          "default": "'xoboe'"
         },
         "site_description": {
           "name": "site_description",
@@ -1236,7 +1236,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'oboext-2026'"
+          "default": "'xoboe-2026'"
         },
         "footer_text": {
           "name": "footer_text",

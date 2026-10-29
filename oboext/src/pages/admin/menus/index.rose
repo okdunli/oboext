@@ -1,9 +1,5 @@
 <script>
-  // Menu manager (port of components/MenuManager.tsx). Menus are keyed by
-  // theme location (header/footer/sidebar). The editor shows one menu at a
-  // time as a flat depth-indented list and PUTs the whole tree (two-phase
-  // parentId remap lives in server/menus.ts). All data reads live; the initial
-  // tree comes from the admin.menus loader and admin.js hydrates + enhances.
+  // Menu manager (port of components/MenuManager.tsx).
   let d = $data(() => __rvLoad("admin.menus", {}));
   function menus() {
     return d().menus || [];
@@ -62,11 +58,7 @@
     return "L" + (r.depth + 1);
   }
   function emptyClass() {
-    // Hidden unconditionally on the server. activeMenu() here is ms[0] - it
-    // has no notion of the selected tab, so this could only ever describe the
-    // first menu while the panel showed another one, which is what printed
-    // "这个菜单还没有项目。" at a menu that does have items. admin.js owns the
-    // real toggle (it reads state.flat for the ACTIVE menu) once it hydrates.
+    // Hidden unconditionally on the server.
     return "adm-empty adm-menu-empty is-hidden";
   }
 </script>

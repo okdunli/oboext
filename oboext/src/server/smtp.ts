@@ -1,5 +1,3 @@
-
-
 import net from "node:net";
 import tls from "node:tls";
 
@@ -95,6 +93,7 @@ export async function sendSmtpMail(cfg: SmtpConfig, mail: SendMailInput): Promis
     const greeting = await readReply(sock, 12000);
     if (greeting.code !== 220) throw new Error(`SMTP 问候异常: ${greeting.code}`);
 
+    // 2) EHLO
     const ehlo = async () => cmd(sock, `EHLO ${process.env.HOSTNAME ?? "oboext"}`, 250);
     let banner = await ehlo();
 

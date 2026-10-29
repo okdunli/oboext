@@ -1,14 +1,103 @@
 <script>
-  // Search results. Cold GETs with exactly one hit are 302'd to that post
-  // by the middleware (original SearchPage parity); there is no client-side
-  // router, so no client redirect is needed.
-  let result = $data(() =>
-    __rvLoad("search", {
+  // Search results.
+  // R153: an out-of-range ?page>N returns { notFound: true } from the loader -
+  // this component used to render it as an EMPTY 200 (both head branches skip,
+  // {@html main} spits nothing). The catch-all page's pattern: await the load,
+  // throw notFound(), let the framework answer with the app's 404 route and a
+  // real 404 status.
+  // R244: keyword highlight. The loader (loaders.ts search()) assembles main
+  // for every theme with items already HTML-escaped, so the page wraps the
+  // query words inside main's TEXT segments at load time - the marks are in
+  // the first paint, on every theme, and loaders.ts/admin surfaces are left
+  // untouched. The loader's own client-side F4 highlight script becomes a
+  // no-op: its TreeWalker rejects text whose parent is already <mark>.
+  let result = $data(async () => {
+    const r = await __rvLoad("search", {
       q: __rvQs().get("q") || "",
-      page: Number(__rvQs().get("page") || 1),
+      page: __rvQs().get("page"),
       all: __rvQs().get("all") === "1",
-    })
-  );
+    });
+    if (r && r.notFound) notFound();
+    return r;
+  });
+
+  // Canonical implementation: queries.ts searchHighlight() (the tested one).
+  // This is its isomorphic HTML-string twin - a page script ships to the
+  // browser, so it cannot import the server module (drizzle/pglite would
+  // enter the client bundle). Same term rules: whitespace split, dedupe,
+  // 8-term cap, terms over 50 chars skipped; case-insensitive; regex
+  // metacharacters escaped into the pattern.
+  function highlightTerms(q) {
+    var raw = String(q == null ? "" : q).trim();
+    if (!raw) return [];
+    var seen = {}, out = [], parts = raw.split(/\s+/);
+    for (var i = 0; i < parts.length; i++) {
+      var t = parts[i];
+      if (!t || seen[t] || t.length > 50) continue;
+      seen[t] = 1;
+      out.push(t);
+      if (out.length >= 8) break;
+    }
+    return out;
+  }
+
+  // Wrap keyword matches inside the already-escaped TEXT segments of the
+  // theme's list HTML (the mandated order: the text is escaped upstream by
+  // the theme's esc(), we only splice <mark> around matches - no re-escaping,
+  // so nothing can be double-escaped and no query byte is ever emitted raw).
+  // A match overlapping an entity body (&amp; &lt; ...) is left unwrapped, so
+  // a query like "amp" cannot split an entity into visible garbage. Segments
+  // inside script/style raw elements are skipped (tracked incrementally per
+  // gap, so the whole scan stays O(len(main))). NOTE: never write a literal
+  // script tag in a comment here - the framework's template scanner (upstream
+  // BUG.md AV) treats it as a real tag and truncates this script block.
+  function hlMainHtml(mainHtml, q) {
+    var html = String(mainHtml == null ? "" : mainHtml);
+    var words = highlightTerms(q);
+    if (!words.length) return html;
+    var re = new RegExp("(" + words.map(function (w) {
+      return w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }).join("|") + ")", "gi");
+    var ENTITY = /&(?:amp|lt|gt|quot|#39|[a-zA-Z]+|#\d+);/g;
+    var scriptDepth = 0;
+    var prevEnd = 0;
+    return html.replace(/>([^<]+)</g, function (whole, text, off) {
+      // Tags between the previous segment and this one keep the raw-element
+      // counter in sync. main carries no raw elements today; the counter
+      // is the guard for future theme HTML. Tag names are spelled without
+      // angle brackets on purpose - see the AV note above.
+      var gap = html.slice(prevEnd, off);
+      scriptDepth += (gap.match(/<(script|style)\b/g) || []).length;
+      scriptDepth -= (gap.match(/<\/(script|style)>/g) || []).length;
+      prevEnd = off + whole.length;
+      if (scriptDepth > 0) return whole;
+      var spans = [], m;
+      ENTITY.lastIndex = 0;
+      while ((m = ENTITY.exec(text))) spans.push([m.index, m.index + m[0].length]);
+      var out = "", last = 0;
+      re.lastIndex = 0;
+      while ((m = re.exec(text))) {
+        var hit = false;
+        for (var i = 0; i < spans.length; i++) {
+          if (m.index < spans[i][1] && m.index + m[0].length > spans[i][0]) { hit = true; break; }
+        }
+        if (hit) continue;
+        if (m.index > last) out += text.slice(last, m.index);
+        out += "<mark>" + m[0] + "</mark>";
+        last = m.index + m[0].length;
+        if (!m[0].length) re.lastIndex++;
+      }
+      if (!last) return whole; // nothing wrapped: keep the segment byte-identical
+      out += text.slice(last);
+      return ">" + out + "<";
+    });
+  }
+
+  function viewMain() {
+    var r = result();
+    if (!r || !r.main) return "";
+    return hlMainHtml(r.main, __rvQs().get("q") || "");
+  }
 </script>
 
 {#if result().head || result().headTitle}
@@ -18,4 +107,16 @@
 </head>
 {/if}
 
-{@html result().main}
+<style>
+  /* The {@html} card markup is outside this page's scope attributes, and the
+     loader's client-side F4 script also emits bare <mark> when it ever beats
+     us to it: style the element globally so both paths read the same. */
+  :global(mark) {
+    background: #ffe58f;
+    color: inherit;
+    padding: 0 0.1em;
+    border-radius: 2px;
+  }
+</style>
+
+{@html viewMain()}

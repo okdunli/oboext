@@ -66,6 +66,29 @@ const PROFILES: Record<string, Partial<DialectProfile>> = {
 export const KNOWN_DIALECTS = Object.keys(PROFILES);
 
 /**
+ * R148: the three list window sizes, NAMED once. loaders.ts inlined each of
+ * these at its call site, and the sitemap now needs the exact same numbers to
+ * know where page 2 starts - two independent copies of this arithmetic is how
+ * a sitemap ends up advertising a page the router 404s (or hiding one it
+ * serves). The formulas below are verbatim relocations of the loader code.
+ */
+export function blogListSize(layout: string, postsPerPage?: number | null): number {
+  return layout === "bluemix"
+    ? Math.min(100, Math.max(1, Number(postsPerPage) || 10))
+    : layout === "skyscraper"
+      ? postsPerPage || 10
+      : postsPerPage || 12;
+}
+
+export function categoryListSize(layout: string, postsPerPage?: number | null): number {
+  return dialectProfile(layout).catPerPage || postsPerPage || 10;
+}
+
+export function tagListSize(layout: string, postsPerPage?: number | null): number {
+  return layout === "skyscraper" ? postsPerPage || 10 : 12;
+}
+
+/**
  * The numeric profile for a layout dialect. Pure map lookup — no cache, no
  * filesystem. Unknown dialects (including a brand-new theme's dialect) get
  * the BASE defaults, so a new theme works before any per-dialect tuning.

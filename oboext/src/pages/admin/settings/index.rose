@@ -2,9 +2,7 @@
   // Site settings — the whole form is generated from SITE_SETTINGS_SCHEMA by
   // admin.js sfForm (the same engine the theme panel and plugin settings use),
 
-  // picker and the webmaster-verification inputs all come for free. The
-  // payload (resolved values + schema with runtime options injected) is
-  // embedded; saving is one PATCH /api/settings.
+  // Picker and the webmaster-verification inputs all come for free.
   let p = $data(() => __rvLoad("admin.settings", {}));
   function payload() {
     return JSON.stringify({ settings: p().settings, schema: p().schema });

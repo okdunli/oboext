@@ -12,8 +12,10 @@ import {
   notInArray,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import { db, isConnectionError } from "./db.js";
+import { offsetNum } from "./paging.js";
 import {
   categories,
   comments,
@@ -40,11 +42,14 @@ import { uploadExists } from "./storage.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ServiceError } from "./errors.js";
 import { invalidate, memoQuery, memoStrict, SIDEBAR_TTL } from "./cache.js";
+import { classifyReferrer, referrerHostOf } from "./referrer.js";
+import { ownHost } from "./site-origin.js";
 import { createLogger } from "./logger.js";
 const log = createLogger("queries");
 
 // Scheduled publishing (time gate): a `published` post whose publishedAt is in the future is "scheduled" and hidden from every public read.
-const publishedVisible = or(isNull(posts.publishedAt), lte(posts.publishedAt, sql`now()`));
+// Exported: widgets.ts reuses this exact predicate in its own post selects.
+export const publishedVisible = or(isNull(posts.publishedAt), lte(posts.publishedAt, sql`now()`));
 
 // Nullable on purpose: a root category has parentId = null. A parentId pointing
 export type TaxRef = { id: number; name: string; slug: string; url: string; icon?: string | null; parentId?: number | null };
@@ -56,6 +61,10 @@ export type PostView = Post & {
   tags: TaxRef[];
 /** Custom fields (post_metas); themes consume e.g. bluemix_card_theme. */
   metas: Record<string, string>;
+  /** Whether THIS request's visitor already liked the post. Absent where the
+   *  loader has no visitor to ask about (related, recent, feeds) - the renderers
+   *  treat absent as "not liked", so their markup stays byte-identical. */
+  liked?: boolean;
 };
 
 // on every render - a crawler walking the site turned one absent file into a
@@ -92,6 +101,9 @@ export type PostQuery = {
   random?: boolean;
   limit?: number;
   offset?: number;
+  /** R247: raise the window ceiling for machine consumers (sitemap, feeds,
+   *  page directory). Never accept this from a request parameter. */
+  windowCap?: number;
   /** Ship the full content body (export, GraphQL, RSS). Lists never need it. */
   full?: boolean;
 };
@@ -191,6 +203,25 @@ export async function categoryPostCounts(): Promise<Map<number, number>> {
   });
 }
 
+/** R148: per-tag published-post counts - the tag-side twin of
+ * categoryPostCounts, shared by the sitemap's pagination entries (and any
+ * future count consumer) so tag page math never needs its own SQL. */
+export async function tagPostCounts(): Promise<Map<number, number>> {
+  return memoQuery("tax:tagCounts", SIDEBAR_TTL, async () => {
+    const rows = await db.execute(sql`select ${postTags.tagId} as tid, count(*)::int as n
+      from ${postTags}
+      join ${posts} on ${posts.id} = ${postTags.postId}
+      where ${posts.status} = 'published'
+        and (${posts.publishedAt} is null or ${posts.publishedAt} <= now())
+      group by ${postTags.tagId}`);
+    const out = new Map<number, number>();
+    for (const r of (Array.isArray(rows) ? rows : ((rows as any).rows ?? [])) as any[]) {
+      out.set(Number(r.tid), Number(r.n ?? 0));
+    }
+    return out;
+  });
+}
+
 export async function listTags(): Promise<TagWithUrl[]> {
   return memoQuery("tax:tags", SIDEBAR_TTL, async () => {
     const [rows, cfg] = await Promise.all([
@@ -239,6 +270,69 @@ export async function getTag(id: number): Promise<Tag> {
   return row;
 }
 
+// ---------------------------------------------------------------- authors
+//
+// The public half of a user row. `users.name` carries a UNIQUE index and there
+// is no slug column, while an email is a private address the site must not
+// publish (the feeds deliberately emit names only) — so the author archive is
+// addressed by the numeric id and this projection is the only shape the public
+// side can read: no role, no hash, no phone, no last-login.
+
+export type PublicAuthor = {
+  id: number;
+  name: string;
+  avatarUrl: string | null;
+  bio: string | null;
+};
+
+/** id -> public author, or null when the account does not exist or is not an
+ * active one (a disabled or unverified-banned account gets a 404, not a
+ * stripped profile). Memoized like getCategoryBySlug: the catch-all router
+ * asks on every render and the loader asks again. */
+export async function getPublicAuthor(id: number): Promise<PublicAuthor | null> {
+  return memoQuery(`tax:author:${id}`, SIDEBAR_TTL, async () => {
+    const [row] = await db
+      .select({ id: users.id, name: users.name, avatarUrl: users.avatarUrl, bio: users.bio })
+      .from(users)
+      .where(and(eq(users.id, id), eq(users.status, "active")))
+      .limit(1);
+    return row ?? null;
+  });
+}
+
+/** Published-post count per author id — the archive's "N posts" line and the
+ * sitemap's author family. posts.authorId is nullable, so the map keeps a 0
+ * bucket that callers must not turn into a URL. */
+export async function authorPostCounts(): Promise<Map<number, number>> {
+  return memoQuery("tax:authorCounts", SIDEBAR_TTL, async () => {
+    const rows = await db.execute(sql`select ${posts.authorId} as aid, count(*)::int as n
+      from ${posts}
+      where ${posts.authorId} is not null
+        and ${posts.status} = 'published'
+        and (${posts.publishedAt} is null or ${posts.publishedAt} <= now())
+      group by ${posts.authorId}`);
+    const out = new Map<number, number>();
+    for (const r of (Array.isArray(rows) ? rows : ((rows as any).rows ?? [])) as any[]) {
+      if (r.aid === null || r.aid === undefined) continue;
+      out.set(Number(r.aid), Number(r.n ?? 0));
+    }
+    return out;
+  });
+}
+
+/** Active accounts (id + name only). The sitemap joins these against
+ * authorPostCounts() so only authors with at least one public post get
+ * advertised — an empty archive is a thin-content page, not a landing page. */
+export async function listAuthorRows(): Promise<Array<{ id: number; name: string }>> {
+  return memoQuery("tax:authors", SIDEBAR_TTL, async () => {
+    return await db
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(eq(users.status, "active"))
+      .orderBy(asc(users.name), asc(users.id));
+  });
+}
+
 // ------------------------------------------------------------- post lists
 
 /**
@@ -269,6 +363,172 @@ export function searchTerms(q: string | undefined | null): string[] {
  */
 export function ilikeEscape(term: string): string {
   return term.replace(/[\\%_]/g, "\\$&");
+}
+
+// ------------------------------------------------- search relevance (R250)
+
+/**
+ * Is there a latin word in the query? Two letters or more, which is also what
+ * separates a real word from a stray initial ("C.", "R250"). This gates the
+ * tsvector ranking: to_tsvector('simple', ...) has no CJK segmentation, so a
+ * Chinese phrase becomes ONE lexeme and '模组' only matches a document whose
+ * whole unspaced run is exactly '模组' — the rank is 0 for every other row and
+ * the ordering it produces is noise. Latin is where ts_rank earns its keep.
+ */
+export function hasLatinWord(q: string | undefined | null): boolean {
+  return /[A-Za-z]{2,}/.test(String(q ?? ""));
+}
+
+/** The query as websearch_to_tsquery wants it: no operator punctuation survives
+ * to be parsed as syntax. Everything that is not a word character becomes a
+ * space, so `"lora" OR`, `a AND`, `(((` and `' OR "` all degrade to a plain
+ * AND-of-words query instead of a syntax error. */
+function tsQueryText(q: string): string {
+  return String(q ?? "")
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * The weighted relevance document shared by migration 0037's index and the
+ * ORDER BY below. It must be byte-identical in both places or the index is
+ * dead weight: PostgreSQL matches an expression index on the expression's
+ * normalized form, so "the same thing written differently" silently stops
+ * using it. Title 'A' outranks excerpt 'B'; the body is deliberately NOT in
+ * the document (see the migration comment for the measurement).
+ */
+function tsRankDoc(title: unknown, excerpt: unknown): SQL {
+  return sql`(setweight(to_tsvector('simple', coalesce(${title}, '')), 'A') || setweight(to_tsvector('simple', coalesce(${excerpt}, '')), 'B'))`;
+}
+
+/**
+ * A `ts_rank(...) DESC` order term for a latin query, or null when the ranking
+ * must stay out of the way. Null for a CJK-only or digit-only query (the gate
+ * above), and null when the query is punctuation to the point that no word
+ * survives — ranking by an empty tsquery would be a no-op that still pays for
+ * the to_tsvector call on every candidate row.
+ *
+ * This only ever adds an ORDER BY term; the WHERE clause is untouched ILIKE,
+ * so the result set cannot change.
+ */
+export function tsRankOrder(
+  title: unknown,
+  excerpt: unknown,
+  q: string | undefined | null,
+): SQL | null {
+  const raw = String(q ?? "").trim();
+  if (!raw || !hasLatinWord(raw)) return null;
+  const text = tsQueryText(raw);
+  if (!text) return null;
+  const doc = tsRankDoc(title, excerpt);
+  return sql`ts_rank(${doc}, websearch_to_tsquery('simple', ${text})) DESC`;
+}
+
+// ------------------------------------------------------- search highlight
+
+/**
+ * HTML-escape one string the same way render.ts esc() does (kept local so this
+ * module stays out of render.ts's import graph — render.ts imports THIS one).
+ */
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Case-insensitive keyword highlight for search-result title/excerpt. The
+ * safety invariant is escape-before-wrap, kept per segment: the RAW text is
+ * split at keyword boundaries, every slice is HTML-escaped, and only the
+ * escaped hit slice gets wrapped in <mark> — no user-controlled byte is ever
+ * emitted unescaped, and the <mark> tags are the only raw markup in the
+ * result. Matching runs on the RAW text (not the escaped one) so a query like
+ * "amp" cannot land inside an entity body and split "&amp;" into visible
+ * garbage. Terms come from the same searchTerms() split the query ran, so
+ * "LoRa 模组" highlights both words independently; empty query and terms over
+ * 50 chars (paste bombs / hash junk the SQL never matches word-wise) skip
+ * highlighting; regex metacharacters are escaped for the RegExp — a "%"/"_"
+ * query is a wildcard to SQL but a literal to this wrapper, the same
+ * asymmetry the client-side F4 highlight already lives with.
+ */
+export function searchHighlight(text: string, q: string | undefined | null): string {
+  const raw = String(text ?? "");
+  const words = searchTerms(q)
+    .filter((t) => t.length <= 50)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!words.length) return escHtml(raw);
+  const re = new RegExp(`(${words.join("|")})`, "gi");
+  let out = "";
+  let last = 0;
+  for (let m = re.exec(raw); m; m = re.exec(raw)) {
+    if (m.index > last) out += escHtml(raw.slice(last, m.index));
+    out += `<mark>${escHtml(m[0])}</mark>`;
+    last = m.index + m[0].length;
+    if (m[0].length === 0) re.lastIndex++; // guard, though searchTerms drops empties
+  }
+  out += escHtml(raw.slice(last));
+  return out;
+}
+
+// ------------------------------------------------------- search suggest
+
+/** Context kept on each side of the hit in a suggestion snippet. */
+const SUGGEST_WINDOW = 20;
+
+/**
+ * Case-insensitive title de-dup for the suggest popover: the same article must
+ * not occupy two of the five rows (a duplicated title reads as a rendering
+ * bug). First occurrence wins, original order preserved.
+ */
+export function suggestDedupe<T extends { title?: string | null }>(items: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((p) => {
+    const key = String(p.title ?? "").trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * The `hl` field of a suggestion: a ~20-char window around the first hit with
+ * the term wrapped in \u0001…\u0002 instead of <mark>. This value crosses JSON
+ * into the popover, where the CLIENT owns the markup, so no HTML may leave
+ * here — the markers are the whole contract (`hl.split("\u0001")`).
+ * Raw `<`/`>`/`&` are dropped so a title byte can never close the client's
+ * <mark> wrapper. The window is sliced by code point, so a CJK/emoji boundary
+ * cannot split a surrogate pair. No hit or blank query answers "".
+ *
+ * shortcut: a query containing `<`/`>`/`&` cannot match here (the bytes are
+ * stripped from the text before matching); upgrade if such titles must
+ * highlight — the client would then need a text-node renderer.
+ */
+export function suggestHighlight(text: string, q: string | undefined | null): string {
+  const plain = String(text ?? "").replace(/[<>&]/g, "");
+  const words = searchTerms(q)
+    .filter((t) => t.length <= 50)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!words.length) return "";
+  const m = new RegExp(words.join("|"), "i").exec(plain);
+  if (!m) return "";
+  const chars = Array.from(plain);
+  const start = Array.from(plain.slice(0, m.index)).length;
+  const end = start + Array.from(m[0]).length;
+  const from = Math.max(0, start - SUGGEST_WINDOW);
+  const to = Math.min(chars.length, end + SUGGEST_WINDOW);
+  return (
+    (from > 0 ? "…" : "") +
+    chars.slice(from, start).join("") +
+    "\u0001" +
+    chars.slice(start, end).join("") +
+    "\u0002" +
+    chars.slice(end, to).join("") +
+    (to < chars.length ? "…" : "")
+  );
 }
 
 /**
@@ -311,11 +571,44 @@ function pinnedIdsFor(sig: string, where: any): Promise<number[]> {
   });
 }
 
+/**
+ * R157/R158: one place that turns whatever a caller passed into a legal SQL
+ * window. Public and session routes pass `Number(q.get("limit"))` straight
+ * through, so without this `/api/posts?limit=abc` reached `.limit(NaN)` and
+ * `?limit=-5` / `?offset=-3` became negative LIMIT/OFFSET - trivially
+ * reachable Postgres errors (500s). limit: NaN -> the caller's default,
+ * negatives -> the nearest legal value, ceiling stays 100; offset: NaN -> 0,
+ * negative -> 0 (no upper cap - deep pagination links must keep working).
+ * Exported in R158 so pages/media windows clamp by the SAME arithmetic.
+ *
+ * R247: `windowCap` raises the ceiling for MACHINE consumers only — the
+ * sitemap and the page directory list the whole site, and their
+ * `limit: 10000/500` was being silently clamped to 100 (the same value as a
+ * visitor's `?limit=100`), so a blog past 100 posts shipped a truncated map
+ * while its sharding code never fired. User-facing routes keep the 100 cap.
+ */
+export function normalizeWindow(
+  opts: { limit?: unknown; offset?: unknown },
+  defaultLimit = 20,
+  windowCap = 100,
+): { limit: number; offset: number } {
+  const rawLimit = Number(opts.limit);
+  const limit = Number.isFinite(rawLimit)
+    ? Math.min(Math.max(Math.trunc(rawLimit), 1), windowCap)
+    : defaultLimit;
+  const offset = offsetNum(opts.offset);
+  return { limit, offset };
+}
+
+/** The machine-consumer ceiling: full-site listings (sitemap, page directory,
+ *  feeds at their configured size) need the real count, not a visitor's page
+ *  size. Not reachable from any request parameter — callers pass it literally. */
+export const MACHINE_WINDOW_CAP = 10_000;
+
 export async function listPostsRaw(
   opts: PostQuery = {},
 ): Promise<{ items: PostView[]; total: number }> {
-  const limit = Math.min(opts.limit ?? 20, 100);
-  const offset = opts.offset ?? 0;
+  const { limit, offset } = normalizeWindow(opts, 20, opts.windowCap);
   const conditions: any[] = [];
 
   if (opts.status) conditions.push(eq(posts.status, opts.status as any));
@@ -351,7 +644,7 @@ export async function listPostsRaw(
     conditions.push(
       and(
         ...searchTermsEsc.map((t) =>
-          sql`(${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.excerpt} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${taxTermMatch(t)})`,
+          sql`(${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.excerpt} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.bodyPlain} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${taxTermMatch(t)})`,
         ),
       ),
     );
@@ -401,20 +694,27 @@ export async function listPostsRaw(
   // matching any term > excerpt matching the whole query > a tag/category name
   // matching > everything else, then the archive's own order. id is the final
   // tiebreaker so OFFSET pagination can never duplicate or skip a row.
+  //
+  // R250: for a latin query the CASE above is only a coarse bucket (89 rows
+  // shared bucket 1 for "lora module" in the measurement), so a real relevance
+  // score is layered BETWEEN the bucket and the date - never in front of it, so
+  // a title hit can never be pushed below a body hit by term density.
   const wholeQuery = ilikeEscape((opts.search ?? "").trim());
-  const searchRank = searchTermsEsc.length
-    ? [
-        sql`(CASE
-          WHEN ${posts.title} ILIKE ${"%" + wholeQuery + "%"} ESCAPE '\\' THEN 0
-          WHEN ${sql.join(
-            searchTermsEsc.map((t) => sql`${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\'`),
-            sql` OR `,
-          )} THEN 1
-          WHEN ${posts.excerpt} ILIKE ${"%" + wholeQuery + "%"} ESCAPE '\\' THEN 2
-          WHEN ${sql.join([taxTermMatch(wholeQuery), ...searchTermsEsc.map(taxTermMatch)], sql` OR `)} THEN 3
-          ELSE 4 END)`,
-      ]
-    : [];
+  const searchRank: any[] = [];
+  if (searchTermsEsc.length) {
+    searchRank.push(sql`(CASE
+      WHEN ${posts.title} ILIKE ${"%" + wholeQuery + "%"} ESCAPE '\\' THEN 0
+      WHEN ${sql.join(
+        searchTermsEsc.map((t) => sql`${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\'`),
+        sql` OR `,
+      )} THEN 1
+      WHEN ${posts.excerpt} ILIKE ${"%" + wholeQuery + "%"} ESCAPE '\\' THEN 2
+      WHEN ${sql.join([taxTermMatch(wholeQuery), ...searchTermsEsc.map(taxTermMatch)], sql` OR `)} THEN 3
+      WHEN ${posts.bodyPlain} ILIKE ${"%" + wholeQuery + "%"} ESCAPE '\\' THEN 4
+      ELSE 5 END)`);
+    const rk = tsRankOrder(posts.title, posts.excerpt, opts.search);
+    if (rk) searchRank.push(rk);
+  }
 
   const order = opts.random
     ? [sql`random()`]
@@ -435,9 +735,21 @@ export async function listPostsRaw(
   // — on a remote DB this is the difference between a list query carrying
   // kilobytes and one carrying megabytes. Export, GraphQL and RSS pass
   // full: true to get the real body back.
+  //
+  // R201: body_plain (the R200 searchable projection of the body) is the SAME
+  // weight of column and belongs to the SAME rule — it exists only to be
+  // matched in WHERE/RANK, and no renderer reads it. Selecting it made every
+  // list query carry the plain text of every post: measured at 90.8% of the
+  // /api/posts payload (176 KB of 194 KB for 20 posts with 8.8 KB bodies),
+  // which defeated the content-blanking above. It is dropped from every read
+  // shape, not just the list one.
+  // R201: body_plain is the searchable projection of the body and carries the
+  // SAME weight as content (the whole body as plain text). It exists only to be
+  // matched in WHERE/RANK — no renderer reads it. Dropping it from the list
+  // shape keeps list queries as light as the content-blanking above intends.
   const postShape: typeof posts = opts.full
     ? posts
-    : ({ ...getTableColumns(posts), content: sql<string>`''` } as typeof posts);
+    : ({ ...getTableColumns(posts), content: sql<string>`''`, bodyPlain: sql<string>`NULL` } as typeof posts);
   const rowShape = { post: postShape, authorName: users.name, authorEmail: users.email, authorId: users.id };
   type JoinedRow = { post: Post; authorName: string | null; authorEmail: string | null; authorId: number | null };
 
@@ -519,8 +831,13 @@ export async function listPosts(
 ): Promise<{ items: PostView[]; total: number }> {
   const cacheable = !opts.random && !opts.excludeId;
   if (!cacheable) return listPostsRaw(opts);
-  const key = `lp:${JSON.stringify({ ...opts, limit: opts.limit ?? 20, offset: opts.offset ?? 0 })}`;
-  return memoQuery(key, SIDEBAR_TTL, () => listPostsRaw(opts));
+  // R157: the memo key is built from the NORMALIZED window too - otherwise
+  // `limit=abc` and `limit=20` (which now produce identical results) would
+  // occupy separate entries, and `-5`/`-3` would key on values that never
+  // reach SQL.
+  const normalized = { ...opts, ...normalizeWindow(opts, 20, opts.windowCap) };
+  const key = `lp:${JSON.stringify(normalized)}`;
+  return memoQuery(key, SIDEBAR_TTL, () => listPostsRaw(normalized));
 }
 
 /**
@@ -553,7 +870,7 @@ export async function searchSingleHit(q: string): Promise<string | null> {
           publishedVisible,
           and(
             ...terms.map((t) =>
-              sql`(${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.excerpt} ILIKE ${"%" + t + "%"} ESCAPE '\\')`,
+              sql`(${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.excerpt} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.bodyPlain} ILIKE ${"%" + t + "%"} ESCAPE '\\')`,
             ),
           ),
         ),
@@ -813,7 +1130,19 @@ export async function relatedByTaxonomy(postId: number, limit = 4): Promise<Post
 
 // ---------------------------------------------------------------- comments
 
-/** Published comments for one content item, oldest first (tree order). */
+/**
+ * Published comments for one content item, oldest first (tree order).
+ *
+ * R154: the 200 cap used to be taken from the OLDEST end - a long thread
+ * silently dropped its TAIL, i.e. the recent discussion readers came for, with
+ * no UI anywhere to reach it (while the comment count and the comments feed
+ * kept advertising the full total). Same cap, opposite window: take the
+ * NEWEST 200, then re-emit them in tree (asc id) order. Under the cap - the
+ * overwhelmingly common case - that is ONE query (desc page, reversed);
+ * only a >200 thread pays a second `inArray` query to restore asc order.
+ * Replies whose parent fell outside the window surface as ROOTS through
+ * buildCommentTree's orphan branch instead of vanishing.
+ */
 export async function listPostComments(
   postId: number,
   postType = "post",
@@ -826,27 +1155,36 @@ export async function listPostComments(
   content: string;
   createdAt: Date;
 }>> {
-  const rows = await db
-    .select({
-      id: comments.id,
-      parentId: comments.parentId,
-      authorName: comments.authorName,
-      authorEmail: comments.authorEmail,
-      authorUrl: comments.authorUrl,
-      content: comments.content,
-      createdAt: comments.createdAt,
-    })
+  const shape = {
+    id: comments.id,
+    parentId: comments.parentId,
+    authorName: comments.authorName,
+    authorEmail: comments.authorEmail,
+    authorUrl: comments.authorUrl,
+    content: comments.content,
+    createdAt: comments.createdAt,
+  };
+  const where = and(
+    eq(comments.postId, postId),
+    eq(comments.postType, postType),
+    eq(comments.status, "published"),
+  );
+  const tail = await db
+    .select(shape)
     .from(comments)
-    .where(
-      and(
-        eq(comments.postId, postId),
-        eq(comments.postType, postType),
-        eq(comments.status, "published"),
-      ),
-    )
-    .orderBy(asc(comments.id))
+    .where(where)
+    .orderBy(desc(comments.id))
     .limit(200);
-  return rows;
+  if (tail.length < 200) return tail.reverse();
+  // Capped: re-fetch EXACTLY the newest window in tree order - a bare
+  // `asc limit 200` here would silently select the OLDEST 200 again (the very
+  // bug this rewrite removes).
+  const ordered = await db
+    .select(shape)
+    .from(comments)
+    .where(and(where, inArray(comments.id, tail.map((r) => r.id))))
+    .orderBy(asc(comments.id));
+  return ordered;
 }
 
 export async function listPostCommentsCached(
@@ -903,6 +1241,67 @@ export async function listComments(opts: {
   return { items: rows, total: Number(totalRows[0]?.n ?? 0) };
 }
 
+/** R147: the comments feed's window - newest APPROVED comments on published
+ * posts, each joined to its post in ONE round trip (feeds render rarely; a
+ * per-comment getPostRow would be N+1). Pages are excluded (postType "post":
+ * a page's comment thread is not what a reader subscribes to). The join IS
+ * the moderation guarantee: pending/spam rows must never reach a public
+ * syndication surface, and unpublished posts must not leak either. */
+export type CommentFeedItem = {
+  id: number;
+  authorName: string;
+  content: string;
+  createdAt: Date;
+  post: { id: number; title: string; url: string };
+};
+
+export async function listCommentFeed(limit: number): Promise<CommentFeedItem[]> {
+  const n = Math.min(Math.max(limit, 1), 100);
+  const rows = await db
+    .select({
+      id: comments.id,
+      postId: comments.postId,
+      authorName: comments.authorName,
+      content: comments.content,
+      createdAt: comments.createdAt,
+    })
+    .from(comments)
+    .innerJoin(posts, eq(comments.postId, posts.id))
+    .where(
+      and(
+        eq(comments.status, "published"),
+        eq(comments.postType, "post"),
+        eq(posts.status, "published"),
+        publishedVisible,
+      ),
+    )
+    .orderBy(desc(comments.id))
+    .limit(n);
+  if (!rows.length) return [];
+  const ids = [...new Set(rows.map((r) => r.postId))];
+  const cfg = await getPermalinkConfig();
+  // R201: only id/slug/title are used to build the post link — never the body.
+  // Selecting the whole row shipped content + body_plain per comment's post.
+  const postRows = await db
+    .select({ id: posts.id, slug: posts.slug, title: posts.title })
+    .from(posts)
+    .where(inArray(posts.id, ids));
+  const byId = new Map(postRows.map((p) => [p.id, p]));
+  const out: CommentFeedItem[] = [];
+  for (const r of rows) {
+    const p = byId.get(r.postId);
+    if (!p) continue;
+    out.push({
+      id: r.id,
+      authorName: r.authorName,
+      content: r.content,
+      createdAt: r.createdAt,
+      post: { id: p.id, title: p.title, url: postUrlFor(cfg, p) },
+    });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- widgets
 
 export async function counts() {
@@ -954,6 +1353,7 @@ export async function archiveGroups(): Promise<
                count(*)::int AS n
         FROM ${posts}
         WHERE ${posts.status} = 'published' AND ${posts.publishedAt} IS NOT NULL
+          AND ${posts.publishedAt} <= now()
         GROUP BY y, m
         ORDER BY y DESC, m DESC`,
     );
@@ -991,7 +1391,7 @@ export type ArchiveItem = {
 };
 
 export async function archiveItems(
-  opts: { year?: number; month?: number; limit?: number } = {},
+  opts: { year?: number; month?: number; limit?: number; offset?: number } = {},
 ): Promise<ArchiveItem[]> {
   const conditions: any[] = [eq(posts.status, "published"), publishedVisible];
   if (opts.year) conditions.push(sql`EXTRACT(YEAR FROM ${posts.publishedAt}) = ${opts.year}`);
@@ -1011,7 +1411,8 @@ export async function archiveItems(
     .from(posts)
     .where(and(...conditions))
     .orderBy(desc(posts.publishedAt), desc(posts.createdAt))
-    .limit(opts.limit ?? 1000);
+    .limit(opts.limit ?? 1000)
+    .offset(opts.offset ?? 0);
   const cfg = await getPermalinkConfig();
   return rows.map((r) => ({
     id: r.id,
@@ -1030,15 +1431,38 @@ export async function archiveItems(
  * One round trip: the visitor INSERT rides a CTE and the UPDATE reads whether
  * it actually inserted (ON CONFLICT DO NOTHING → empty RETURNING for a repeat
  * visitor) to decide the unique_views increment. At Neon RTT two serial
- * statements per pageview are real latency. */
-export async function incrementViews(id: number, ip: string, ua: string): Promise<void> {
+ * statements per pageview are real latency.
+ *
+ * `referrer` (db/migrations/0041) is OPTIONAL and purely additive: the two new
+ * columns ride the SAME INSERT, so the statement count is unchanged, and the UV
+ * decision still reads `exists (select 1 from ins)` untouched.
+ *
+ * The two "no data" shapes are deliberately different:
+ *   - omit `referrer` entirely  -> both columns null. This is the pre-0041
+ *     behaviour, kept for every existing caller (themes, scripts, imports).
+ *   - pass `referrer` with no usable host ("" / garbage) -> kind 'direct',
+ *     host null. "The visitor arrived with no referrer" IS the data.
+ *
+ * Only the HOST is stored; see referrer.ts for why the URL never reaches the
+ * database. The site's own host comes from site-origin's remembered origin, so
+ * an in-site navigation is recorded as 'internal' rather than credited to the
+ * page's own domain as an external source.
+ */
+export async function incrementViews(
+  id: number,
+  ip: string,
+  ua: string,
+  referrer?: string,
+): Promise<void> {
   if (ip || ua) {
     const key = createHash("sha256").update(`${ip}|${ua}`).digest("hex");
+    const host = referrer === undefined ? null : referrerHostOf(referrer) || null;
+    const kind = referrer === undefined ? null : classifyReferrer(referrer, ownHost());
     try {
       await db.execute(sql`
         with ins as (
-          insert into ${postVisitors} ("post_id", "visitor_key")
-          values (${id}, ${key})
+          insert into ${postVisitors} ("post_id", "visitor_key", "referrer_host", "referrer_kind")
+          values (${id}, ${key}, ${host}, ${kind})
           on conflict do nothing
           returning "post_id"
         )
@@ -1072,12 +1496,6 @@ export async function getPostViews(id: number): Promise<number> {
   return row?.views ?? 0;
 }
 
-export async function likePost(id: number): Promise<number> {
-  const [row] = await db
-    .update(posts)
-    .set({ likes: sql`likes + 1` })
-    .where(eq(posts.id, id))
-    .returning({ likes: posts.likes });
-  if (!row) throw new Error("文章不存在");
-  return row.likes;
-}
+// Post likes are NOT here: likePost/unlikePost/likesFor live in post-likes.ts,
+// where a like is a deduped row per (post, visitor) instead of an unconditional
+// `likes + 1` a second browser could farm. This module keeps reads only.

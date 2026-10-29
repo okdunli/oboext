@@ -16,6 +16,8 @@
       : "background:rgba(120,120,130,.18);color:#d4d4d8;";
   }
   function statusText(p) { return p.enabled ? "已启用" : "已禁用"; }
+  function versionBadge(p) { return p.version ? "v" + p.version : "—"; }
+  function authorText(p) { return p.author ? p.author : "—"; }
   function toggleIcon(p) {
     return p.enabled ? "/public/icons/circle-x.svg" : "/public/icons/circle-check.svg";
   }
@@ -35,6 +37,11 @@
       }
     }
     return false;
+  }
+  // Homepage market metadata; only http(s) links become an <a href> (same guard as the themes page).
+  function homepageUrl(p) {
+    var h = p.manifest && p.manifest.homepage;
+    return h && /^https?:\/\//i.test(h) ? h : "";
   }
   function ic(n) {
     return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/' + n + '.svg)"></span>';
@@ -67,15 +74,18 @@
     <div style="flex:1;min-width:0;">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         <strong style="font-size:14px;">{p.name}</strong>
-        {#if p.version}<span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;color:var(--adm-faint);background:var(--adm-hover);border-radius:4px;padding:2px 6px;">v{p.version}</span>{/if}
+        <span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;color:var(--adm-faint);background:var(--adm-hover);border-radius:4px;padding:2px 6px;">{versionBadge(p)}</span>
         <span class="adm-tag" style="{statusStyle(p)}">{statusText(p)}</span>
         {#if !p.installed}
           <span class="adm-tag" style="background:rgba(217,119,6,.15);color:#fbbf24;">文件缺失</span>
         {/if}
       </div>
       {#if p.description}<p style="margin:4px 0 0;font-size:13px;color:var(--adm-muted);line-height:1.5;">{p.description}</p>{/if}
-      <div style="margin-top:6px;display:flex;align-items:center;gap:12px;font-size:11px;color:var(--adm-faint);">
-        {#if p.author}<span>作者：{p.author}</span>{/if}
+      <div style="margin-top:6px;display:flex;align-items:center;gap:12px;font-size:11px;color:var(--adm-faint);flex-wrap:wrap;">
+        <span>作者：{authorText(p)}</span>
+        {#if homepageUrl(p) !== ""}
+        <a href={homepageUrl(p)} target="_blank" rel="noreferrer noopener" style="color:inherit;display:inline-flex;align-items:center;gap:4px;">主页<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/external-link.svg)"></span></a>
+        {/if}
         <span>slug: <code style="font-family:ui-monospace,Menlo,Consolas,monospace;">{p.slug}</code></span>
       </div>
     </div>

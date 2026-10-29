@@ -1,11 +1,4 @@
-/**
- * Plugin HTTP gateway — port of oboext lib/services/plugin-gateway.ts.
- *
- * /api/plugin/<slug>/... requests run through the `api.request` async
- * filter: only an installed, enabled plugin may claim its own slug, and the
- * first plugin that sets `response` wins. An unclaimed path returns null and
- * the caller answers 404.
- */
+// Plugin HTTP gateway — port of Oboext lib/services/plugin-gateway.ts.
 import { HOOKS, applyAsyncFilters } from "./hooks.js";
 import { ensurePluginsLoaded, listPlugins } from "./plugins.js";
 

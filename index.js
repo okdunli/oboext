@@ -17,7 +17,7 @@ export default function handler(req, res) {
   if (!server || typeof server.emit !== 'function') {
     res.statusCode = 500;
     res.setHeader('content-type', 'text/plain; charset=utf-8');
-    res.end('oboext server bundle failed to load');
+    res.end('Oboext server bundle failed to load');
     return;
   }
   server.emit('request', req, res);

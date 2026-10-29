@@ -3,10 +3,12 @@
   import { jsonOk, jsonFail, readBody, apiGate } from "@server/admin";
   import {
     verifyChallengeTicket,
+    assertLoginAllowed,
     recordLoginEvent,
     LOGIN_EVENTS,
     clientIp,
     clientUa,
+    LoginThrottledError,
   } from "@server/auth";
   import { sessionCookiePair, withCookies } from "@server/csrf";
   import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
@@ -26,6 +28,24 @@
 
       const user = await verifyChallengeTicket(ticket);
       if (!user) return jsonFail(t("api.twofa_expired"), 401);
+
+      // A valid ticket already proves the password; the TOTP window is the only
+      // thing left, so throttle it like the password step or it is brute-forceable.
+      const ip = clientIp(request);
+      try {
+        await assertLoginAllowed(user.name, ip);
+      } catch (e) {
+        await recordLoginEvent({
+          eventType: LOGIN_EVENTS.LOCKED,
+          userId: user.id,
+          account: user.name,
+          ip,
+          userAgent: clientUa(request),
+        });
+        if (e instanceof LoginThrottledError)
+          return jsonFail(t("api.throttled", { n: e.minutes }), 429);
+        throw e;
+      }
 
       const verdict = await applyAsyncFilters(HOOKS.authChallengeVerify, {
         user,

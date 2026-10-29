@@ -43,7 +43,7 @@
       </div>
       <div class="adm-field">
         <label>短信签名</label>
-        <input class="adm-input" name="sms.signature" value={g('sms.signature', 'oboext')}>
+        <input class="adm-input" name="sms.signature" value={g('sms.signature', 'Oboext')}>
         <p class="adm-hint" style="margin:4px 0 0;">{"Webhook 模板中可用 {{sign}} 占位符引用此签名。"}</p>
       </div>
 

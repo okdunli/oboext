@@ -1,8 +1,5 @@
 <script>
-  // Tags manager — port of <TaxonomyManager type="tag" />. Original layout:
-  // a horizontal "add" bar on top, then one full-width table below; editing
-  // opens a modal (not a left-hand form, which the earlier 2-column port got
-  // wrong). Persistence: POST/PUT/DELETE /api/tags via admin.js.
+  // Tags manager — port of <TaxonomyManager type="tag" />.
   let d = $data(() => __rvLoad("admin.taxonomies", {}));
   function tags() {
     return d().tags || [];

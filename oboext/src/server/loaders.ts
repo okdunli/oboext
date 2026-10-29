@@ -1,4 +1,5 @@
 // Isomorphic view-model layer.
+import { contentEtag, ifNoneMatch } from "./etag.js";
 import {
   archiveGroups,
   archiveItems,
@@ -8,9 +9,11 @@ import {
   hydrate,
   getSettings,
   getTagBySlug,
+  getPublicAuthor,
   incrementViews,
   categoryPostCounts,
   listCategories,
+  listCommentFeed,
   listPosts,
   listPostComments,
   listPostCommentsCached,
@@ -24,9 +27,12 @@ import {
   type PostView,
   type PostRow,
   type TaxRef,
+  MACHINE_WINDOW_CAP,
 } from "./queries.js";
-import { dbStats } from "./db.js";
-import { getPermalinkConfig, blogIndexUrlFor, categoryUrlFor, tagUrlFor, resolveSitePath, paginate, type PermalinkConfig } from "./links.js";
+import { likedPostsFor, visitorKeyFromCookieHeader } from "./post-likes.js";
+import { buildRobotsTxt } from "./sitemap.js";
+import { dbStats, rawQuery } from "./db.js";
+import { getPermalinkConfig, blogIndexUrlFor, pageIndexUrlFor, categoryUrlFor, tagUrlFor, authorUrlFor, AUTHOR_BASE_SEGMENT, resolveSitePath, paginate, postUrlFor, type PermalinkConfig } from "./links.js";
 import { resolveVirtualRoute, type VirtualSiteRoute } from "./virtual-routes.js";
 import { resolveCommentConfig } from "./comments-config.js";
 import { registerView } from "./register-view.js";
@@ -34,7 +40,8 @@ import { getPublishedPageRow, hydrate as hydratePage, listPublishedPages } from 
 import * as R from "./render.js";
 import { adjacentHtml, adjacentKeyOf, adjacentRelLinks } from "./adjacent.js";
 import * as admin from "./admin-loaders.js";
-import { getMenuByLocation } from "./menus.js";
+import { getMenuByLocation, localizeMenu } from "./menus.js";
+import { pageNum } from "./paging.js";
 import { getAreaWidgets } from "./widgets.js";
 import { getActiveThemeSlug, getActiveThemeRenderConfig, getActiveThemeSettings, getThemeManifest } from "./themes.js";
 import { themeToCss, resolveThemeConfig } from "./theme-tokens.js";
@@ -42,6 +49,7 @@ import { skyscraperBridgeRoot, skyscraperBridgeDark, themeColorMetas } from "./t
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { getNotFoundSettings } from "./not-found-config.js";
+import { redirectFor as ruleFor } from "./redirects.js";
 import { memoQuery, peekMemo, kvGet, kvSet } from "./cache.js";
 import { getPublicRegisterConfig } from "./members.js";
 import { maintenanceGate, type MaintenanceSettings } from "./maintenance.js";
@@ -49,18 +57,21 @@ import { renderUserCenter, renderUserCenterGuest } from "./account.js";
 import { loginCardHtml, secretEntryPageHtml } from "./login-card.js";
 import { getAdminSecurity } from "./security.js";
 import { can } from "./admin.js";
+import { recordSearchTerm } from "./search-terms.js";
 import { getThemeChrome, publicAssetHref, themeScriptTags, themeLayout, catIconName, type MenuItem } from "./theme-chrome.js";
-import { dialectProfile } from "./dialects.js";
+import { dialectProfile, blogListSize, categoryListSize, tagListSize } from "./dialects.js";
 import { createLogger } from "./logger.js";
 import {
   DEFAULT_LOCALE,
   makeT,
   htmlLangOf,
   hreflangLinks,
+  isPairingActive,
   localeHref,
   canonicalPath,
   otherLocale,
   prefixLocaleUrls,
+  setPairingActive,
   splitLocalePath,
   type Locale,
   type Translate,
@@ -79,10 +90,37 @@ export type Ctx = {
   pathname: string;
   ip: string;
   ua: string;
+  /** Raw `Referer` header of this request (0041 traffic sources). "" when absent. */
+  referer?: string;
   user?: unknown;
   /** Request locale, set by the middleware from the /en path prefix. */
   locale?: string;
+  /** Raw `cookie` header of this request ("" when absent). The post-likes
+   *  backfill reads visitor_key off it; minting the cookie is the API's job. */
+  cookie?: string;
 };
+
+/** This request's visitor identity, or null when it carries no visitor_key
+ *  yet — a brand-new visitor has nothing to backfill, so no query is issued. */
+function visitorKeyOf(ctx?: Ctx): string | null {
+  return visitorKeyFromCookieHeader(ctx?.cookie);
+}
+
+/** The one batched read a list page runs for this visitor's like state. Issued
+ *  BEFORE the return so the window's items and the payload's `likedIds` share
+ *  the SAME round trip (one query per page, never N+1). No visitor_key yet ->
+ *  an empty set, no query at all. */
+function likedPFor(ctx: Ctx | undefined, items: { id: number }[]): Promise<Set<number>> {
+  return likedPostsFor(visitorKeyOf(ctx), items.map((i) => i.id));
+}
+
+/** Attach each item's `liked` flag once that read has resolved (pure). */
+function markLiked<T extends { id: number }>(
+  items: T[],
+  liked: Set<number>,
+): (T & { liked: boolean })[] {
+  return items.map((i) => ({ ...i, liked: liked.has(i.id) }));
+}
 
 // ------------------------------------------------------------- plugin hooks
 
@@ -111,6 +149,44 @@ async function pluginFooterHtml(kind: string): Promise<string> {
   return `<div id="oboe-footer-hooks" aria-hidden="true" style="display:none">${joined}</div>`;
 }
 
+/**
+ * The subscribe door, on every public page's footer (site discoverability).
+ *
+ * Placed INSIDE the theme's own <footer> — just before its closing tag —
+ * rather than as a `footerMenu` item, because only the default theme renders
+ * footerMenu (skyscraper's R.footerHtml ignores it, and so do bluemix/codeman/
+ * pseudolinear), and appending after tc.footer()'s whole string would park the
+ * link outside <footer> on every theme. Every one of the five chrome modules
+ * emits exactly one `</footer>`, so the splice is well defined; a future theme
+ * that does not falls back to a plain append, which still keeps the link
+ * visible.
+ *
+ * The styling is inline and token-driven rather than a theme class: the five
+ * themes share no footer-link class (bmx `footer a`, codeman `.cm-footer a`,
+ * skyscraper `footer .links a`, ...), and a bare anchor reads as an
+ * accident. The pill reuses --accent/--accent-text — the very tokens the
+ * appearance panel writes — so it follows the site's palette on every theme
+ * and both colour schemes, and it costs no stylesheet edit (the red line on
+ * this round is that `oboext/public/` and `themes/*` stay untouched).
+ *
+ * The href stays root-relative on purpose: chrome() runs the whole footer
+ * through prefixLocaleUrls(), so an /en reader gets /en/newsletter for free
+ * and the default locale keeps byte-identical output.
+ */
+function withNewsletterFooter(html: string, t: Translate): string {
+  if (!html) return html;
+  const link =
+    `<div data-newsletter-cta style="margin:1.25rem 0 .25rem;text-align:center">` +
+    `<a href="/newsletter" data-newsletter-link style="display:inline-flex;align-items:center;gap:.4rem;` +
+    `padding:.5rem 1.1rem;border-radius:999px;border:1px solid var(--border, rgba(127,127,127,.35));` +
+    `background:var(--surface, transparent);color:var(--accent, inherit);font-size:.8125rem;font-weight:600;` +
+    `line-height:1.2;text-decoration:none">` +
+    `${R.esc(t("newsletter.footer_link"))}</a></div>`;
+  const closeAt = html.lastIndexOf("</footer>");
+  if (closeAt < 0) return html + link;
+  return html.slice(0, closeAt) + link + html.slice(closeAt);
+}
+
 function verificationMetaHtml(raw: unknown): string {
   const v = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const pick = (...keys: string[]) => {
@@ -130,6 +206,26 @@ function verificationMetaHtml(raw: unknown): string {
   if (bing) out.push(`<meta name="msvalidate.01" content="${R.esc(bing)}">`);
   if (yahoo) out.push(`<meta name="y_key" content="${R.esc(yahoo)}">`);
   return out.join("\n");
+}
+
+/**
+ * twitter:site meta for the stored X/Twitter handle. The value is a public
+ * handle, so it is escaped and length-capped; "@" is accepted with or without
+ * the leading "@" and normalised to the form X expects.
+ */
+function twitterSiteMetaHtml(raw: unknown): string {
+  const h = typeof raw === "string" ? raw.trim() : "";
+  if (!h || !/^@?[A-Za-z0-9_]{1,15}$/.test(h)) return "";
+  return `<meta name="twitter:site" content="${R.esc(h.startsWith("@") ? h : `@${h}`)}">`;
+}
+
+/**
+ * The description a post/page falls back to when it has none of its own.
+ * R225: the SEO panel's "默认描述" is that fallback - it was stored and never
+ * read, so a content-free post borrowed the site tagline instead.
+ */
+function defaultDescription(settings: { siteDescription?: string | null; seoDefaultDescription?: string | null }): string {
+  return settings.seoDefaultDescription || settings.siteDescription || "";
 }
 
 /**
@@ -210,8 +306,6 @@ function chromePageKind(pathname: string, cfg: PermalinkConfig): string {
   return "archive";
 }
 
-const pageNum = (v: unknown): number => Math.max(1, Number(v) || 1);
-
 // ------------------------------------------------------------------- chrome
 
 // Built-in sidebar used until an admin defines a "sidebar" menu; mirrors
@@ -220,7 +314,15 @@ const pageNum = (v: unknown): number => Math.max(1, Number(v) || 1);
 const sidebarFallback = (cfg: PermalinkConfig, t: Translate): R.SkyItem[] => [
   { id: "s1", label: t("sidebar.home"), url: "/" },
   { id: "s2", label: t("sidebar.all_posts"), url: blogIndexUrlFor(cfg) },
+  // R178: the page directory is only linkable when it has a URL — a disabled
+  // page base leaves pageIndexUrlFor empty and the pages stay root slugs.
+  ...(pageIndexUrlFor(cfg)
+    ? [{ id: "s3", label: t("sidebar.all_pages"), url: pageIndexUrlFor(cfg) }]
+    : []),
 ];
+
+// Menu label policy lives in menus.ts (localizeMenu); only the defaults the
+// program itself seeded are translated, admin-typed labels stay literal.
 
 // Plain trusted-string chrome pieces. chrome() hands them to the .rose
 // templates (emitted via {@html}); the 404 route rides the same chrome
@@ -301,7 +403,9 @@ async function chromeData(pathname: string, t: Translate) {
           : "");
   const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
   const menuItems: R.SkyItem[] =
-    sideMenu && sideMenu.items.length ? (sideMenu.items as R.SkyItem[]) : sidebarFallback(cfg, t);
+    sideMenu && sideMenu.items.length
+      ? localizeMenu(sideMenu.items as R.SkyItem[], t)
+      : sidebarFallback(cfg, t);
   const tc = getThemeChrome(themeSlug);
   // Theme JS, mtime-stamped. Built here (not as `{chrome().x}` attributes in
   // the .rose layout) because the template compiler only interpolates
@@ -317,16 +421,19 @@ async function chromeData(pathname: string, t: Translate) {
     themeScriptTags(themeSlug) +
     `<script src="${publicAssetHref("reading-mode.js")}" defer></script>` +
     `<script src="${publicAssetHref("comments.js")}" defer></script>`;
-  const headerItems: MenuItem[] = (headerMenu?.items ?? []) as MenuItem[];
+  const headerItems: MenuItem[] = localizeMenu((headerMenu?.items ?? []) as MenuItem[], t);
 
-  const footerHtml = tc.footer(
-    {
-      ...settings,
-      t,
-      footerContainerAlign: (themeSettings as Record<string, unknown>).footerContainerAlign,
-      footerMenu: (footerMenu?.items ?? []) as MenuItem[],
-    },
-    R.widgetAreaHtml(footerWidgets, "sk-footer-widgets", t),
+  const footerHtml = withNewsletterFooter(
+    tc.footer(
+      {
+        ...settings,
+        t,
+        footerContainerAlign: (themeSettings as Record<string, unknown>).footerContainerAlign,
+        footerMenu: localizeMenu((footerMenu?.items ?? []) as MenuItem[], t),
+      },
+      R.widgetAreaHtml(footerWidgets, "sk-footer-widgets", t),
+    ),
+    t,
   );
 
   // renders customCss + customHead at body open and customFooter + the
@@ -346,8 +453,14 @@ async function chromeData(pathname: string, t: Translate) {
     siteTitle: settings.siteTitle ?? "",
     siteDescription: settings.siteDescription ?? "",
     logoUrl: settings.logoUrl ?? "",
+    ogImageUrl: settings.ogImageUrl ?? "",
+    twitterCard: settings.twitterCard ?? "",
+    seoRobots: settings.seoRobots ?? "",
     varsHtml,
     siteHead: verificationMetaHtml(settings.verifications),
+    // R223: the site's X/Twitter handle. Stored in settings for three rounds
+    // and never rendered anywhere, so every card went out unattributed.
+    twitterSiteHtml: twitterSiteMetaHtml(settings.twitterSite),
     themeColorHtml: themeColorMetas(renderConfig.background),
     siteBodyOpen,
     siteBodyEnd,
@@ -414,9 +527,16 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
   // swaps #sk-main, so a soft navigation would leave the rest of the chrome
   // (nav, footer) in the old language. pjax.js keeps the href in sync
   // with location.pathname on rv:nav, so the pill never goes stale.
+  // R275: when THIS document is one half of a translation pair, the switcher
+  // lands on the OTHER HALF of the pair (a reader reading the zh post gets
+  // the en twin of the same article) instead of the other locale's index.
+  // The pair travels through a request-scoped global: chrome() runs in a
+  // different loader dispatch than resolve() and there is no shared view here.
+  const pairUrl = (ctx as { pairSwitchTarget?: string } | undefined)?.pairSwitchTarget;
+  const switchTarget = pairUrl ?? localeHref(pathname, otherLocale(locale));
   const localeSwitch = isAdmin
     ? ""
-    : `<a data-locale-switch data-no-pjax href="${R.esc(localeHref(pathname, otherLocale(locale)))}" ` +
+    : `<a data-locale-switch data-no-pjax href="${R.esc(switchTarget)}" ` +
       `style="position:fixed;right:14px;bottom:14px;z-index:2147483000;display:inline-flex;align-items:center;` +
       `gap:6px;padding:7px 13px;border-radius:999px;border:1px solid var(--border,#d4d4d8);` +
       `background:var(--surface,#ffffff);color:var(--text,#18181b);font-size:13px;line-height:1;` +
@@ -427,10 +547,15 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
 
     siteUrl: origin,
     siteHead: isAdmin ? "" : d.siteHead,
+    twitterSiteHtml: isAdmin ? "" : d.twitterSiteHtml,
     themeColorHtml: d.themeColorHtml,
     // Site-level social card: the logo when one is set (absolute), the meta
     // set built from it, and "" for both when it is not.
-    ogImage: d.logoUrl ? (d.logoUrl.startsWith("http") ? d.logoUrl : `${origin}${d.logoUrl}`) : "",
+    ogImage: R.socialImage(d.logoUrl, origin, d.ogImageUrl),
+    // R225: the robots / card kind the layout renders, so the panel's choices
+    // are honoured on the routes whose head comes from the layout, not a loader.
+    robots: R.robotsFor(d.seoRobots),
+    twitterCard: R.twitterCardKind(d.twitterCard, R.socialImage(d.logoUrl, origin, d.ogImageUrl)),
     ogImageHtml: isAdmin ? "" : R.socialImageMetas(d.logoUrl, origin, d.siteTitle),
     themeHead: d.varsHtml + d.headExtra,
     themeSlug: d.themeSlug,
@@ -566,6 +691,31 @@ type HomeBundle = {
 async function home(ctx?: Ctx) {
   const locale = localeOf(ctx);
   const t = makeT(locale);
+  // Newsletter landing notice: the endpoints 302 back to the home URL with
+  // ?subscribed=1 / ?unsubscribed=1 / ?newsletter_error=1 (the failure leg
+  // already has its own param), and the page otherwise renders nothing. Home
+  // turns the param into a notice the catch-all prints as the first thing in
+  // the content area; no param -> kind null, so a plain home visit shows none.
+  const noticeKind =
+    ctx?.query?.get("subscribed") === "1"
+      ? "subscribed"
+      : ctx?.query?.get("unsubscribed") === "1"
+        ? "unsubscribed"
+        : ctx?.query?.get("newsletter_error") === "1"
+          ? "error"
+          : null;
+  const notice = {
+    kind: noticeKind,
+    text: noticeKind
+      ? t(
+          noticeKind === "subscribed"
+            ? "newsletter.subscribed"
+            : noticeKind === "unsubscribed"
+              ? "newsletter.unsubscribed"
+              : "newsletter.invalid_token",
+        )
+      : "",
+  };
   // Everything home reads is independent of everything else it reads: the old
   // shape gated three waves behind each other (settings/themeSlug first, the
   // list queries second, the sidebar batch third), so a cold home paid ~3
@@ -616,23 +766,33 @@ async function home(ctx?: Ctx) {
   const origin0 = ctx?.origin ?? "";
   const homeCanonical = `${origin0}${canonicalPath("/", locale)}`;
   const siteName = settings.siteTitle ?? "";
-  const homeOgImage = settings.logoUrl ? R.esc(settings.logoUrl) : "";
+  // og:image must be absolute (the OG spec: scrapers silently drop a relative
+  // path). Prefix the site origin when logoUrl is a root-relative upload.
+  const homeOgImage = R.esc(R.socialImage(settings.logoUrl, origin0, settings.ogImageUrl));
   const homeHead =
     `<link rel="canonical" href="${R.esc(homeCanonical)}">` +
     `<meta property="og:site_name" content="${R.esc(siteName)}">` +
-    (homeOgImage
-      ? `<meta property="og:image" content="${homeOgImage}">` +
-        `<meta name="twitter:image" content="${homeOgImage}">`
-      : "") +
+    `<meta property="og:image" content="${homeOgImage}">` +
+    `<meta name="twitter:image" content="${homeOgImage}">` +
+    `<meta name="twitter:card" content="${R.twitterCardKind(settings.twitterCard, homeOgImage)}">` +
     R.jsonLd({
       "@context": "https://schema.org",
       "@type": "WebSite",
+      // Same @id the seo-schema plugin's node uses: two WebSite nodes on one
+      // page merge into one entity instead of competing.
+      "@id": `${origin0}/#website`,
       name: siteName,
       description: settings.siteDescription ?? "",
       url: homeCanonical,
+      inLanguage: locale,
       potentialAction: {
         "@type": "SearchAction",
-        target: `${homeCanonical}search?q={search_term_string}`,
+        // Build from localeHref("/search", locale), NOT homeCanonical: for /en
+        // that is "/en/search", whereas homeCanonical ("/en") + "search"
+        // concatenates into the broken "/ensearch?q=". Navigation (where the
+        // /en user's query lands) rides localeHref; the document's IDENTITY
+        // (canonical) merged to the bare path in R269.
+        target: `${origin0}${localeHref("/search", locale)}?q={search_term_string}`,
         "query-input": "required name=search_term_string",
       },
     });
@@ -658,6 +818,7 @@ async function home(ctx?: Ctx) {
         settings: { ...settings, t },
         themeSettings: ts,
       }),
+      notice,
     };
   }
 
@@ -749,6 +910,7 @@ async function home(ctx?: Ctx) {
       homeTop: R.widgetAreaHtml(homeTopItems, "container-np bmx-ad-area", t),
       sideWidgets: R.widgetAreaHtml(homeSideItems, "bmx-ad-area", t),
     }),
+    notice,
   };
 }
 
@@ -773,12 +935,9 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
   // The chrome LAYOUT dialect this theme declares (see theme-api).
   const layout = themeLayout(themeSlug);
 
-  const perPage =
-    layout === "bluemix"
-      ? Math.min(100, Math.max(1, Number(settings.postsPerPage) || 10))
-      : layout === "skyscraper"
-        ? settings.postsPerPage || 10
-        : settings.postsPerPage || 12;
+  // R148: window size from the shared helpers (dialects.ts) - the sitemap
+  // computes page counts from the very same functions.
+  const perPage = blogListSize(layout, settings.postsPerPage);
   const page = pageNum(payload.page);
   // R284: the /en tree lists PAIRED en posts (they are self-contained
   // documents with their own hreflang cluster) instead of re-listing the zh
@@ -804,6 +963,9 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
   }
   const { items, total } = window;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
+  // R146: an out-of-range page used to render a 200 with an empty window (a
+  // soft-404 crawlers would happily index). A page past the last one is gone.
+  if (page > totalPages) return { notFound: true };
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const blogIndex = blogIndexUrlFor(cfg);
   const [widgets, drawerPosts, sidebarData] = await sideP;
@@ -811,28 +973,51 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
 
   const siteTitle = settings.siteTitle ?? "";
   const seoTitle = t("list.seo_title", { site: siteTitle });
+  // R146: paginated pages SELF-canonicalise - page 2+ used to emit canonical
+  // (and og:url) pointing at page 1, telling crawlers the paginated window is
+  // a duplicate of the index. The title also gains a page marker so SERP
+  // snippets of consecutive pages can differ.
+  const blogHeadTitle = page > 1 ? `${seoTitle} - ${t("list.seo_page", { n: page })}` : seoTitle;
+  // og/twitter image must be absolute (OG spec); prefix origin for a relative logo.
+  const listOgImage = R.esc(R.socialImage(settings.logoUrl, ctx?.origin ?? "", settings.ogImageUrl));
   const blogUrl = `${ctx?.origin ?? ""}${canonicalPath(blogIndex, locale)}`;
+  const blogPageUrl = page > 1 ? `${blogUrl}?page=${page}` : blogUrl;
+  // One batched read for this window: the ids the visitor already liked, for
+  // the payload's `likedIds` AND the items' own `liked` flags (same round trip).
+  const likedP = likedPFor(ctx, items);
   return {
-    headTitle: seoTitle,
+    likedIds: [...(await likedP)].sort((a, b) => a - b),
+    headTitle: blogHeadTitle,
     head:
-      `<link rel="canonical" href="${R.esc(blogUrl)}">` +
+      `<link rel="canonical" href="${R.esc(blogPageUrl)}">` +
       `<meta name="description" content="${R.esc(settings.siteDescription ?? "")}">` +
-      `<meta name="robots" content="index, follow">` +
-      `<meta property="og:title" content="${R.esc(seoTitle)}">` +
+      `<meta name="robots" content="${R.robotsFor(settings.seoRobots)}">` +
+      `<meta property="og:title" content="${R.esc(blogHeadTitle)}">` +
       `<meta property="og:description" content="${R.esc(settings.siteDescription ?? "")}">` +
-      `<meta property="og:url" content="${R.esc(blogUrl)}">` +
+      `<meta property="og:url" content="${R.esc(blogPageUrl)}">` +
       `<meta property="og:type" content="website">` +
       `<meta property="og:site_name" content="${R.esc(siteTitle)}">` +
-      (settings.logoUrl ? `<meta property="og:image" content="${R.esc(settings.logoUrl)}">` : "") +
-      `<meta name="twitter:card" content="summary_large_image">` +
-      `<meta name="twitter:title" content="${R.esc(seoTitle)}">` +
+      (listOgImage ? `<meta property="og:image" content="${listOgImage}">` : "") +
+      `<meta name="twitter:card" content="${R.twitterCardKind(settings.twitterCard, listOgImage)}">` +
+      `<meta name="twitter:title" content="${R.esc(blogHeadTitle)}">` +
       `<meta name="twitter:description" content="${R.esc(settings.siteDescription ?? "")}">` +
-      (settings.logoUrl ? `<meta name="twitter:image" content="${R.esc(settings.logoUrl)}">` : ""),
+      (listOgImage ? `<meta name="twitter:image" content="${listOgImage}">` : "") +
+      R.collectionJsonLd({
+        url: blogPageUrl,
+        title: blogHeadTitle,
+        description: settings.siteDescription ?? "",
+        inLanguage: locale,
+        items: items.map((p) => ({ title: p.title, url: `${ctx?.origin ?? ""}${p.url}` })),
+      }) +
+      R.breadcrumbListJsonLd([
+        { name: t("crumb.home"), url: `${ctx?.origin ?? ""}${canonicalPath("/", locale)}` },
+        { name: t("list.all"), url: blogUrl },
+      ]),
     main: tc.listPage({
 
       title: layout === "bluemix" ? t("list.latest_bm", { n: total }) : t("list.all"),
       sub: t("list.sub", { n: total, page, total: totalPages }),
-      items,
+      items: markLiked(items, await likedP),
       page,
       totalPages,
       hrefFor: (p) => paginate(blogIndex, p),
@@ -876,20 +1061,26 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
   const isSk = layout === "skyscraper";
   // 0 means "follow the admin setting" (skyscraper); every other dialect
   // carries a fixed page size in its profile.
-  const catPerPage = dialectProfile(layout).catPerPage || settings.postsPerPage || 10;
+  const catPerPage = categoryListSize(layout, settings.postsPerPage);
   // Category listing: memoize the page's post window for 2 minutes (a new
   // post surfaces on refresh or an admin write invalidates by TTL).
   const catKey = `cat:${payload.slug}:${page}:${themeSlug}`;
   const cachedCat = kvGet<{ items: any[]; total: number }>(catKey);
+  // R146: every layout windows for real. Non-skyscraper layouts used to pass
+  // `offset: 0` plus a `page` option that PostQuery has never had (a silently
+  // ignored property) - so /cat?page=2 rendered the IDENTICAL window as page
+  // 1, and content past the dialect's page size was unreachable: the pager was
+  // hidden too (showPager: false below). Same window math as blogList now.
   const { items, total } = cachedCat ?? await listPosts({
     status: "published",
     categorySlug: payload.slug,
     limit: catPerPage,
-    offset: isSk ? (page - 1) * catPerPage : 0,
-    ...(isSk ? {} : { page }),
+    offset: (page - 1) * catPerPage,
   });
   if (!cachedCat) kvSet(catKey, { items, total }, 120);
   const totalPages = Math.max(1, Math.ceil(total / catPerPage));
+  // R146: out-of-range page = real 404, not a 200 with an empty window.
+  if (page > totalPages) return { notFound: true };
   const catUrl = categoryUrlFor(cfg, category);
   const pluginHead = await pluginHeadHtml({
     kind: "taxonomy",
@@ -911,12 +1102,49 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     ? `${category.description ? `<span>${category.description} · </span>` : ""}${t("list.sub", { n: total, page, total: totalPages })}`
     : "";
   const catCanonical = `${ctx.origin ?? ""}${canonicalPath(catUrl, locale)}`;
+  // R146: self-canonical per page + page-marked title (was: every page
+  // canonicalised to the bare category, i.e. page 2 labelled a duplicate).
+  const catPageUrl = page > 1 ? `${catCanonical}?page=${page}` : catCanonical;
+  const catHeadTitle =
+    `${t("list.category_title", { name: category.name })} - ${settings.siteTitle ?? ""}` +
+    (page > 1 ? ` - ${t("list.seo_page", { n: page })}` : "");
+  const catOgImage = R.esc(R.socialImage(settings.logoUrl, ctx.origin ?? "", settings.ogImageUrl));
+  const catDesc = category.description || settings.siteDescription || "";
+  // One batched read for this window: the ids the visitor already liked, for
+  // the payload's `likedIds` AND the items' own `liked` flags (same round trip).
+  const likedP = likedPFor(ctx, items);
   return {
-    headTitle: `${t("list.category_title", { name: category.name })} - ${settings.siteTitle ?? ""}`,
+    likedIds: [...(await likedP)].sort((a, b) => a - b),
+    headTitle: catHeadTitle,
     head:
-      `<link rel="canonical" href="${R.esc(catCanonical)}">` +
-      `<meta name="description" content="${R.esc(category.description || settings.siteDescription || "")}">` +
-      `<meta name="robots" content="index, follow">`,
+      `<link rel="canonical" href="${R.esc(catPageUrl)}">` +
+      // R160: the category's own feed is discoverable from the category page.
+      `<link rel="alternate" type="application/rss+xml" title="${R.esc(t("list.category_title", { name: category.name }))}" href="${R.esc(catCanonical)}/feed.xml">` +
+      // R162: and its JSON twin, same discovery contract.
+      `<link rel="alternate" type="application/feed+json" href="${R.esc(catCanonical)}/feed.json">` +
+      `<meta name="description" content="${R.esc(catDesc)}">` +
+      `<meta name="robots" content="${R.robotsFor(settings.seoRobots)}">` +
+      `<meta property="og:title" content="${R.esc(catHeadTitle)}">` +
+      `<meta property="og:description" content="${R.esc(catDesc)}">` +
+      `<meta property="og:url" content="${R.esc(catPageUrl)}">` +
+      `<meta property="og:type" content="website">` +
+      `<meta property="og:site_name" content="${R.esc(settings.siteTitle ?? "")}">` +
+      (catOgImage ? `<meta property="og:image" content="${catOgImage}">` : "") +
+      `<meta name="twitter:card" content="${R.twitterCardKind(settings.twitterCard, catOgImage)}">` +
+      `<meta name="twitter:title" content="${R.esc(catHeadTitle)}">` +
+      `<meta name="twitter:description" content="${R.esc(catDesc)}">` +
+      (catOgImage ? `<meta name="twitter:image" content="${catOgImage}">` : "") +
+      R.collectionJsonLd({
+        url: catPageUrl,
+        title: catHeadTitle,
+        description: catDesc,
+        inLanguage: locale,
+        items: items.map((p) => ({ title: p.title, url: `${ctx.origin ?? ""}${p.url}` })),
+      }) +
+      R.breadcrumbListJsonLd([
+        { name: t("crumb.home"), url: `${ctx.origin ?? ""}${canonicalPath("/", locale)}` },
+        { name: category.name, url: catCanonical },
+      ]),
     pluginHead,
     main: tc.listPage({
       title:
@@ -925,11 +1153,14 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
           : t("list.category_title", { name: category.name }),
       crumbLast: category.name,
       sub,
-      items,
+      items: markLiked(items, await likedP),
       page,
       totalPages,
       hrefFor: (n) => paginate(catUrl, n),
-      showPager: isSk ? total > catPerPage : false,
+      // R146: the pager shows whenever there is more to page through - it used
+      // to be skyscraper-only, which (paired with the dead non-sk offset) made
+      // content past the first window unreachable for every other layout.
+      showPager: total > catPerPage,
       hero: items.slice(0, 5),
       cats,
       blogIndex: blogIndexUrlFor(cfg),
@@ -971,14 +1202,19 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
   if (!tag) return { notFound: true };
 
   const isSk = layout === "skyscraper";
-  const tagPerPage = isSk ? settings.postsPerPage || 10 : 12;
+  const tagPerPage = tagListSize(layout, settings.postsPerPage);
+  // R146: same fix as categoryList - non-skyscraper layouts passed offset 0
+  // (with no page option existing), so /tag?page=2 was byte-identical to
+  // page 1 and content past the window was unreachable. Real windowing now.
   const { items, total } = await listPosts({
     status: "published",
     tagSlug: payload.slug,
     limit: tagPerPage,
-    offset: isSk ? (page - 1) * tagPerPage : 0,
+    offset: (page - 1) * tagPerPage,
   });
   const totalPages = Math.max(1, Math.ceil(total / tagPerPage));
+  // R146: out-of-range page = real 404, not a 200 with an empty window.
+  if (page > totalPages) return { notFound: true };
   const tagUrl = tagUrlFor(cfg, tag);
   const pluginHead = await pluginHeadHtml({
     kind: "taxonomy",
@@ -997,27 +1233,200 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
 
   const contentTc = isSk ? tc : getThemeChrome("default");
   const tagCanonical = `${ctx.origin ?? ""}${canonicalPath(tagUrl, locale)}`;
+  // R146: self-canonical per page + page-marked title (mirrors category/blog).
+  const tagPageUrl = page > 1 ? `${tagCanonical}?page=${page}` : tagCanonical;
+  const tagHeadTitle =
+    `${t("list.tag_title", { name: tag.name })} - ${settings.siteTitle ?? ""}` +
+    (page > 1 ? ` - ${t("list.seo_page", { n: page })}` : "");
+  const tagOgImage = R.esc(R.socialImage(settings.logoUrl, ctx.origin ?? "", settings.ogImageUrl));
+  const tagDesc = settings.siteDescription || "";
+  // One batched read for this window: the ids the visitor already liked, for
+  // the payload's `likedIds` AND the items' own `liked` flags (same round trip).
+  const likedP = likedPFor(ctx, items);
   return {
-    headTitle: `${t("list.tag_title", { name: tag.name })} - ${settings.siteTitle ?? ""}`,
+    likedIds: [...(await likedP)].sort((a, b) => a - b),
+    headTitle: tagHeadTitle,
     head:
-      `<link rel="canonical" href="${R.esc(tagCanonical)}">` +
-      `<meta name="description" content="${R.esc(settings.siteDescription || "")}">` +
-      `<meta name="robots" content="index, follow">`,
+      `<link rel="canonical" href="${R.esc(tagPageUrl)}">` +
+      // R160: the tag's own feed is discoverable from the tag page.
+      `<link rel="alternate" type="application/rss+xml" title="${R.esc(t("list.tag_title", { name: tag.name }))}" href="${R.esc(tagCanonical)}/feed.xml">` +
+      // R162: and its JSON twin (no title: JSON Feed alternates carry none).
+      `<link rel="alternate" type="application/feed+json" href="${R.esc(tagCanonical)}/feed.json">` +
+      `<meta name="description" content="${R.esc(tagDesc)}">` +
+      `<meta name="robots" content="${R.robotsFor(settings.seoRobots)}">` +
+      `<meta property="og:title" content="${R.esc(tagHeadTitle)}">` +
+      `<meta property="og:description" content="${R.esc(tagDesc)}">` +
+      `<meta property="og:url" content="${R.esc(tagPageUrl)}">` +
+      `<meta property="og:type" content="website">` +
+      `<meta property="og:site_name" content="${R.esc(settings.siteTitle ?? "")}">` +
+      (tagOgImage ? `<meta property="og:image" content="${tagOgImage}">` : "") +
+      `<meta name="twitter:card" content="${R.twitterCardKind(settings.twitterCard, tagOgImage)}">` +
+      `<meta name="twitter:title" content="${R.esc(tagHeadTitle)}">` +
+      `<meta name="twitter:description" content="${R.esc(tagDesc)}">` +
+      (tagOgImage ? `<meta name="twitter:image" content="${tagOgImage}">` : "") +
+      R.collectionJsonLd({
+        url: tagPageUrl,
+        title: tagHeadTitle,
+        description: tagDesc,
+        inLanguage: locale,
+        items: items.map((p) => ({ title: p.title, url: `${ctx.origin ?? ""}${p.url}` })),
+      }) +
+      R.breadcrumbListJsonLd([
+        { name: t("crumb.home"), url: `${ctx.origin ?? ""}${canonicalPath("/", locale)}` },
+        { name: `#${tag.name}`, url: tagCanonical },
+      ]),
     pluginHead,
     main: contentTc.listPage({
       title: t("list.tag_title", { name: tag.name }),
       crumbLast: `#${tag.name}`,
 
       sub: isSk ? t("list.sub", { n: total, page, total: totalPages }) : "",
-      items,
+      items: markLiked(items, await likedP),
       page,
       totalPages,
       hrefFor: (n) => paginate(tagUrl, n),
-      showPager: isSk ? total > tagPerPage : false,
+      // R146: pager whenever there is more to page through (was skyscraper-only).
+      showPager: total > tagPerPage,
       variant: "term",
       widgets,
       drawerPosts,
 
+      sidebarData,
+      settings: { ...settings, t },
+      themeSettings: ts,
+    }),
+  };
+}
+
+/**
+ * R180: the public author archive, `/author/<id>`.
+ *
+ * Why id and not a slug or the name: `users.name` carries a UNIQUE index but
+ * there is no slug column, and an email is a private address the site must not
+ * publish (the feeds already emit display names only). The id is stable across
+ * renames, which matters because a theme byline and every post view carry it —
+ * a slug would break every existing link the moment someone edited their
+ * display name. Nothing private leaves this loader: `getPublicAuthor` projects
+ * id/name/avatar/bio and the archive 404s when the account has no public post,
+ * so it never becomes a thin-content page a crawler can index.
+ */
+async function authorList(payload: { authorId: number; page?: number }, ctx: Ctx) {
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
+  const page = pageNum(payload.page);
+  const themeSlugP = safe(getActiveThemeSlug());
+  const tsP = safe(getActiveThemeSettings());
+  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s !== "skyscraper", t);
+  const [author, settings, cfg, themeSlug, ts] = await Promise.all([
+    getPublicAuthor(payload.authorId),
+    getSettings(),
+    getPermalinkConfig(),
+    themeSlugP,
+    tsP,
+  ]);
+  if (!author) return { notFound: true };
+  const origin = ctx.origin ?? "";
+  // The listing window follows the post index: an author archive is a plain
+  // "the posts, filtered" listing, so the admin's own per-page setting has to
+  // move it — categoryListSize is dialect-fixed and would ignore it.
+  const layout = themeLayout(themeSlug);
+  const isSk = layout === "skyscraper";
+  const perPage = blogListSize(layout, settings.postsPerPage);
+  const aKey = `author:${payload.authorId}:${page}:${themeSlug}`;
+  const cachedA = kvGet<{ items: any[]; total: number }>(aKey);
+  const { items, total } = cachedA ?? (await listPosts({
+    status: "published",
+    authorId: payload.authorId,
+    limit: perPage,
+    offset: (page - 1) * perPage,
+  }));
+  if (!cachedA) kvSet(aKey, { items, total }, 120);
+  if (total === 0) return { notFound: true };
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  if (page > totalPages) return { notFound: true };
+  const authorUrl = authorUrlFor(author.id);
+  const bio = (author.bio ?? "").trim();
+  const desc = bio || settings.siteDescription || "";
+  const pluginHead = await pluginHeadHtml({
+    kind: "taxonomy",
+    siteTitle: settings.siteTitle ?? "",
+    siteUrl: ctx.origin,
+    title: t("list.author_title", { name: author.name }),
+    description: desc,
+    url: `${origin}${authorUrl}`,
+    breadcrumbs: [
+      { label: t("crumb.home"), href: "/" },
+      { label: author.name, href: authorUrl },
+    ],
+  });
+  const [widgets, drawerPosts, sidebarData] = await sideP;
+  const tc = getThemeChrome(themeSlug);
+  const avatar = author.avatarUrl
+    ? author.avatarUrl.startsWith("http")
+      ? author.avatarUrl
+      : `${origin}${author.avatarUrl}`
+    : "";
+  const authorCanonical = `${origin}${canonicalPath(authorUrl, locale)}`;
+  const authorPageUrl = page > 1 ? `${authorCanonical}?page=${page}` : authorCanonical;
+  const authorHeadTitle =
+    `${t("list.author_title", { name: author.name })} - ${settings.siteTitle ?? ""}` +
+    (page > 1 ? ` - ${t("list.seo_page", { n: page })}` : "");
+  // One batched read for this window: the ids the visitor already liked, for
+  // the payload's `likedIds` AND the items' own `liked` flags (same round trip).
+  const likedP = likedPFor(ctx, items);
+  return {
+    likedIds: [...(await likedP)].sort((a, b) => a - b),
+    headTitle: authorHeadTitle,
+    head:
+      `<link rel="canonical" href="${R.esc(authorPageUrl)}">` +
+      // R182: the author's own feed, discoverable exactly like a category's.
+      `<link rel="alternate" type="application/rss+xml" title="${R.esc(t("list.author_title", { name: author.name }))}" href="${R.esc(authorCanonical)}/feed.xml">` +
+      `<link rel="alternate" type="application/feed+json" href="${R.esc(authorCanonical)}/feed.json">` +
+      `<meta name="description" content="${R.esc(desc)}">` +
+      // og:type=profile is the dialect a social card expects for a person page;
+      // the avatar only travels when it is absolute (the OG spec drops
+      // relative images silently).
+      `<meta property="og:type" content="profile">` +
+      `<meta property="og:title" content="${R.esc(t("list.author_title", { name: author.name }))}">` +
+      `<meta property="og:url" content="${R.esc(authorPageUrl)}">` +
+      `<meta property="og:description" content="${R.esc(desc)}">` +
+      `<meta property="og:site_name" content="${R.esc(settings.siteTitle ?? "")}">` +
+      (avatar ? `<meta property="og:image" content="${R.esc(avatar)}">` : "") +
+      `<meta name="robots" content="${R.robotsFor(settings.seoRobots)}">` +
+      // Person entity, joined to the site's own WebSite @id so the two merge
+      // into one graph instead of competing. No email, no role, no ids of
+      // posts the author cannot show — `getPublicAuthor` already filtered the
+      // row down to what a stranger may read.
+      R.jsonLd({
+        "@context": "https://schema.org",
+        "@type": "ProfilePage",
+        name: authorHeadTitle,
+        url: authorPageUrl,
+        isPartOf: { "@id": `${origin}/#website` },
+        mainEntity: {
+          "@type": "Person",
+          "@id": `${origin}${authorUrl}#person`,
+          name: author.name,
+          url: `${origin}${authorUrl}`,
+          ...(bio ? { description: bio } : {}),
+          ...(avatar ? { image: avatar } : {}),
+        },
+      }),
+    pluginHead,
+    main: tc.listPage({
+      title: t("list.author_title", { name: author.name }),
+      crumbLast: author.name,
+      sub: isSk
+        ? `${bio ? `<span>${R.esc(bio)} · </span>` : ""}${t("list.sub", { n: total, page, total: totalPages })}`
+        : "",
+      items: markLiked(items, await likedP),
+      page,
+      totalPages,
+      hrefFor: (n: number) => paginate(authorUrl, n),
+      showPager: total > perPage,
+      variant: "term",
+      widgets,
+      drawerPosts,
       sidebarData,
       settings: { ...settings, t },
       themeSettings: ts,
@@ -1030,7 +1439,11 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   const t = makeT(locale);
   const q = (payload.q ?? "").trim();
   const cleaned = q;
-  const page = payload.page ?? 1;
+  // R153: every other list loader clamps through pageNum() - search was the
+  // last one reading the raw query value, so ?page=0 / ?page=-3 reached
+  // listPosts as a NEGATIVE offset (SQL error on the paged dialects) and
+  // junk like ?page=abc as NaN.
+  const page = pageNum(payload.page);
   // All reads below (settings, themeSlug, sidebar batch) pre-issue here so
   // they pipeline with the results query instead of queueing behind it; the
   // old shape awaited settings -> themeSlug serially, then re-read both
@@ -1050,16 +1463,24 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   const perPage =
     dialectProfile(layout).searchPerPage ||
     Math.min(100, Math.max(1, Number(settings0.postsPerPage) || 10));
-  const paged = isBm || isSk;
+  // R153: every layout windows for real - the same defect R146 fixed for
+  // category/tag (non-bluemix/non-skyscraper layouts were pinned to offset 0,
+  // so /search?page=N answered the page-1 window while the pager stayed
+  // hidden), and an out-of-range page is a 404, not a 200 with an empty
+  // window. Search is noindex so crawlers shrugged at the soft-404, but a
+  // user holding a stale page-2 link got a silent lie.
   const { items, total } = cleaned
     ? await listPosts({
         status: "published",
         search: cleaned,
         limit: perPage,
-        offset: paged ? (page - 1) * perPage : 0,
+        offset: (page - 1) * perPage,
       })
     : { items: [] as PostView[], total: 0 };
+  // Hot-terms telemetry (zero-result terms included); fire-and-forget inside recordSearchTerm.
+  recordSearchTerm(cleaned, locale);
   const totalPages = Math.max(1, Math.ceil(total / perPage));
+  if (page > totalPages) return { notFound: true };
   // unique hit jumps straight to the post (?all=1 keeps the list). The
   // middleware 302s cold GETs; this branch only arms the client-side
   // location.replace during SPA navigation (middleware never runs there).
@@ -1078,6 +1499,12 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   const [widgets, drawerPosts, sidebarData] = await sideP;
 
   const searchSiteTitle = settings.siteTitle ?? "";
+  const searchTitle = cleaned
+    ? isBm
+      ? t("search.title_bm", { q: cleaned, n: total })
+      : t("search.title_q", { q: cleaned })
+    : t("search.title");
+  const searchDesc = cleaned ? t("search.sub_found", { n: total }) : (settings.siteDescription ?? "");
   // F4: search-term highlight.
   const searchHighlight =
     `<script>(function(){var done=false;function run(){if(done)return;done=true;` +
@@ -1104,21 +1531,30 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
   // index but let the crawler follow its links, and self-canonicalise to the
   // locale-aware /search path.
   const searchCanonical = `${ctx?.origin ?? ""}${canonicalPath("/search", locale)}`;
+  const searchOgImage = R.esc(R.socialImage(settings.logoUrl, ctx?.origin ?? "", settings.ogImageUrl));
   const searchHead =
     `<link rel="canonical" href="${R.esc(searchCanonical)}">` +
     `<meta name="robots" content="noindex, follow">` +
+    `<meta property="og:title" content="${R.esc(searchTitle)}">` +
+    `<meta property="og:description" content="${R.esc(searchDesc)}">` +
     `<meta property="og:url" content="${R.esc(searchCanonical)}">` +
+    `<meta property="og:type" content="website">` +
     `<meta property="og:site_name" content="${R.esc(searchSiteTitle)}">` +
+    (searchOgImage ? `<meta property="og:image" content="${searchOgImage}">` : "") +
+    `<meta name="twitter:card" content="${R.twitterCardKind(settings.twitterCard, searchOgImage)}">` +
+    `<meta name="twitter:title" content="${R.esc(searchTitle)}">` +
+    `<meta name="twitter:description" content="${R.esc(searchDesc)}">` +
+    (searchOgImage ? `<meta name="twitter:image" content="${searchOgImage}">` : "") +
     searchHighlight;
+  // One batched read for this window: the ids the visitor already liked, for
+  // the payload's `likedIds` AND the items' own `liked` flags (same round trip).
+  const likedP = likedPFor(ctx, items);
   return {
+    likedIds: [...(await likedP)].sort((a, b) => a - b),
     head: searchHead,
     main: getThemeChrome(themeSlug || "skyscraper").listPage({
 
-      title: cleaned
-        ? isBm
-          ? t("search.title_bm", { q: cleaned, n: total })
-          : t("search.title_q", { q: cleaned })
-        : t("search.title"),
+      title: searchTitle,
 
       sub: isBm || layout === "codeman" || layout === "pseudolinear"
         ? ""
@@ -1129,11 +1565,13 @@ async function search(payload: { q?: string; page?: number; all?: boolean }, ctx
           : isSk
             ? t("search.sub_hint")
             : "",
-      items,
+      items: markLiked(items, await likedP),
       page,
       totalPages,
       hrefFor,
-      showPager: paged ? total > perPage : false,
+      // R153: pager whenever there is more to page through (was bluemix/
+      // skyscraper-only, paired with the dead non-paged offset above).
+      showPager: total > perPage,
       extra: isBm || isSk ? extra : "",
       variant: "search",
       titleIcon: isBm ? null : "search",
@@ -1244,15 +1682,24 @@ async function postDetail(
   // extra serial round trip on Neon (~550ms) tacked onto every render-cache
   // miss. It reads nothing the reads produce, so it rides the same wave and
   // is still awaited (best effort: a stats failure never breaks the page).
+  // R255: the Referer header rides along for the traffic-source breakdown.
+  // Passed as-is, so the two shapes stay distinct: a loader called without the
+  // field (a script, a test, a synthetic request) yields `undefined` and the
+  // columns stay null, while a real request with NO Referer header yields ""
+  // and is classified 'direct' - which is exactly what that traffic is.
   const viewsWrite = (async () => {
     if (ctx.ip || ctx.ua) {
       try {
-        await incrementViews(postId, ctx.ip, ctx.ua);
+        await incrementViews(postId, ctx.ip, ctx.ua, ctx.referer);
       } catch {
         /* */
       }
     }
   })();
+  // Has THIS visitor liked this post? Issued alongside the wave (it depends on
+  // nothing the wave produces), so the backfill adds no serial round trip; a
+  // request with no visitor_key cookie answers false without touching the DB.
+  const likedP = likedPostsFor(visitorKeyOf(ctx), [postId]).then((s) => s.has(postId));
   // One hydration, three consumers. The body render and the plugin head chain
   // off it, so body rendering (pure CPU without DB-backed shortcodes, one
   // round trip with them) overlaps the reads wave instead of running after it,
@@ -1374,7 +1821,22 @@ async function postDetail(
   const tagsHtml = (post.tags || []).length
     ? `<div style="margin-top:32px;display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border);padding-top:24px">${(post.tags || []).map((t) => `<a href="${R.esc(t.url || tagUrlFor(cfg, t))}" style="font-size:12px;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:4px 12px;border-radius:9999px">#${R.esc(t.name)}</a>`).join("")}</div>`
     : "";
-  const shareHtml = R.shareBar(post, settings.siteTitle ?? "", settings.siteDescription ?? "");
+  // R280: a paired post offers its counterpart inline. The zh reader sees
+  // "Read the English version" under the tags; the en reader sees the mirror
+  // label. The pair URL travels through ctx.pairSwitchTarget (resolveInner
+  // resolved it through the real permalink config), so the two entry points
+  // — this link and the chrome switcher — never disagree.
+  const pairTarget = (ctx as { pairSwitchTarget?: string }).pairSwitchTarget;
+  const pairLink = pairTarget
+    ? `<div style="margin-top:16px"><a data-no-pjax data-locale-keep href="${R.esc(pairTarget)}" style="font-size:13px;color:var(--primary,var(--sk-primary,#2563eb));text-decoration:none">${t("post.read_translation")}</a></div>`
+    : "";
+  // The share modal's like button is rendered HERE, so the visitor's own like
+  // state has to be on the object before that call. `likedP` was issued with the
+  // reads wave (:1605), so this await costs no extra round trip; liked:false
+  // passes the original object through and the markup stays byte-identical.
+  const liked = await likedP;
+  const postView = liked ? { ...post, liked: true } : post;
+  const shareHtml = R.shareBar(postView, settings.siteTitle ?? "", settings.siteDescription ?? "");
 
   const defMetaHtml = metaPayload.items.length
     ? `<div class="mt-2 flex flex-wrap items-center gap-4 text-sm text-[var(--muted)]">${metaPayload.items.map((m) => `<span>${R.esc(m.label)}：${R.esc(m.value)}</span>`).join("")}</div>`
@@ -1400,8 +1862,10 @@ async function postDetail(
       `</div>`
     : "";
   return {
+    // Whether THIS visitor already liked the post (read issued above).
+    liked,
     main: previewBanner + tc.postPage({
-      post,
+      post: postView,
       bodyHtml,
       related,
       relatedTaxonomy,
@@ -1416,6 +1880,7 @@ async function postDetail(
       metaItems: metaPayload.items,
       tagsHtml,
       defTagsHtml,
+      pairLink,
       shareHtml,
       adjacentHtml: prefixLocaleUrls(
         adjacentHtml(adjacent, {
@@ -1435,7 +1900,10 @@ async function postDetail(
       canonical: `${ctx.origin}${canonicalPath(post.url, locale)}`,
     }),
     head:
-      R.postHead(post, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl, { wordCount: readWordCount, minutes: readMinutes, canonical: `${ctx.origin}${canonicalPath(post.url, locale)}` }) +
+      // R216: publisher.logo is what makes a page eligible for Google's article
+      // rich result. postHead falls back to the bundled brand mark when the
+      // admin set no logo, so the field is never dropped.
+      R.postHead(post, settings.siteTitle ?? "", defaultDescription(settings), ctx.origin, settings.logoUrl || R.BRAND_LOGO, { wordCount: readWordCount, minutes: readMinutes, canonical: `${ctx.origin}${canonicalPath(post.url, locale)}`, inLanguage: locale }, settings.ogImageUrl, settings.twitterCard, settings.seoRobots) +
       // rel=prev/next for the reading order (chronological neighbours). Only
       // present directions are emitted, so edge posts keep the head untouched.
       adjacentRelLinks(adjacent) +
@@ -1539,8 +2007,118 @@ async function pageDetail(
       settings: { ...settings, t },
     }),
     head:
-      R.pageHead(page, settings.siteTitle ?? "", settings.siteDescription ?? "", ctx.origin, settings.logoUrl, { wordCount: pgWordCount, minutes: pgMinutes, canonical: `${ctx.origin}${canonicalPath(page.url, locale)}` }) +
+      R.pageHead(page, settings.siteTitle ?? "", defaultDescription(settings), ctx.origin, settings.logoUrl || R.BRAND_LOGO, { wordCount: pgWordCount, minutes: pgMinutes, canonical: `${ctx.origin}${canonicalPath(page.url, locale)}`, inLanguage: locale }, settings.ogImageUrl, settings.twitterCard, settings.seoRobots) +
       pluginHead,
+  };
+}
+
+// ------------------------------------------------------------- page directory
+
+/**
+ * R178: the public page directory at the page base (`/pages`). A page has
+ * always had a URL, but nothing linked one: an install's whole page tree was
+ * discoverable only through the sitemap, which is how a CMS ends up with
+ * orphaned documents. Weight order is the author's menu order (pages.order,
+ * then recency) and the nesting follows parentId.
+ */
+async function pageIndex(ctx: Ctx) {
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
+  const [settings, cfg, pages] = await Promise.all([
+    getSettings(),
+    getPermalinkConfig(),
+    // R247: the page directory lists the whole site - limit:500 was silently
+    // clamped to 100 by the visitor ceiling.
+    listPublishedPages({ limit: 500, windowCap: MACHINE_WINDOW_CAP }),
+  ]);
+  type DirPage = (typeof pages.items)[number];
+  const siteTitle = settings.siteTitle ?? "";
+  const desc = settings.siteDescription ?? "";
+  const indexUrl = pageIndexUrlFor(cfg);
+  const canonical = `${ctx?.origin ?? ""}${canonicalPath(indexUrl, locale)}`;
+
+  const byId = new Map<number, DirPage>(pages.items.map((p) => [p.id, p]));
+  const kids = new Map<number, DirPage[]>();
+  const roots: DirPage[] = [];
+  for (const p of pages.items) {
+    const parent = p.parentId == null ? null : byId.get(p.parentId);
+    if (!parent) {
+      // A child whose parent is unpublished (or gone) surfaces at the root:
+      // dropping it with its parent would hide published content from readers,
+      // crawlers and the sitemap-fed index alike.
+      roots.push(p);
+      continue;
+    }
+    const bucket = kids.get(parent.id);
+    if (bucket) bucket.push(p);
+    else kids.set(parent.id, [p]);
+  }
+
+  // Depth-first, so the JSON-LD positions match the visible order. `seen` only
+  // blocks a parentId cycle - a page has exactly one parent, so a legitimate
+  // node is never reached twice.
+  const flat: DirPage[] = [];
+  const liOf = (p: DirPage, seen: Set<number>): string => {
+    seen.add(p.id);
+    flat.push(p);
+    const sub = (kids.get(p.id) ?? [])
+      .filter((c) => !seen.has(c.id))
+      .map((c) => liOf(c, seen))
+      .join("");
+    const excerpt = p.excerpt
+      ? `<p class="mt-1 text-sm" style="color:var(--muted)">${R.esc(p.excerpt)}</p>`
+      : "";
+    return (
+      `<li class="rounded-xl border p-4" style="border-color:var(--border);background:var(--surface)">` +
+      `<a class="block text-base font-semibold transition hover:underline" style="color:var(--text)" href="${R.esc(p.url)}">${R.esc(p.title)}</a>` +
+      excerpt +
+      (sub ? `<ul class="mt-3 space-y-2 border-l pl-4" style="border-color:var(--border)">${sub}</ul>` : "") +
+      `</li>`
+    );
+  };
+  const seen = new Set<number>();
+  const list = roots.map((p) => liOf(p, seen)).join("");
+  const main =
+    `<header class="mb-8">` +
+    `<h1 class="text-3xl font-bold" style="color:var(--text)">${t("pages.title")}</h1>` +
+    `<p class="mt-2 text-sm" style="color:var(--muted)">${t("pages.count", { n: pages.total })}</p>` +
+    `</header>` +
+    (list
+      ? `<ul class="space-y-3">${list}</ul>`
+      : `<p class="rounded-2xl border p-10 text-center text-sm" style="border-color:var(--border);background:var(--surface);color:var(--muted)">${t("pages.empty")}</p>`);
+
+  const ogImage = R.esc(R.socialImage(settings.logoUrl, ctx?.origin ?? "", settings.ogImageUrl));
+  const headTitle = `${t("pages.title")} - ${siteTitle}`;
+  return {
+    headTitle,
+    head:
+      `<link rel="canonical" href="${R.esc(canonical)}">` +
+      `<meta name="description" content="${R.esc(desc)}">` +
+      `<meta name="robots" content="${R.robotsFor(settings.seoRobots)}">` +
+      `<meta property="og:title" content="${R.esc(headTitle)}">` +
+      `<meta property="og:description" content="${R.esc(desc)}">` +
+      `<meta property="og:url" content="${R.esc(canonical)}">` +
+      `<meta property="og:type" content="website">` +
+      `<meta property="og:site_name" content="${R.esc(siteTitle)}">` +
+      (ogImage ? `<meta property="og:image" content="${ogImage}">` : "") +
+      `<meta name="twitter:card" content="${R.twitterCardKind(settings.twitterCard, ogImage)}">` +
+      `<meta name="twitter:title" content="${R.esc(headTitle)}">` +
+      `<meta name="twitter:description" content="${R.esc(desc)}">` +
+      R.jsonLd({
+        "@context": "https://schema.org",
+        "@type": "ItemList",
+        name: t("pages.title"),
+        url: canonical,
+        numberOfItems: flat.length,
+        itemListOrder: "https://schema.org/ItemListOrderAscending",
+        itemListElement: flat.map((p, i) => ({
+          "@type": "ListItem",
+          position: i + 1,
+          url: `${ctx?.origin ?? ""}${p.url}`,
+          name: p.title,
+        })),
+      }),
+    main,
   };
 }
 
@@ -1575,15 +2153,22 @@ function postFormatLabel(format: string | undefined, t: Translate): string | nul
   return POST_FORMATS.includes(key) ? t(`format.${key}`) : null;
 }
 
-async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
-  const t = makeT(localeOf(ctx));
+async function archives(payload: { year?: number; month?: number; page?: number }, ctx?: Ctx) {
+  const archLocale = localeOf(ctx);
+  const t = makeT(archLocale);
   const year = Number(payload.year) || 0;
   const month = Number(payload.month) || 0;
+  // R233: the window used to be a hard 1000-row slice (R232 only admitted it
+  // in the header). It is now a real page window, so the page stays the same
+  // size forever instead of growing with the archive.
+  const page = pageNum(payload.page);
+  const ARCH_PER_PAGE = 100;
   const esc = R.esc;
-  // Archives scans up to 1000 posts on every visit: memoize the whole read
-  // set for 5 minutes (archives change rarely, and a new post shows up on the
-  // next refresh or an admin write).
-  const archKey = `archives:${year}:${month}`;
+  // Archives scans the requested window on every visit: memoize the read set
+  // for 5 minutes (archives change rarely, and a new post shows up on the
+  // next refresh or an admin write). R233: the page is part of the key now -
+  // every page is its own window, not one 1000-row slice for all of them.
+  const archKey = `archives:${year}:${month}:${page}`;
   const cached = kvGet<{ settings: any; index: any; total: number; items: any[] }>(archKey);
   let settings: any;
   let index: { year: number; months: { month: number; count: number }[]; total: number }[];
@@ -1606,12 +2191,29 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
       archiveItems({
         year: year || undefined,
         month: month && month >= 1 && month <= 12 ? month : undefined,
-        limit: 1000,
+        limit: ARCH_PER_PAGE,
+        offset: (page - 1) * ARCH_PER_PAGE,
       }),
     ]);
     kvSet(archKey, { settings, index, total, items }, 300);
   }
   const filtered = !!(year || month);
+  // The size of the window being paged: the filtered set, or everything.
+  const windowTotal = filtered
+    ? (year && month ? index.find((y) => y.year === year)?.months.find((m) => m.month === month)?.count : undefined) ??
+      index.find((y) => y.year === year)?.total ?? 0
+    : total;
+  const totalPages = Math.max(1, Math.ceil(windowTotal / ARCH_PER_PAGE));
+  if (page > totalPages) return { notFound: true };
+  // R233: R232's "showing the newest 1000 only" notice is gone - the window is
+  // a real page now, so the older posts sit on a page instead of nowhere. The
+  // pager keeps ?year=/?month=, so paging never drops the reader's filter.
+  const archBase = canonicalPath("/archives", archLocale) +
+    (filtered ? `?${year ? `year=${year}` : ""}${month ? `${year ? "&" : ""}month=${month}` : ""}` : "");
+  const archPager = R.pager(page, totalPages, (n) => {
+    if (n <= 1) return archBase;
+    return `${archBase}${archBase.includes("?") ? "&" : "?"}page=${n}`;
+  }, t);
 
   const buckets = new Map<string, typeof items>();
   for (const e of items) {
@@ -1638,7 +2240,7 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
               ? `<span class="shrink-0 rounded px-1.5 py-0.5 text-[10px]" style="background:var(--accent-soft);color:var(--accent)">${esc(fmt)}</span>`
               : "";
           return (
-            `<li><a class="group flex items-baseline gap-3 rounded-md px-2 py-1.5 transition" style="color:var(--text)" href="${esc(p.url)}">` +
+            `<li><a class="group flex items-baseline gap-3 rounded-md px-2 py-1.5 transition" style="color:var(--text)" href="${esc(localeHref(p.url, archLocale))}">` +
             `<span class="w-20 shrink-0 font-mono text-xs tabular-nums" style="color:var(--muted)">${esc(R.formatSiteDate(p.publishedAt, settings as any))}</span>` +
             `<span class="flex-1 group-hover:underline">${esc(p.title)}</span>${badge}` +
             `<span class="hidden shrink-0 items-center gap-1 text-[11px] sm:flex" style="color:var(--muted)">${EYE_SVG} ${esc(p.views)}</span>` +
@@ -1658,7 +2260,7 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
   const filterHint = filtered
     ? ` · ${t("archives.filter")} ${year ? t("archives.y", { y: year }) : t("archives.all")}` +
       `${month ? ` ${t("archives.month", { m: month })}` : ""}` +
-      ` · <a href="/archives" class="underline" style="color:var(--link)">${t("archives.clear")}</a>`
+      ` · <a href="${esc(localeHref("/archives", archLocale))}" class="underline" style="color:var(--link)">${t("archives.clear")}</a>`
     : "";
 
   const aside =
@@ -1670,13 +2272,16 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
           .map((m) => {
             const mColor = year === y.year && month === m.month ? "var(--accent)" : "var(--muted)";
             return (
-              `<li><a href="/archives?year=${y.year}&month=${m.month}" class="flex items-center justify-between text-xs transition hover:underline" style="color:${mColor}">` +
+              // R233: the sidebar links were hard-coded to the zh path, so a
+              // click under /en dropped the reader into the Chinese tree with
+              // no way back. localeHref is what the rest of the chrome uses.
+              `<li><a href="${esc(localeHref(`/archives?year=${y.year}&month=${m.month}`, archLocale))}" class="flex items-center justify-between text-xs transition hover:underline" style="color:${mColor}">` +
               `${esc(t("archives.month", { m: m.month }))}<span class="opacity-60">${m.count}</span></a></li>`
             );
           })
           .join("");
         return (
-          `<div><a href="/archives?year=${y.year}" class="flex items-center justify-between text-sm font-semibold transition hover:underline" style="color:${yColor}">` +
+          `<div><a href="${esc(localeHref(`/archives?year=${y.year}`, archLocale))}" class="flex items-center justify-between text-sm font-semibold transition hover:underline" style="color:${yColor}">` +
           `${y.year}<span class="text-xs font-normal" style="color:var(--muted)">${y.total}</span></a>` +
           `<ul class="mt-1 space-y-0.5 pl-3">${months}</ul></div>`
         );
@@ -1688,24 +2293,54 @@ async function archives(payload: { year?: number; month?: number }, ctx?: Ctx) {
     `<div class="grid gap-8 lg:grid-cols-[1fr_240px]"><div>` +
     `<header class="mb-8">` +
     `<h1 class="flex items-center gap-2 text-3xl font-bold text-[var(--text)]">${CALENDAR_DAYS_SVG}${t("crumb.archive")}</h1>` +
-    `<p class="mt-2 text-sm" style="color:var(--muted)">${t("archives.count", { n: `<span style="color:var(--accent)">${total}</span>` })}${filterHint}</p>` +
+    // R231: `total` is the site-wide published count, which is what the bare
+    // archive means. On a ?year=/?month= view it is the wrong number - the
+    // header read "20 posts" beside its own empty-state box for a year with
+    // none (the window is filtered, the total never was). R233: the count is
+    // the WINDOW's size, so it stays right across pages.
+    `<p class="mt-2 text-sm" style="color:var(--muted)">${t("archives.count", { n: `<span style="color:var(--accent)">${filtered ? windowTotal : total}</span>` })}${filterHint}</p>` +
     `</header>` +
     (items.length
-      ? `<div class="space-y-8">${sections}</div>`
+      ? `<div class="space-y-8">${sections}</div>${archPager}`
       : `<p class="rounded-2xl border p-10 text-center text-sm" style="border-color:var(--border);background:var(--surface);color:var(--muted)">${t("archives.empty")}</p>`) +
     `</div>${aside}</div>`;
 
   const siteTitle = settings.siteTitle ?? "";
+  const archDesc = t("archives.desc", { site: siteTitle });
 
-  // Archives is indexable content (it is the site's own archive), so it needs
-  // the same locale-aware self-referencing canonical as every other page.
-  const archCanonical = `${ctx?.origin ?? ""}${canonicalPath("/archives", localeOf(ctx))}`;
+  // R233: the window is a real page now, so ?page=N>1 joins the canonical too -
+  // a paged archive is its own URL, not a duplicate of page 1.
+  const archCanonical = `${ctx?.origin ?? ""}${
+    page > 1
+      ? `${archBase}${archBase.includes("?") ? "&" : "?"}page=${page}`
+      : archBase
+  }`;
+  const archOgImage = esc(R.socialImage(settings.logoUrl, ctx?.origin ?? "", settings.ogImageUrl));
   const head =
     `<link rel="canonical" href="${esc(archCanonical)}">` +
-    `<meta name="description" content="${esc(t("archives.desc", { site: siteTitle }))}">` +
-    `<meta name="robots" content="index, follow">` +
+    `<meta name="description" content="${esc(archDesc)}">` +
+    `<meta name="robots" content="${filtered ? "noindex, follow" : R.robotsFor(settings.seoRobots)}">` +
+    `<meta property="og:title" content="${esc(t("crumb.archive"))} - ${esc(siteTitle)}">` +
+    `<meta property="og:description" content="${esc(archDesc)}">` +
     `<meta property="og:url" content="${esc(archCanonical)}">` +
-    `<meta property="og:site_name" content="${esc(siteTitle)}">`;
+    `<meta property="og:type" content="website">` +
+    `<meta property="og:site_name" content="${esc(siteTitle)}">` +
+    (archOgImage ? `<meta property="og:image" content="${archOgImage}">` : "") +
+    `<meta name="twitter:card" content="${R.twitterCardKind(settings.twitterCard, archOgImage)}">` +
+    `<meta name="twitter:title" content="${esc(t("crumb.archive"))} - ${esc(siteTitle)}">` +
+    `<meta name="twitter:description" content="${esc(archDesc)}">` +
+    (archOgImage ? `<meta name="twitter:image" content="${archOgImage}">` : "") +
+    R.collectionJsonLd({
+      url: archCanonical,
+      title: `${t("crumb.archive")} - ${siteTitle}`,
+      description: archDesc,
+      inLanguage: archLocale,
+      items: items.map((p) => ({ title: p.title, url: `${ctx?.origin ?? ""}${p.url}` })),
+    }) +
+    R.breadcrumbListJsonLd([
+      { name: t("crumb.home"), url: `${ctx?.origin ?? ""}${canonicalPath("/", localeOf(ctx))}` },
+      { name: t("crumb.archive"), url: archCanonical },
+    ]);
   return {
 
     headTitle: `${t("crumb.archive")} - ${siteTitle}`,
@@ -1734,22 +2369,78 @@ function escXml(s: string): string {
 }
 
 /**
+ * R144: conditional GET for the XML documents (feed/sitemap) - a cold feed
+ * once reached the wire with NO validator, so a reader could never
+ * revalidate without re-downloading the whole body. R241: minting the tag and
+ * answering If-None-Match both go through the framework's validator helpers
+ * (contentEtag/ifNoneMatch, now owned by ./etag.ts - the same pair
+ * responseEtag uses at every framework exit), replacing the app's private copy
+ * of the sha1 dialect so the two cannot drift; comparison is now RFC 9110
+ * 13.1.2 (tag lists, `*`, weak equivalence) instead of string equality. The
+ * framework's non-HTML validator branch (BUG.md AM) re-checks this same
+ * response as a backstop - this layer answers directly so a match does not
+ * wait for the whole body to be buffered. The 304 carries the same headers a
+ * 200 would have (RFC 9110 15.4.5), and only a GET is answered bodiless.
+ */
+export function xmlResponse(body: string, request: Request, headers: Record<string, string>): Response {
+  // R207: XML docs (feeds + sitemaps) carry author-controlled text (post
+  // titles, author names) as application/xml — without nosniff a browser may
+  // re-sniff the bytes as HTML and run inline script. The three static
+  // byte-paths and HTML pages already set it; XML is the one gap Oboext owns.
+  const etag = contentEtag(Buffer.from(body));
+  const out = { ...headers, etag, "x-content-type-options": "nosniff" };
+  if (request.method === "GET" && ifNoneMatch(request.headers.get("if-none-match"), etag)) {
+    return new Response(null, { status: 304, headers: out });
+  }
+  return new Response(body, { status: 200, headers: out });
+}
+
+/**
  * The RSS feed for a locale. The channel identity (title/description) is site
  * data and stays as configured; what changes per locale is the <language>, the
  * channel link and every item link — an English subscriber must not receive
  * links back into the zh tree.
  */
+// R150: the document body is pure in (origin, locale, rows) - memoized 30s so
+// the hot cache's background refresh (every ~10s under traffic) and every
+// alias/locale path stop re-running the queries; invalidateContentCaches
+// drops `doc:` at each content write, so freshness is invalidation-driven
+// exactly like the R149 session memo. Strings are immutable, so the memoized
+// value needs no clone.
 async function feed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
+  return memoQuery(`doc:feed:${ctx.origin}:${locale}`, 30_000, () => buildFeed(ctx, locale));
+}
+
+async function buildFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
   const en = locale === "en";
   const settings = await getSettings();
   const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
   // feedContent=full ships the body: listPosts strips content by default, so
-  // the flag must reach the query, not just the renderer below.
+  // the flag must reach the query, not just the renderer below. It also drives
+  // <description> (plain-text body instead of the excerpt) — one switch in the
+  // settings UI, one behavior. (An earlier draft added a separate
+  // feed_full_text option here, but the settings schema already ships
+  // feedContent=excerpt|full — two disconnected switches for the same intent,
+  // and the visible one could not turn on the description branch. Folded.)
   const full = settings.feedContent === "full";
   const [{ items }, { items: pageItems }] = await Promise.all([
     listPosts({ status: "published", limit: feedItems, pinned: false, full }),
     listPublishedPages({ limit: feedItems }),
   ]);
+  // R144: a validator-backed document must be BYTE-STABLE. The old pubDate
+  // fallback (`?? new Date()`) stamped the wall clock into any item without
+  // publishedAt, so two renders of identical content hashed differently and a
+  // matching If-None-Match could never arrive. Published items always carry
+  // publishedAt; an item without one now carries no pubDate (RSS 2.0 makes it
+  // optional), and lastBuildDate below is DERIVED from the items - never now.
+  let newest = 0;
+  for (const p of [...items, ...pageItems]) {
+    const t = p.publishedAt ? new Date(p.publishedAt).getTime() : NaN;
+    if (Number.isFinite(t) && t > newest) newest = t;
+  }
+  const lastBuildDate = newest
+    ? `\n    <lastBuildDate>${new Date(newest).toUTCString()}</lastBuildDate>`
+    : "";
   const cdata = (html: string) =>
     `<![CDATA[${html.replace(/]]>/g, "]]]]><![CDATA[>")}]]>`;
   const xmlItems = (
@@ -1766,53 +2457,391 @@ async function feed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
           : "";
         // Item links are locale-aware: the en feed points at /en pages, so an
         // English subscriber never gets links back into the zh tree.
-        const itemUrl = `${escXml(ctx.origin)}${escXml(canonicalPath(p.url, locale))}`;
+        const itemUrl = `${escXml(ctx.origin)}${escXml(localeHref(p.url, locale))}`;
         const media = p.featuredImage ? `\n      ${R.mediaImageTag(p.featuredImage, ctx.origin)}` : "";
+        // dc:creator carries the author's display name (RSS 2.0 / Dublin Core).
+        // Posts have an author; pages don't. Name only - a real address is not
+        // ours to publish, and the noreply@<domain> fake is a spam magnet.
+        const authorName = kind === "post" ? (p as { author?: { name?: string } | null }).author?.name : "";
+        const creator = authorName ? `\n      <dc:creator>${escXml(authorName)}</dc:creator>` : "";
+        // No wall-clock fallback (see the byte-stability note above): an item
+        // without publishedAt simply ships no pubDate.
+        const pub = p.publishedAt
+          ? `\n      <pubDate>${new Date(p.publishedAt).toUTCString()}</pubDate>`
+          : "";
         return (
           `    <item>\n      <title>${escXml(p.title)}</title>\n      <link>${itemUrl}</link>` +
-          `\n      <guid>${itemUrl}</guid>` +
-          `\n      <pubDate>${(p.publishedAt ? new Date(p.publishedAt) : new Date()).toUTCString()}</pubDate>` +
-          `\n      <description>${escXml(p.excerpt ?? "")}</description>${media}${cats}${extra}\n    </item>`
+          `\n      <guid>${itemUrl}</guid>${pub}` +
+          `\n      <description>${escXml(
+            full
+              ? R.blocksToPlainText((p as { content?: Parameters<typeof R.blocksToPlainText>[0] }).content) || p.excerpt || ""
+              : p.excerpt ?? "",
+          )}</description>${creator}${media}${cats}${extra}\n    </item>`
         );
       }),
     )
   ).join("\n");
+  // R144: atom:link rel=self names the CANONICAL feed URL for the locale
+  // (/feed.xml, /en/feed.xml) - validators and reader auto-discovery require
+  // the channel to identify itself, and the three aliases (/rss.xml, /feed,
+  // /api/feed) must all claim the same canonical self, not their own alias.
+  const selfUrl = `${escXml(ctx.origin)}${escXml(localeHref("/feed.xml", locale))}`;
   return `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:media="http://search.yahoo.com/mrss/">
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>${escXml(settings.siteTitle ?? "")}</title>
-    <link>${escXml(ctx.origin)}${escXml(canonicalPath("/", locale))}</link>
+    <link>${escXml(ctx.origin)}${escXml(localeHref("/", locale))}</link>
     <description>${escXml(settings.siteDescription ?? "")}</description>
     <language>${en ? "en" : "zh-CN"}</language>
+    <atom:link rel="self" type="application/rss+xml" href="${selfUrl}"/>${lastBuildDate}
 ${xmlItems}
   </channel>
 </rss>`;
 }
 
-async function robots(ctx: Ctx): Promise<string> {
-  await ensurePluginsLoaded();
+/**
+ * JSON Feed 1.1 (https://jsonfeed.org/version/1.1) for a locale - the third
+ * subscription format beside RSS 2.0, read natively by Feedly, NetNewsWire,
+ * NewsBlur and every modern reader that prefers JSON over XML. Shares the
+ * feed()'s query contract (item cap, feedContent=full) and the R144
+ * byte-stability discipline: date_published is DERIVED from publishedAt and
+ * simply absent when unknown - never the wall clock - so this body is
+ * validator-safe under xmlResponse() too. Locale rules mirror feed(): the
+ * English feed's home/feed/item URLs all live under /en, the channel title
+ * stays site data.
+ */
+// R150: same memo contract as feed() (see buildFeed): origin+locale keyed,
+// dropped by invalidateContentCaches at every content write.
+async function jsonFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
+  return memoQuery(`doc:jsonFeed:${ctx.origin}:${locale}`, 30_000, () => buildJsonFeed(ctx, locale));
+}
+
+async function buildJsonFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
+  const en = locale === "en";
   const settings = await getSettings();
-  const base = ctx.origin;
-  if ((settings.seoRobots || "").toLowerCase().includes("noindex")) {
-    const blocked = applyFilters<{ lines: string[]; base: string }>(HOOKS.robotsRules, {
-      lines: ["User-agent: *", "Disallow: /"],
-      base,
-    });
-    return `${blocked.lines.join("\n").trimEnd()}\n`;
+  const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
+  const full = settings.feedContent === "full";
+  const [{ items }, { items: pageItems }] = await Promise.all([
+    listPosts({ status: "published", limit: feedItems, pinned: false, full }),
+    listPublishedPages({ limit: feedItems }),
+  ]);
+  const abs = (u: string) => (u.startsWith("/") ? `${ctx.origin}${u}` : u);
+  const feedEntries = await Promise.all(
+    [...items, ...pageItems].map(async (p) => {
+      const kind = "author" in p ? "post" : "page";
+      const url = `${ctx.origin}${localeHref(p.url, locale)}`;
+      const entry: Record<string, unknown> = { id: url, url, title: p.title };
+      // The spec requires content_html OR content_text per item: full mode
+      // ships the built body, the default ships the excerpt as text.
+      if (full) entry.content_html = await R.buildPostBody(p, kind);
+      else entry.content_text = p.excerpt ?? "";
+      if (p.excerpt) entry.summary = p.excerpt;
+      if (p.publishedAt) entry.date_published = new Date(p.publishedAt).toISOString();
+      if (p.featuredImage) entry.image = abs(String(p.featuredImage));
+      const authorName = kind === "post" ? (p as { author?: { name?: string } | null }).author?.name : "";
+      if (authorName) entry.authors = [{ name: authorName }];
+      if ("author" in p && p.tags?.length) entry.tags = p.tags.map((t) => t.name);
+      return entry;
+    }),
+  );
+  return JSON.stringify(
+    {
+      version: "https://jsonfeed.org/version/1.1",
+      title: settings.siteTitle ?? "",
+      home_page_url: `${ctx.origin}${localeHref("/", locale)}`,
+      feed_url: `${ctx.origin}${localeHref("/feed.json", locale)}`,
+      description: settings.siteDescription ?? "",
+      language: en ? "en" : "zh-CN",
+      items: feedEntries,
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * R147: the site-wide comments feed (RSS 2.0) - the syndication suite's third
+ * surface beside the posts feed and the JSON Feed: subscribers follow the
+ * conversation without polling post pages. Same contracts as feed():
+ * locale-aware links (/en/comments/feed.xml points into the /en tree), the
+ * atom self names the canonical URL, byte-stable body (pubDate from
+ * createdAt, lastBuildDate DERIVED from the rows - never now) so
+ * xmlResponse()'s validator answers, and description carries the comment as
+ * escaped PLAIN TEXT: comment bodies are user input and must never enter the
+ * feed as markup. Moderation lives in the query (listCommentFeed): only
+ * approved comments on published posts are reachable here.
+ */
+// R150: same memo contract as feed() (see buildFeed) - the comments feed's
+// join query now runs once per window, not once per poll/refresh.
+async function commentsFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
+  return memoQuery(`doc:commentsFeed:${ctx.origin}:${locale}`, 30_000, () => buildCommentsFeed(ctx, locale));
+}
+
+async function buildCommentsFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
+  const en = locale === "en";
+  const t = makeT(locale);
+  const settings = await getSettings();
+  const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
+  const rows = await listCommentFeed(feedItems);
+  let newest = 0;
+  for (const r of rows) {
+    const d = new Date(r.createdAt).getTime();
+    if (Number.isFinite(d) && d > newest) newest = d;
   }
-  const payload = applyFilters<{ lines: string[]; base: string }>(HOOKS.robotsRules, {
-    lines: [
-      "User-agent: *",
-      "Allow: /",
-      "Disallow: /admin",
-      "Disallow: /api/",
-      "Disallow: /search",
-      "",
-      `Sitemap: ${base}/sitemap.xml`,
-    ],
-    base,
+  const lastBuildDate = newest
+    ? `\n    <lastBuildDate>${new Date(newest).toUTCString()}</lastBuildDate>`
+    : "";
+  const items = rows
+    .map((r) => {
+      const itemUrl =
+        `${escXml(ctx.origin)}${escXml(localeHref(r.post.url, locale))}#comment-item-${r.id}`;
+      return (
+        `    <item>\n      <title>${escXml(r.post.title)} — ${escXml(r.authorName)}</title>` +
+        `\n      <link>${itemUrl}</link>\n      <guid isPermaLink="true">${itemUrl}</guid>` +
+        `\n      <pubDate>${new Date(r.createdAt).toUTCString()}</pubDate>` +
+        `\n      <description>${escXml(r.content)}</description>` +
+        `\n      <dc:creator>${escXml(r.authorName)}</dc:creator>\n    </item>`
+      );
+    })
+    .join("\n");
+  const selfUrl = `${escXml(ctx.origin)}${escXml(localeHref("/comments/feed.xml", locale))}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>${escXml(t("feed.comments_title", { site: settings.siteTitle ?? "" }))}</title>
+    <link>${escXml(ctx.origin)}${escXml(localeHref("/", locale))}</link>
+    <description>${escXml(settings.siteDescription ?? "")}</description>
+    <language>${en ? "en" : "zh-CN"}</language>
+    <atom:link rel="self" type="application/rss+xml" href="${selfUrl}"/>${lastBuildDate}
+${items}
+  </channel>
+</rss>`;
+}
+
+/**
+ * R155: the JSON Feed 1.1 twin of commentsFeed - the subscription matrix's
+ * last empty cell (posts RSS / posts JSON / comments RSS / comments JSON).
+ * Same rows, same moderation (listCommentFeed's join is the only gate), same
+ * locale contract, and content_text ONLY: comment bodies are user input, and
+ * JSON Feed's content_html would be handed to a reader's HTML renderer -
+ * content_text is the field that promises "not markup".
+ */
+// R150/R155: memoized like the other three documents (doc: prefix, dropped by
+// invalidateContentCaches at every content write).
+async function commentsJsonFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
+  return memoQuery(`doc:commentsJsonFeed:${ctx.origin}:${locale}`, 30_000, () =>
+    buildCommentsJsonFeed(ctx, locale),
+  );
+}
+
+async function buildCommentsJsonFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
+  const en = locale === "en";
+  const t = makeT(locale);
+  const settings = await getSettings();
+  const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
+  const rows = await listCommentFeed(feedItems);
+  const items = rows.map((r) => {
+    const itemUrl =
+      `${ctx.origin}${localeHref(r.post.url, locale)}#comment-item-${r.id}`;
+    const entry: Record<string, unknown> = {
+      id: itemUrl,
+      url: itemUrl,
+      title: `${r.post.title} — ${r.authorName}`,
+      content_text: r.content,
+      date_published: new Date(r.createdAt).toISOString(),
+      authors: [{ name: r.authorName }],
+    };
+    // JSON Feed 1.1 extension point: readers ignore unknown _custom fields,
+    // but a client that wants to group by thread can - and the spec explicitly
+    // reserves the underscore prefix for this.
+    entry._custom = { post_title: r.post.title, post_url: `${ctx.origin}${localeHref(r.post.url, locale)}` };
+    return entry;
   });
-  return `${payload.lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+  return JSON.stringify(
+    {
+      version: "https://jsonfeed.org/version/1.1",
+      title: t("feed.comments_title", { site: settings.siteTitle ?? "" }),
+      home_page_url: `${ctx.origin}${localeHref("/", locale)}`,
+      feed_url: `${ctx.origin}${localeHref("/comments/feed.json", locale)}`,
+      description: settings.siteDescription ?? "",
+      language: en ? "en" : "zh-CN",
+      items,
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * R160: per-category / per-tag feeds. The subscription matrix was site-wide
+ * only (posts, comments, JSON twins) - a reader who follows one topic had to
+ * take the whole blog. The path is resolved against the CONFIGURED category/
+ * tag bases (custom permalinks keep working), so this branch is base-agnostic;
+ * an unknown path returns null and falls through to normal 404 routing rather
+ * than claiming every path that happens to end in feed.xml.
+ *
+ * R162: the resolution half is shared with the JSON twin below. Both documents
+ * must own exactly the same paths and window the same posts; one resolver is
+ * what makes them twins instead of look-alikes that drift.
+ *
+ * R182: an author archive is the third term listing, and it was the only one
+ * without a subscription - the middleware already funnels every
+ * `<base>/feed.{xml,json}` here, so claiming `/author/<id>` inside this
+ * resolver gives the author feeds both twins and the same window, discovery
+ * and validator rules as a category, with no second routing branch to drift.
+ * The path is matched against the fixed `/author/<numeric id>` shape (links.ts
+ * keeps it deliberately non-configurable), and an author with no published
+ * post owns nothing here either: the archive page itself 404s an empty
+ * listing, so a feed that would list nothing falls through to the same 404
+ * instead of subscribing a reader to a document that contradicts its page.
+ */
+const AUTHOR_FEED_PATH = new RegExp(`^/${AUTHOR_BASE_SEGMENT}/(\\d{1,9})$`);
+
+async function resolveTaxonomyDoc(basePath: string) {
+  const want = basePath.replace(/\/+$/, "");
+  const settings = await getSettings();
+  const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
+  const full = settings.feedContent === "full";
+  const authorId = AUTHOR_FEED_PATH.exec(want)?.[1];
+  if (authorId) {
+    const author = await getPublicAuthor(Number(authorId));
+    if (!author) return null;
+    const { items } = await listPosts({
+      status: "published",
+      authorId: author.id,
+      limit: feedItems,
+      pinned: false,
+      full,
+    });
+    if (!items.length) return null;
+    return {
+      cat: undefined, tag: undefined, want, settings, items, full,
+      name: author.name,
+      description: (author.bio ?? "").trim(),
+    };
+  }
+  const [cfg, cats, tags] = await Promise.all([
+    getPermalinkConfig(),
+    listCategories(),
+    listTags(),
+  ]);
+  const cat = cats.find((c) => categoryUrlFor(cfg, c) === want);
+  const tag = cat ? undefined : tags.find((tt) => tagUrlFor(cfg, tt) === want);
+  if (!cat && !tag) return null;
+  const { items } = await listPosts({
+    status: "published",
+    ...(cat ? { categorySlug: cat.slug } : { tagSlug: tag!.slug }),
+    limit: feedItems,
+    pinned: false,
+    full,
+  });
+  return {
+    cat, tag, want, settings, items, full,
+    name: cat ? cat.name : tag!.name,
+    description: cat?.description ?? "",
+  };
+}
+
+async function taxonomyFeed(ctx: Ctx, locale: Locale, basePath: string): Promise<string | null> {
+  return memoQuery(`doc:taxfeed:${ctx.origin}:${locale}:${basePath}`, 30_000, () =>
+    buildTaxonomyFeed(ctx, locale, basePath),
+  );
+}
+
+async function buildTaxonomyFeed(
+  ctx: Ctx,
+  locale: Locale,
+  basePath: string,
+): Promise<string | null> {
+  const doc = await resolveTaxonomyDoc(basePath);
+  if (!doc) return null;
+  const en = locale === "en";
+  const t = makeT(locale);
+  const itemXml = await Promise.all(
+    doc.items.map(async (p) => {
+      const link = `${escXml(ctx.origin)}${escXml(localeHref(p.url, locale))}`;
+      // R144 discipline: no wall clock - an item without a publication date
+      // simply omits the optional element, so the body stays byte-stable.
+      const body = doc.full ? await R.buildPostBody(p, "post") : escXml(p.excerpt ?? "");
+      return (
+        `    <item>\n      <title>${escXml(p.title)}</title>` +
+        `\n      <link>${link}</link>\n      <guid isPermaLink="true">${link}</guid>` +
+        (p.publishedAt ? `\n      <pubDate>${new Date(p.publishedAt).toUTCString()}</pubDate>` : "") +
+        `\n      <description>${body}</description>\n    </item>`
+      );
+    }),
+  );
+  const selfUrl = `${escXml(ctx.origin)}${escXml(localeHref(`${doc.want}/feed.xml`, locale))}`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>${escXml(t("feed.taxonomy_title", { site: doc.settings.siteTitle ?? "", name: doc.name }))}</title>
+    <link>${escXml(ctx.origin)}${escXml(localeHref(doc.want, locale))}</link>
+    <description>${escXml(doc.description || doc.settings.siteDescription || "")}</description>
+    <language>${en ? "en" : "zh-CN"}</language>
+    <atom:link rel="self" type="application/rss+xml" href="${selfUrl}"/>
+${itemXml.join("\n")}
+  </channel>
+</rss>`;
+}
+
+/**
+ * R162: the JSON Feed 1.1 twin of a taxonomy feed - the subscription matrix's
+ * last two cells (category/tag x JSON). Same resolver, same window, same
+ * locale prefix contract (every URL rides canonicalPath), and the item field
+ * set mirrors the site-wide JSON Feed so a reader sees one shape everywhere.
+ */
+async function taxonomyJsonFeed(ctx: Ctx, locale: Locale, basePath: string): Promise<string | null> {
+  return memoQuery(`doc:taxjson:${ctx.origin}:${locale}:${basePath}`, 30_000, () =>
+    buildTaxonomyJsonFeed(ctx, locale, basePath),
+  );
+}
+
+async function buildTaxonomyJsonFeed(
+  ctx: Ctx,
+  locale: Locale,
+  basePath: string,
+): Promise<string | null> {
+  const doc = await resolveTaxonomyDoc(basePath);
+  if (!doc) return null;
+  const en = locale === "en";
+  const t = makeT(locale);
+  const abs = (u: string) => (u.startsWith("/") ? `${ctx.origin}${u}` : u);
+  const items = await Promise.all(
+    doc.items.map(async (p) => {
+      const url = `${ctx.origin}${localeHref(p.url, locale)}`;
+      const entry: Record<string, unknown> = { id: url, url, title: p.title };
+      // Spec requires content_html OR content_text per item - same split as
+      // the site-wide JSON Feed (feedContent=full ships the built body).
+      if (doc.full) entry.content_html = await R.buildPostBody(p, "post");
+      else entry.content_text = p.excerpt ?? "";
+      if (p.excerpt) entry.summary = p.excerpt;
+      if (p.publishedAt) entry.date_published = new Date(p.publishedAt).toISOString();
+      if (p.featuredImage) entry.image = abs(String(p.featuredImage));
+      if (p.author?.name) entry.authors = [{ name: p.author.name }];
+      if (p.tags?.length) entry.tags = p.tags.map((tt) => tt.name);
+      return entry;
+    }),
+  );
+  return JSON.stringify(
+    {
+      version: "https://jsonfeed.org/version/1.1",
+      title: t("feed.taxonomy_title", { site: doc.settings.siteTitle ?? "", name: doc.name }),
+      home_page_url: `${ctx.origin}${localeHref(doc.want, locale)}`,
+      feed_url: `${ctx.origin}${localeHref(`${doc.want}/feed.json`, locale)}`,
+      description: doc.description || doc.settings.siteDescription || "",
+      language: en ? "en" : "zh-CN",
+      items,
+    },
+    null,
+    2,
+  );
+}
+
+async function robots(ctx: Ctx): Promise<string> {
+  // Single source of truth lives in sitemap.ts (buildRobotsTxt); this used to
+  // be a second copy of the same rules, which drifted the moment one changed.
+  return buildRobotsTxt(ctx.origin);
 }
 
 function guessImageType(url: string): string {
@@ -1844,8 +2873,8 @@ async function manifest(_ctx: Ctx): Promise<string> {
     icons.push(icon);
   }
   return JSON.stringify({
-    name: settings.siteTitle || "oboext",
-    short_name: (settings.siteTitle || "oboext").slice(0, 12),
+    name: settings.siteTitle || "Oboext",
+    short_name: (settings.siteTitle || "Oboext").slice(0, 12),
     description: settings.tagline || settings.siteDescription || "",
     start_url: "/",
     scope: "/",
@@ -1918,6 +2947,7 @@ function virtualRouteView(route: VirtualSiteRoute, ctx: Ctx) {
     (desc ? `<meta name="description" content="${R.esc(desc)}">` : "") +
     (kw ? `<meta name="keywords" content="${R.esc(kw)}">` : "") +
     `<link rel="canonical" href="${R.esc(canonical)}">` +
+    `<meta name="robots" content="${R.robotsFor(settings.seoRobots)}">` +
     `<meta property="og:title" content="${R.esc(title)}">` +
     (desc ? `<meta property="og:description" content="${R.esc(desc)}">` : "") +
     `<meta property="og:type" content="website">` +
@@ -1970,14 +3000,46 @@ const PATH_MISS_TTL = 60_000;
  * path) and the locale prefix on root-relative links in the main HTML, which
  * keeps navigation inside /en. The default locale is a no-op on both.
  */
+/**
+ * R275: the per-post hreflang cluster. The counterpart URL comes from
+ * translationPair (resolveInner resolved it through the REAL permalink config,
+ * so id/pinyin/date modes all land on a reachable URL). Both directions are
+ * emitted from BOTH pages of the pair — the confirm-back rule needs each URL
+ * to advertise the other, and each page here knows only its own half, so the
+ * cluster always carries both locales with this page's own locale href being
+ * the path being rendered.
+ */
+function hreflangPairLinks(origin: string, path: string, locale: Locale, pair: { url: string }): string {
+  if (!isPairingActive()) return hreflangLinks(origin, path);
+  const other = otherLocale(locale);
+  const base = `${origin || ""}${path}`;
+  const otherUrl = `${origin || ""}${pair.url}`;
+  return (
+    `<link name="hreflang-${locale}" rel="alternate" hreflang="${locale}" href="${base}">` +
+    `<link name="hreflang-${other}" rel="alternate" hreflang="${other}" href="${otherUrl}">` +
+    `<link name="hreflang-x-default" rel="alternate" hreflang="x-default" href="${base}">`
+  );
+}
+
 function finalizeView(view: Record<string, any> | null, ctx: Ctx, locale: Locale) {
   if (!view || typeof view !== "object") return view;
+  if (!ctx) return view;
   const path = (ctx && ctx.pathname) || "/";
   const head = typeof view.head === "string" ? view.head : "";
   const main = typeof view.main === "string" ? view.main : "";
+  // R275: per-page pairing. The site-level flag (R274) turns the whole tree
+  // self-canonical; THIS cluster is still only emitted when the post being
+  // rendered actually has a counterpart — an untranslated /en page carries no
+  // fake alternates even on a paired site. The pair URL rides canonicalPath
+  // (self-referencing in pairing mode, merged otherwise) so both ends always
+  // describe reachable URLs.
+  const pair = (view as { translationPair?: { url: string; selfLocale: string } }).translationPair;
+  const cluster = pair
+    ? hreflangPairLinks(ctx.origin || "", path, locale, pair)
+    : hreflangLinks(ctx.origin || "", path);
   return {
     ...view,
-    head: head + hreflangLinks(ctx.origin || "", path),
+    head: head + cluster,
     main: prefixLocaleUrls(main, locale),
   };
 }
@@ -2005,10 +3067,11 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
   if (segs.length && peekMemo<boolean>(missKey, PATH_MISS_TTL) === true) return null;
   const res = await resolveSitePath(segs);
   if (!res) {
-    // /search and /archives are real .rose pages at the bare path; under the
-    // locale prefix the catch-all is what matches, so delegate to their
-    // loaders here. Same {head, headTitle, main} contract, query carried
-    // over from the request.
+    // /search, /archives and /newsletter are real .rose pages at the bare
+    // path; under the locale prefix the catch-all is what matches, so delegate
+    // to their loaders here. Same {head, main} contract, query carried over
+    // from the request. (These are the only three single-segment public
+    // routes that are .rose pages rather than CMS content.)
     if (segs.length === 1 && segs[0] === "search") {
       const q = ctx.query;
       return {
@@ -2016,7 +3079,7 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
         ...(await search(
           {
             q: q.get("q") || "",
-            page: Number(q.get("page") || 1),
+            page: q.get("page"),
             all: q.get("all") === "1",
           },
           ctx,
@@ -2035,6 +3098,13 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
           ctx,
         )),
       };
+    }
+    // /en/newsletter: without this the English canonical the loader emits
+    // would point at a 404 (the catch-all is what matches under the prefix).
+    // `twin: true` makes main carry the form + its inline binder — this route
+    // ships none of the page's client bundle, so the markup alone is inert.
+    if (segs.length === 1 && segs[0] === "newsletter") {
+      return { kind: "newsletter", ...(await newsletterPage({ twin: true }, ctx)) };
     }
     const decoded = segs
       .map((s) => {
@@ -2097,7 +3167,7 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
       main: maintenanceView(maintenance),
     };
   }
-  const page = Math.max(1, Number(payload.page) || 1);
+  const page = pageNum(payload.page);
   let out: Record<string, any>;
   switch (res.kind) {
     case "home":
@@ -2106,20 +3176,59 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
       // the real origin. Every other case passes ctx; so does home now.
       out = await home(ctx);
       break;
-    case "post":
+    case "post": {
+      // R275/R280: the counterpart URL is resolved BEFORE postDetail — the
+      // pair link the post page renders reads ctx.pairSwitchTarget, so it
+      // must already be on the context when that loader runs (R280 bug: the
+      // assignment after the await left the link empty on every paired page).
+      if (res.post.post.translationOf) {
+        const [c] = await rawQuery<{ id: number; slug: string; status: string; locale: string; pinyin_slug: string | null; initial_slug: string | null }>(
+          `select id, slug, status, locale, pinyin_slug, initial_slug from posts where id = $1`,
+          [res.post.post.translationOf],
+        );
+        if (c && c.status === "published") {
+          const cfg = await getPermalinkConfig();
+          const pairUrl = postUrlFor(cfg, {
+            id: c.id, slug: c.slug, pinyinSlug: c.pinyin_slug, initialSlug: c.initial_slug,
+          });
+          // The target is the counterpart's OWN URL in ITS locale — the zh
+          // original lives at the bare path (default = prefix-free). The
+          // self row's locale is irrelevant to the destination.
+          (ctx as { pairSwitchTarget?: string }).pairSwitchTarget =
+            (c as { locale?: string }).locale === "en" ? `/en${pairUrl === "/" ? "" : pairUrl}` : pairUrl;
+        }
+      }
       out = await postDetail({ slug: res.post.post.slug, preloaded: res.post }, ctx);
+      // R275: the view carries the counterpart URL for finalizeView's
+      // per-post hreflang cluster (same data, one point query).
+      const pairSwitchTarget = (ctx as { pairSwitchTarget?: string }).pairSwitchTarget;
+      if (pairSwitchTarget) {
+        // The switch target carries the localeHref prefix; the hreflang cluster
+        // needs the raw counterpart path (its hrefs are absolute via origin).
+        out.translationPair = {
+          url: pairSwitchTarget.replace(/^\/en(?=\/|$)/, "") || "/",
+          selfLocale: res.post.post.locale,
+        };
+      }
       break;
+    }
     case "page":
       out = await pageDetail({ slug: res.page.slug, preloaded: res.page }, ctx);
       break;
     case "blogIndex":
       out = await blogList({ page }, ctx);
       break;
+    case "pageIndex":
+      out = await pageIndex(ctx);
+      break;
     case "category":
       out = await categoryList({ slug: res.category.slug, page }, ctx);
       break;
     case "tag":
       out = await tagList({ slug: res.tag.slug, page }, ctx);
+      break;
+    case "author":
+      out = await authorList({ authorId: res.authorId, page }, ctx);
       break;
   }
   if (out.notFound) return null;
@@ -2133,6 +3242,154 @@ async function resolveInner(payload: { segments?: string[]; page?: number }, ctx
 
 async function resolve(payload: { segments?: string[]; page?: number }, ctx: Ctx) {
   return finalizeView(await resolveInner(payload, ctx), ctx, localeOf(ctx));
+}
+
+/**
+ * R193: the catch-all's second question, asked only after `resolve` answered
+ * null. A rule turns "this path is gone" into "this path moved": the href
+ * re-enters the visitor's own locale tree (a rule written for `/blog/old`
+ * must not eject an `/en` reader into the Chinese URL, which is the same
+ * mistake `searchRedirect` had to be patched for), and the status is 301 only
+ * when the rule says it is permanent — a 301 is cached by browsers for the
+ * life of the domain, so an operator who later deletes the rule would still
+ * be shipping the move.
+ */
+async function redirectFor(payload: { segments?: string[] }, ctx: Ctx) {
+  const path = `/${(payload?.segments ?? []).join("/")}`;
+  const loc = localeOf(ctx);
+  return ruleFor(path, (target) => canonicalPath(target, loc));
+}
+
+// --------------------------------------------------------- newsletter page
+
+/**
+ * The subscribe form's markup — defined ONCE, used by both routes that render
+ * this page.
+ *
+ * It cannot live only in the .rose template: `/en/newsletter` is served by the
+ * catch-all, like `/en/search` and `/en/archives`, and the catch-all renders
+ * `{@html main}` and nothing else. A form written only in the page template
+ * would be missing on the English twin — the page the locale switcher on
+ * /newsletter points at. The twin therefore gets form markup inside `main`
+ * plus its own inline binder (it ships none of this page's client bundle).
+ */
+function newsletterFormHtml(t: Translate): string {
+  // `novalidate` on purpose: the endpoint already owns the one definition of
+  // "a valid address" (api.email_invalid), and the page's contract is to
+  // surface THAT answer. Native validation would intercept the typo first and
+  // the 422 branch would never be reachable in a real browser. type="email" +
+  // required stay for the mobile keyboard and for assistive tech.
+  return (
+    `<form data-nl-form novalidate>` +
+    `<label class="text-sm mt-4 block" for="nl-email">${R.esc(t("newsletter.email_label"))}</label>` +
+    `<div class="df-search-box df-search-box-block mt-2">` +
+    `<input class="df-search-input" id="nl-email" data-nl-email name="email" ` +
+    `type="email" required autocomplete="email" placeholder="${R.esc(t("newsletter.placeholder"))}">` +
+    `</div>` +
+    `<div class="flex items-center justify-between gap-2 mt-4">` +
+    `<button class="btn-accent px-5 py-2" type="submit">${R.esc(t("newsletter.submit"))}</button>` +
+    `</div>` +
+    `</form>`
+  );
+}
+
+/**
+ * The public double-opt-in subscribe page (/newsletter). Deliberately thin —
+ * the page owns the interactive form, this owns only what must be
+ * request-scoped and translated:
+ *
+ *   - `head`: the whole SEO contract. Self-canonical per locale through
+ *     canonicalPath (so /en/newsletter canonicalises to itself, not to the
+ *     Chinese URL) and `noindex, follow` — a subscribe form is a utility
+ *     page, not content, and it must never reach an index or a sitemap;
+ *   - `main`: heading + lead + the complete subscribe form, so BOTH routes
+ *     that render this page carry a usable form (see newsletterFormHtml);
+ *   - `s`: the catalogue-baked strings the page's own template binds. Same shape
+ *     as the admin loaders — the page never calls makeT itself for anything
+ *     a visitor can read;
+ *   - `locale`: the request locale, so the client-side POST sends the same
+ *     language the page was rendered in without re-deriving it from the URL.
+ *
+ * It reads settings only for the title — no theme chrome, no widgets, no
+ * post queries: the layout already ships all of that around this loader's
+ * output.
+ */
+export async function newsletterPage(payload: { twin?: boolean } | undefined, ctx?: Ctx) {
+  const locale = localeOf(ctx);
+  const t = makeT(locale);
+  const settings = await getSettings();
+  const siteTitle = settings.siteTitle ?? "";
+  const canonical = `${ctx?.origin ?? ""}${canonicalPath("/newsletter", locale)}`;
+  const pageTitle = siteTitle ? `${t("newsletter.title")} - ${siteTitle}` : t("newsletter.title");
+  const lead = t("newsletter.lead");
+  const head =
+    `<title>${R.esc(pageTitle)}</title>` +
+    `<meta name="robots" content="noindex, follow">` +
+    `<link rel="canonical" href="${R.esc(canonical)}">` +
+    `<meta name="description" content="${R.esc(lead)}">` +
+    `<meta property="og:title" content="${R.esc(pageTitle)}">` +
+    `<meta property="og:description" content="${R.esc(lead)}">` +
+    `<meta property="og:url" content="${R.esc(canonical)}">` +
+    `<meta property="og:type" content="website">` +
+    `<meta property="og:site_name" content="${R.esc(siteTitle)}">`;
+  // `/en/newsletter` is served by the CATCH-ALL (pages/[[...slug]].rose) —
+  // the same route `/en/search` and `/en/archives` ride — and the catch-all
+  // emits `{@html main}` and nothing else. A form written only in
+  // newsletter.rose's template would therefore be missing on the English twin,
+  // which is exactly where the locale switcher on /newsletter points. So the
+  // markup is defined once, in newsletterFormHtml, and `main` carries it with
+  // an inline binder. The zh route renders `form` through its own $state
+  // template instead; both post to the same endpoint with the same three
+  // outcomes and read nothing but the status code (the endpoint's answer is
+  // deliberately uniform, so it cannot be used to probe the list).
+  const form = newsletterFormHtml(t);
+  const heading =
+    `<h1 class="text-3xl font-bold text-zinc-100">${R.esc(t("newsletter.title"))}</h1>` +
+    `<p class="mt-2 text-sm text-zinc-400">${R.esc(lead)}</p>`;
+  const twinMsgs = JSON.stringify({
+    ok: t("newsletter.confirm_pending"),
+    invalid: t("api.email_invalid"),
+    failed: t("newsletter.failed"),
+  });
+  const twinScript =
+    `<script>(function(){` +
+    `var f=document.querySelector("[data-nl-form]");if(!f)return;` +
+    `var m=document.querySelector("[data-nl-status]");` +
+    `var M=${twinMsgs};` +
+    `function say(k){if(!m)return;m.hidden=false;m.textContent=M[k];` +
+    `m.style.color=k==="ok"?"#4ade80":"#f87171";}` +
+    `f.addEventListener("submit",function(e){e.preventDefault();` +
+    `var i=f.querySelector("[data-nl-email]");var v=i?i.value:"";` +
+    `fetch("/api/newsletter/subscribe",{method:"POST",` +
+    `headers:{"content-type":"application/json"},` +
+    `body:JSON.stringify({email:v,locale:${JSON.stringify(locale)}})})` +
+    `.then(function(r){return r.status===422?"invalid":r.ok?"ok":"failed";},function(){return "failed";})` +
+    `.then(say);});})();</script>`;
+  const main =
+    payload && payload.twin
+      ? `<section class="df-card">` +
+        heading +
+        form +
+        `<p class="df-suggest-status mt-2" data-nl-status hidden role="status"></p>` +
+        `</section>` +
+        twinScript
+      : heading;
+  const s = {
+    title: t("newsletter.title"),
+    email_label: t("newsletter.email_label"),
+    placeholder: t("newsletter.placeholder"),
+    submit: t("newsletter.submit"),
+    confirm_pending: t("newsletter.confirm_pending"),
+    // The 422 the endpoint answers is api.email_invalid — reusing the same key
+    // keeps the page's wording byte-identical to the server's, so a visitor
+    // never sees two phrasings of one error.
+    email_invalid: t("api.email_invalid"),
+    failed: t("newsletter.failed"),
+  };
+  // `form` is the same markup the twin's `main` carries: the .rose page
+  // renders it through its own reactive template so the status line can be
+  // driven by $state rather than by DOM mutation.
+  return { head, main, form, s, locale };
 }
 
 // ----------------------------------------------------------------- registry
@@ -2170,6 +3427,18 @@ async function loginBrand() {
  * into the background and its instance-mates hit warm memos.
  */
 export async function warmReadWave(): Promise<void> {
+  // R274: the pairing flag starts false every process. Probe it here (the
+  // boot read wave) so a site that already has translation pairs comes up
+  // with self-canonical /en and a live hreflang cluster — without waiting for
+  // the first content write to re-probe.
+  try {
+    const rows = await rawQuery<{ n: number }>(
+      `select count(*)::int as n from posts where translation_of is not null`,
+    );
+    setPairingActive(Number(rows[0]?.n ?? 0) > 0);
+  } catch {
+    /* a probe failure leaves the flag false: R269 semantics, always safe */
+  }
   await Promise.all([
     getSettings(),
     getActiveThemeSlug(),
@@ -2213,9 +3482,18 @@ export const loaders = {
   search,
   post: postDetail,
   page: pageDetail,
-  archives,
+  // R214: `archives.rose` loads this key directly (not via the catch-all's
+  // `resolve`), so it skipped finalizeView and shipped 0 hreflang links —
+  // /archives and /en/archives were never paired. Wrap it here so the same
+  // post-processing every other view gets (hreflang + locale-prefixed links)
+  // reaches this one too.
+  archives: async (payload: { year?: number; month?: number }, ctx?: Ctx) =>
+    finalizeView(await archives(payload, ctx), ctx as Ctx, localeOf(ctx)),
+  // The public subscribe page (`pages/newsletter.rose` loads this key).
+  newsletter: newsletterPage,
   notFound,
   resolve,
+  redirectFor,
   // admin screens (all per-request DB reads, session-gated)
   "admin.session": admin.adminSession,
   "admin.setup": admin.adminSetup,
@@ -2225,6 +3503,7 @@ export const loaders = {
   "admin.pages": admin.adminPages,
   "admin.page": admin.adminPage,
   "admin.comments": admin.adminComments,
+  "admin.newsletter": admin.adminNewsletter,
   "admin.media": admin.adminMedia,
   "admin.menus": admin.adminMenus,
   "admin.widgets": admin.adminWidgets,
@@ -2244,9 +3523,12 @@ export const loaders = {
   "admin.security-public": admin.adminSecurityPublic,
   "admin.oauth": admin.adminOAuth,
   "admin.permalinks": admin.adminPermalinks,
+  "admin.redirects": admin.adminRedirects,
   "admin.maintenance": admin.adminMaintenance,
   "admin.security-logs": admin.adminSecurityLogs,
   "admin.icons": admin.adminIcons,
+  "admin.searchTerms": admin.adminSearchTerms,
+  "admin.webmentions": admin.adminWebmentions,
   "notFoundConfig": admin.notFoundConfig,
 };
 export type LoaderKey = keyof typeof loaders;
@@ -2281,4 +3563,13 @@ export async function dispatch(key: string, payload: any, ctx: Ctx): Promise<unk
 }
 
 /** Raw document builders for middleware-intercepted XML/txt routes. */
-export const documents = { feed, robots, manifest };
+export const documents = {
+  feed,
+  jsonFeed,
+  commentsFeed,
+  commentsJsonFeed,
+  taxonomyFeed,
+  taxonomyJsonFeed,
+  robots,
+  manifest,
+};

@@ -39,7 +39,7 @@ export async function sessionCookiePair(user: SessionUser): Promise<string[]> {
  * A plain object field (`headers: { "set-cookie": values }`) is WRONG for more
  * than one cookie: the runtime collapses the array into a single comma-joined
  * header, and a browser then parses only the first name=value pair - every
- * cookie after the first is silently dropped (rosezm BUG.md entry Y: this bit
+ * cookie after the first is silently dropped (Rosezm BUG.md entry Y: this bit
  * every login path until 0.2.8's framework 0.1.8 upgrade surfaced it).
  * Headers.append keeps one header per cookie, which is what the spec wants.
  */

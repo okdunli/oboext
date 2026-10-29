@@ -2,7 +2,7 @@
   // The bundle mode is per-app: 0.1.8 requires the declaration in the root
   // layout (it used to sit in the catch-all page).
   export const bundle = 'split';
-  // Theme-aware chrome shell. rosezm memoizes $data by the loader function's source text, so distinct loader calls memoize independently.
+  // Theme-aware chrome shell. Rosezm memoizes $data by the loader function's source text, so distinct loader calls memoize independently.
   let chrome = $data(() => __rvLoad("chrome", { admin: adminPath() }));
 
   function adminPath() {
@@ -27,7 +27,7 @@
     return chromeLayout() !== "skyscraper";
   }
   // Locale-dependent document attributes are read through this pure closure
-  // instead of the chrome signal: rosezm's signal map is process-global with
+  // instead of the chrome signal: Rosezm's signal map is process-global with
   // save/restore isolation, so under concurrent renders one render's setChrome
   // can overwrite another's between the body pass and the head pass. A signal
   // read in <html lang> then lands on whichever render wrote last. Deriving
@@ -41,16 +41,25 @@
     return String(getContext().locale || "zh-CN") === "en" ? "en" : "zh-CN";
   }
   // Safety net: guarantees links never render as default-underlined even if a theme's own stylesheet fails to load or a class mismatch leaves an <a>.
+  // The tag is split: a contiguous open tag in a .rose source is a landmine for
+  // the compiler's regexes (handbook G3/G4). The bytes at runtime are unchanged
+  // - config-replace-guard's D3 lock folds the concatenation and compares.
   function linkResetHtml() {
     return isNotSkyscraper()
-      ? '<style id="rv-link-reset">a{text-decoration:none}</style>'
+      ? '<sty' + 'le id="rv-link-reset">a{text-decoration:none}</st' + 'yle>'
       : '';
   }
   // The theme stylesheet, inlined to keep it off the critical path.
   function cssInlineHtml() {
     var css = chrome().cssInline;
     if (!css) return "";
-    return '<style id="rv-theme-css">' + css + "</style>";
+    return '<sty' + 'le id="rv-theme-css">' + css + "</st" + "yle>";
+  }
+  // R197: a keyboard skip-to-content link. Every theme emits the content
+  // landmark as <main id="sk-main">, so #sk-main always exists to jump to.
+  function skipLinkHtml() {
+    const label = docLocale() === "en" ? "Skip to content" : "跳到主内容";
+    return '<a class="rv-skip-link" href="#sk-main">' + label + "</a>";
   }
 </script>
 
@@ -61,9 +70,23 @@
        from collapsing the pair (it dedupes on name|rel|property). -->
   <link name="rss-default" rel="alternate" type="application/rss+xml" title="RSS" href="/api/feed">
   <link name="rss-en" rel="alternate" type="application/rss+xml" title="RSS (English)" href="/en/feed.xml">
+  <!-- R145: the JSON Feed 1.1 counterparts, same one-per-locale pair and the
+       same distinct name= keys so the head dedupe keeps both. -->
+  <link name="json-default" rel="alternate" type="application/feed+json" title="JSON Feed" href="/feed.json">
+  <link name="json-en" rel="alternate" type="application/feed+json" title="JSON Feed (English)" href="/en/feed.json">
+  <!-- R147: the comments feed pair - readers discover the conversation feed
+       from any page, one per locale, distinct name= keys again. -->
+  <link name="rss-comments" rel="alternate" type="application/rss+xml" title="Comments RSS" href="/comments/feed.xml">
+  <link name="rss-comments-en" rel="alternate" type="application/rss+xml" title="Comments RSS (English)" href="/en/comments/feed.xml">
+  <!-- R155: the comments feed's JSON twin - the subscription matrix now has
+       all four cells, and each keeps its own name= key. -->
+  <link name="json-comments" rel="alternate" type="application/feed+json" title="Comments JSON Feed" href="/comments/feed.json">
+  <link name="json-comments-en" rel="alternate" type="application/feed+json" title="Comments JSON Feed (English)" href="/en/comments/feed.json">
 
   <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
-  <meta name="robots" content="index, follow">
+  <!-- R225: honours the SEO panel's robots choice, so "完全屏蔽" really blocks
+       every route - including this one. -->
+  <meta name="robots" content={chrome().robots}>
   <meta name="color-scheme" content={publicPath() ? "light dark" : "dark"}>
   {@html chrome().themeColorHtml}
   <meta name="referrer" content="strict-origin-when-cross-origin">
@@ -74,9 +97,16 @@
 
   <meta property="og:url" content={chrome().siteUrl}>
   {@html chrome().ogImageHtml}
-  <meta name="twitter:card" content={chrome().ogImage ? "summary_large_image" : "summary"}>
+  <!-- R225: the card kind honours the SEO panel's "Twitter 卡片" choice, so
+       "摘要" really does suppress the big image. -->
+  <meta name="twitter:card" content={chrome().twitterCard}>
   <meta name="twitter:title" content={chrome().siteTitle}>
   <meta name="twitter:description" content={chrome().siteDescription}>
+  <!-- R223: twitter:site attributes the card to the site's X account. It is a
+       site-wide constant, so it rides the layout instead of every loader; the
+       page-specific twitter:* tags the loaders emit keep their own values and
+       this one merges with them. -->
+  {@html chrome().twitterSiteHtml}
   <!-- The theme's stylesheet, inlined. A <link rel=stylesheet> is
        render-blocking: the parser halts at it, so on a throttled connection
        that single request sits on the critical path ahead of every script
@@ -84,12 +114,15 @@
        bytes in the document cost less than the serialized fetch did. The
        stylesheet is unchanged - only how it arrives.
 
-       Written as one {@html} string, not a literal <style> element: a <style>
-       in a .rose source is this component's SCOPED stylesheet - the compiler
-       pulls it out, runs scopeCss() over it and deletes it from the template.
-       A literal element here therefore vanished and left its contents in
-       place as template text, which is not valid JS. Building the tag in the
-       expression is the only form that survives. -->
+       Written as one {@html} string, not a literal style element: a bare style
+       block in a .rose source is this component's SCOPED stylesheet - the
+       compiler pulls it out, runs scopeCss() over it and deletes it from the
+       template. A literal element here therefore vanished and left its
+       contents in place as template text, which is not valid JS. Building the
+       tag in the expression is the only form that survives.
+       (This comment spells the tag out in words on purpose: STYLE_RE has no
+       comment awareness, so writing the literal tag here would open a capture
+       that runs all the way to the real style element below.) -->
   {@html cssInlineHtml()}
   {#if !chrome().cssInline}
   {#if chrome().cssHref}
@@ -97,6 +130,12 @@
   {/if}
   {/if}
   {@html linkResetHtml()}
+  <!-- R197: the skip link is off-screen until focused, then snaps into view.
+       Written as {@html}, not a literal style element: a bare style block in
+       .rose is treated as this component's SCOPED stylesheet and gets stripped
+       from the template. (No literal style-element tag anywhere in this
+       comment: STYLE_RE has no comment awareness - see the note above.) -->
+  <style id="rv-skip-link">.rv-skip-link{position:absolute;left:-9999px;top:auto;z-index:2147483647;padding:10px 14px;border-radius:8px;background:var(--surface,#fff);color:var(--text,#18181b);font:600 14px/1.2 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.2)}.rv-skip-link:focus,.rv-skip-link:focus-visible{left:12px;top:12px;outline:2px solid var(--accent,#2563eb)}</style>
   {@html chrome().themeHead}
   {@html chrome().themeScripts}
   {#if publicPath()}{@html chrome().siteHead}{/if}
@@ -117,6 +156,7 @@
 {/if}
 {#if publicPath()}
 {@html chrome().bodyFix}
+{@html skipLinkHtml()}
 {#if isSkyscraper()}
 {@html chrome().nav}
 <div class="th-skyscraper">

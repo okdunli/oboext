@@ -1,7 +1,5 @@
 <script>
-  // /api/plugins
-  //   GET  list installed plugins (row + manifest + resolved settings)
-  //   POST multipart {file} — install a plugin zip under plugins/<slug>
+  // /api/plugins GET list installed plugins (row + manifest + resolved settings) POST multipart {file} — install a plugin zip.
   import { apiGate, jsonFail, requireCap } from "@server/admin";
   import { listPlugins, installPluginZip } from "@server/plugins";
   import { MAX_ZIP_BYTES } from "@server/package-install";

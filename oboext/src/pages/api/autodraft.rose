@@ -1,0 +1,30 @@
+<script>
+  // Editor auto-draft: POST {key, title, content} saves, GET ?key= reads.
+  import { apiGate, readBody, requireUser, jsonFail } from "@server/admin";
+  import { saveAutoDraft, getAutoDraft } from "@server/autodraft";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const u = requireUser(getContext().user);
+      const body = await readBody(request);
+      const key = String(body?.key ?? "").trim();
+      if (!key) return jsonFail("缺少 key", 422);
+      await saveAutoDraft(u, key, { title: body.title, content: body.content });
+      return { ok: true };
+    });
+  }
+
+  export async function GET(request) {
+    return apiGate(async () => {
+      const u = requireUser(getContext().user);
+      const key = new URL(request.url).searchParams.get("key") ?? "";
+      if (!key) return jsonFail("缺少 key", 422);
+      const draft = await getAutoDraft(u, key);
+      if (!draft) return new Response(JSON.stringify({ draft: null }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+      return { draft };
+    });
+  }
+</script>

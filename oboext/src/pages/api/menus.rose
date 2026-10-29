@@ -1,7 +1,5 @@
 <script>
-  // /api/menus
-  //   GET  list all menus with resolved items (public, like the original)
-  //   POST create a menu location {location,name} (settings:manage)
+  // /api/menus GET list all menus with resolved items (public, like the original) POST create a menu location {location,name} (settings:manage)
   import { apiGate, readBody, jsonFail } from "@server/admin";
   import { listMenus, createMenu } from "@server/menus";
 

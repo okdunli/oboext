@@ -10,7 +10,7 @@ import { mimeFor, PUBLIC_DIR } from "./storage.js";
 import { DEFAULT_LOCALE, makeT, type Translate } from "./i18n.js";
 
 export * as R from "./render.js";
-export { esc, fmtDate } from "./render.js";
+export { esc, fmtDate, authorByline } from "./render.js";
 export { mimeFor, PUBLIC_DIR } from "./storage.js";
 export { DEFAULT_LOCALE, makeT } from "./i18n.js";
 export type { Translate } from "./i18n.js";
@@ -201,6 +201,8 @@ export type PostPageParts = {
   tagsHtml: string;
 
   defTagsHtml?: string;
+  /** R280: the "read the translation" link; present only when this post is paired. */
+  pairLink?: string;
   shareHtml: string;
 
   blogIndex?: string;
@@ -426,9 +428,30 @@ export function themeScriptTags(slug: string): string {
 export function themeHeadExtra(slug: string): string {
   const d = readThemeDecl(slug);
   const noflash = d.noflash
-    ? `<script src="${themeAssetHref(slug, d.noflash)}" defer></script>`
+    ? inlineNoflash(slug, d.noflash.replace(/^assets\//, ""))
     : "";
   return fontPreloadLinks(slug) + noflash;
+}
+
+// noflash restores the saved color scheme BEFORE first paint; a defer'd
+// external script runs after paint, so dark-mode visitors flash the light
+// theme on every cold load. Inlined for free: it is one script read at
+// render, ~200B, and runs synchronously in <head>. Missing file → "".
+function inlineNoflash(slug: string, rel: string): string {
+  try {
+    return (
+      `<script>` +
+      fs
+        .readFileSync(path.join(THEMES_DIR, slug, "assets", rel), "utf-8")
+        .trim()
+        // safe in strings and regexes; keeps a stray </script> from
+        // terminating the head script early
+        .replace(/<\/script/gi, "<\\/script") +
+      `</script>`
+    );
+  } catch {
+    return "";
+  }
 }
 
 export const GLOBALS_BODY_UTILITIES = `.min-h-screen{min-height:100vh}
@@ -776,6 +799,10 @@ export function serveThemeAsset(urlPath: string, method = "GET"): Response {
         "content-type": mimeFor(target),
         "content-length": String(data.length),
         "cache-control": "public, max-age=31536000, immutable",
+        // Same origin-served bytes as /uploads and /public: nosniff stops a
+        // browser re-interpreting a mislabeled theme asset as HTML/JS
+        // (type-confusion XSS). Zero cost for correctly-typed content.
+        "x-content-type-options": "nosniff",
       },
     });
   } catch {

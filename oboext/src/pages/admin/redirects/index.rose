@@ -1,0 +1,173 @@
+<script>
+  // Redirect rules — R193. The screen an operator needs to trust the table:
+  // which path moves where, whether the move is permanent (a 301 the browser
+  // keeps after this page forgets it), and whether the software wrote the rule
+  // on a rename or a person typed it.
+  let d = $data(() => __rvLoad("admin.redirects", {}));
+  function rows() {
+    return d().rows || [];
+  }
+  function emptyHint() {
+    return rows().length ? [] : [1];
+  }
+  function statusOf(r) {
+    return r.permanent ? "301" : "302";
+  }
+  function statusStyle(r) {
+    return r.permanent
+      ? "background:rgba(22,163,74,.14);color:#4ade80;"
+      : "background:rgba(217,119,6,.15);color:#fbbf24;";
+  }
+  function originOf(r) {
+    return r.auto ? "自动" : "手动";
+  }
+  function ic(n) {
+    return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/' + n + '.svg)"></span>';
+  }
+  function fmt(iso) {
+    if (!iso) return "—";
+    const dt = new Date(iso);
+    if (isNaN(dt.getTime())) return "—";
+    const pad = (n) => String(n).padStart(2, "0");
+    return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes());
+  }
+  function confirmDelete(r) {
+    return "确认删除规则「" + r.source + "」？旧地址会立刻恢复成 404。";
+  }
+
+  // The add-rule form is server-rendered from the loader, so its wiring waits
+  // for the DOM: onMount is a no-op on the server (no document) and is also what
+  // makes the compiler ship this route's client bundle - a zero-JS route runs
+  // none of this in the browser, so a bare IIFE here would bind nothing.
+  onMount(function () {
+    var box = document.querySelector("[data-adm-redirects]");
+    if (!box || box.__rdBound) return;
+    box.__rdBound = true;
+    var form = box.querySelector("[data-rd-form]");
+    var msg = box.querySelector("[data-rd-msg]");
+    function say(text, ok) {
+      if (!msg) return;
+      msg.hidden = false;
+      msg.textContent = text;
+      msg.style.color = ok ? "#4ade80" : "#f87171";
+    }
+    form.addEventListener("submit", async function (ev) {
+      ev.preventDefault();
+      var btn = form.querySelector("button[type=submit]");
+      if (btn) btn.disabled = true;
+      var payload = {
+        source: form.source.value,
+        target: form.target.value,
+        permanent: form.permanent.value !== "0",
+      };
+      try {
+        var r = await fetch("/api/redirects", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        var data = null;
+        try { data = await r.json(); } catch (e) {}
+        if (!r.ok) {
+          say("添加失败（" + r.status + "）：" + ((data && data.error) || "未知错误"), false);
+          if (btn) btn.disabled = false;
+          return;
+        }
+        // The table is server-rendered from the loader, so the only honest way
+        // to show the new row is to re-read the page.
+        window.location.reload();
+      } catch (e) {
+        say("请求没走通：" + (e && e.message ? e.message : e), false);
+        if (btn) btn.disabled = false;
+      }
+    });
+  });
+</script>
+
+<head>
+  <title>重定向 - 管理后台</title>
+</head>
+
+<div class="adm-card" data-adm-redirects>
+  <div class="adm-card-hd">新增规则</div>
+  <div class="adm-card-bd">
+    <form class="adm-tax-add" data-rd-form>
+      <div class="adm-tax-fields">
+        <div class="adm-field adm-tax-grow">
+          <label>旧路径（站内，以 / 开头）</label>
+          <input class="adm-input" name="source" required placeholder="/blog/old-slug">
+        </div>
+        <div class="adm-field adm-tax-grow">
+          <label>新地址（站内路径或完整 http(s) 链接）</label>
+          <input class="adm-input" name="target" required placeholder="/blog/new-slug">
+        </div>
+        <div class="adm-field">
+          <label>类型</label>
+          <select class="adm-select" name="permanent">
+            <option value="1">永久 301</option>
+            <option value="0">临时 302</option>
+          </select>
+        </div>
+        <div class="adm-field">
+          <label>&nbsp;</label>
+          <button class="adm-btn" type="submit">{@html ic("plus")} 添加</button>
+        </div>
+      </div>
+    </form>
+    <p class="adm-hint" data-rd-msg hidden></p>
+    <p class="adm-hint">
+      规则只在「该路径没有任何内容」时生效，所以一个后来重新占用旧别名的文章不会被自己的旧规则抢走；
+      首页与后台路径不可作为源，目标不接受 javascript:、data: 与 //host 形式。
+    </p>
+  </div>
+</div>
+
+<div class="adm-toolbar" style="gap:8px;">
+  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-op="delete" data-url="/api/redirects" data-confirm="确认删除选中的重定向规则？旧地址会立刻恢复成 404。">批量删除</button>
+</div>
+
+<div class="adm-card adm-table-wrap">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th style="width:34px"><input type="checkbox" data-adm-act="check-all" title="全选"></th>
+        <th>旧路径</th>
+        <th>新地址</th>
+        <th style="width:70px">类型</th>
+        <th style="width:70px">来源</th>
+        <th style="width:70px">命中</th>
+        <th style="width:140px">创建时间</th>
+        <th style="width:110px;text-align:right">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each rows() as r}
+      <tr>
+        <td><input type="checkbox" class="adm-check" value={r.id}></td>
+        <td><a href={r.source} title="看看旧地址现在的落点">{r.source}</a></td>
+        <td class="adm-hint">{r.target}</td>
+        <td><span class="adm-tag" style="{statusStyle(r)}">{statusOf(r)}</span></td>
+        <td class="adm-hint">{originOf(r)}</td>
+        <td class="adm-hint">{r.hits}</td>
+        <td class="adm-hint">{fmt(r.createdAt)}</td>
+        <td>
+          <div class="row-actions">
+            <button
+              type="button"
+              class="adm-iconbtn danger"
+              data-adm-act="delete"
+              data-url={"/api/redirects/" + r.id}
+              data-confirm={confirmDelete(r)}
+              title="删除"
+            >{@html ic("trash-2")} 删除</button>
+          </div>
+        </td>
+      </tr>
+      {/each}
+    </tbody>
+  </table>
+  {#each emptyHint() as _}
+  <div class="adm-card-bd adm-empty">还没有重定向规则。改名文章、页面或分类后会自动出现，也可以手工添加。</div>
+  {/each}
+</div>

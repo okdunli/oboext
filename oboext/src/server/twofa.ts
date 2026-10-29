@@ -1,5 +1,3 @@
-
-
 import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
@@ -17,7 +15,7 @@ import {
 } from "./totp.js";
 
 export const TWOFA_PLUGIN_SLUG = "two-factor";
-const ISSUER = "oboext";
+const ISSUER = "Oboext";
 const RECOVERY_COUNT = 20;
 
 type RecoveryRecord = { h: string; usedAt: string | null };
@@ -66,6 +64,13 @@ export async function beginEnrollment(user: SessionUser): Promise<{
   secret: string;
   otpauth: string;
 }> {
+  // Re-enrolling while 2FA is already on would overwrite the live secret with a
+  // disabled one and wipe every recovery code - one API call silently disabling
+  // the second factor. Force a disable first.
+  const existing = await getTwoFaState(user.id);
+  if (existing?.enabled) {
+    throw new ServiceError("请先关闭当前双因素认证后再重新绑定", 400);
+  }
   const secret = generateSecret();
   const state: TwoFaState = {
     v: 1,

@@ -1,5 +1,3 @@
-
-
 export type FieldType =
   | "text"
   | "textarea"
@@ -11,12 +9,12 @@ export type FieldType =
   | "image"
   | "code"
   | "font"
-  | "links"
-  | "footerLinks"
-  | "categoryRows"
-  | "verifications"
-  | "hidden"
-  | "group";
+  | "links" // repeatable {label,url} list
+  | "footerLinks" // repeatable {text,url,image?} list — footer links
+  | "categoryRows" // repeatable {slug,title} list — homepage category sections
+  | "verifications" // webmaster verification codes {google,yandex,bing,yahoo}
+  | "hidden" // stored but never rendered — plugin custom panels own the UI
+  | "group"; // visual sub-heading, no value
 
 /** One row of a `categoryRows` field: a category plus optional title and
  *  lucide icon override (blank = the theme's default block icon). */
@@ -95,6 +93,8 @@ export function coerceField(field: SettingField, raw: unknown): unknown {
     case "switch":
       return raw === true || raw === "true" || raw === "on" || raw === 1;
     case "hidden":
+      // Stored verbatim (arrays / objects) — the field exists only so plugin
+      // settings persistence keeps keys owned by a custom admin panel.
       return raw;
     case "links":
       return Array.isArray(raw) ? raw : [];

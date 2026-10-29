@@ -1,4 +1,4 @@
-// 404 page configuration — ported from oboext lib/services/not-found-config.ts.
+// 404 page configuration — ported from Oboext lib/services/not-found-config.ts.
 import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";

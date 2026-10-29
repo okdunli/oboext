@@ -1,5 +1,3 @@
-
-
 export type PostFormatExtraField = {
   key: string;
   label: string;
@@ -10,10 +8,10 @@ export type PostFormatExtraField = {
 export type PostFormatDef = {
   value: string;
   label: string;
-
+  
   icon: string;
   description: string;
-
+  
   hideTitle?: boolean;
   extraFields?: PostFormatExtraField[];
 };

@@ -1,0 +1,26 @@
+<script>
+  // POST /webmention — W3C Webmention receive endpoint (plus its verbatim
+  // /api/webmention alias, below).
+  //
+  // The whole protocol is a fetch-your-source-and-verify loop, which is exactly
+  // the shape the framework forbids on an endpoint: an api route answers
+  // immediately and holds nothing. So the answer is a RECEIPT — 202 with an
+  // empty body, issued right after the (source, target) row is claimed — and
+  // the fetching/verifying/commenting runs fire-and-forget behind it
+  // (webmention.ts:queueVerification). The claim insert is the idempotency
+  // point: UNIQUE(source, target) means a re-delivery finds the row and answers
+  // the same 202 without a second fetch or a second comment.
+  //
+  // This file is `pages/webmention.rose`'s twin at the /api prefix (see
+  // api/webmention.rose); both delegate to the identical handler so no client
+  // has to guess which one the discovery <link> pointed at.
+  import { handleReceiveRequest } from "@server/webmention";
+
+  export async function GET(request) {
+    return handleReceiveRequest(request);
+  }
+
+  export async function POST(request) {
+    return handleReceiveRequest(request);
+  }
+</script>

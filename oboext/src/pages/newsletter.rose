@@ -1,0 +1,124 @@
+<script>
+  // Public newsletter subscribe page (/newsletter) — double-opt-in step 1.
+  //
+  // The endpoint's answer is DELIBERATELY uniform: `{ ok: true }` whether the
+  // address is brand new, already confirmed, or a re-request, so the response
+  // can never tell this page whether the address is already on the list. The
+  // page therefore never asks — it only reports the request's own outcome
+  // (pending / invalid / failed) and nothing else. Guessing "already
+  // subscribed" client-side would be both impossible and a probe.
+  //
+  // Exactly one bare script block (R246 / handbook AV: the compiler's
+  // COMPONENT_RE is not global, so a second block is eaten at build time with
+  // no warning). The wiring sits in onMount, which is also what makes the
+  // compiler ship this route's client bundle — a bare IIFE here would leave
+  // the route zero-JS and the button dead — and onMount is a no-op on the
+  // server, so SSR stays clean.
+  //
+  // The form MARKUP comes from the loader (`d().form`, newsletterFormHtml):
+  // /en/newsletter is served by the catch-all, which only emits the loader's
+  // `main`, so one definition has to cover both routes. This page owns the
+  // reactive half — $state for the address and the outcome.
+  let d = $data(() => __rvLoad("newsletter", {}));
+  // The two pieces of client state. Their auto-setters (setEmail / setStatus)
+  // are reserved names — declaring a same-named function in this file is a
+  // build error (BUG.md AT) — so every write below goes through those two.
+  let email = $state("");
+  let status = $state("");
+
+  function s() {
+    return d().s || {};
+  }
+  function formHtml() {
+    return d().form || "";
+  }
+  function msgText() {
+    const k = status();
+    if (k === "ok") return s().confirm_pending;
+    if (k === "invalid") return s().email_invalid;
+    if (k === "failed") return s().failed;
+    return "";
+  }
+  function msgStyle() {
+    return status() === "ok" ? "color:#4ade80" : "color:#f87171";
+  }
+  function busyStyle() {
+    return "opacity:.7";
+  }
+
+  onMount(function () {
+    const form = document.querySelector("[data-nl-form]");
+    if (!form || form.__nlBound) return;
+    form.__nlBound = true;
+    const field = form.querySelector("[data-nl-email]");
+    const btn = form.querySelector("button[type=submit]");
+    // Mirror the field into $state as it is typed: the submit handler could
+    // read the DOM alone, but the page's own contract is that the address
+    // lives in state, so a future inline validation reads the same value.
+    if (field) {
+      field.addEventListener("input", function () {
+        setEmail(field.value);
+      });
+    }
+    form.addEventListener("submit", async function (ev) {
+      ev.preventDefault();
+      const value = field ? field.value : email();
+      setEmail(value);
+      setStatus("");
+      if (btn) {
+        btn.disabled = true;
+        btn.setAttribute("style", busyStyle());
+      }
+      try {
+        // Built field by field: `email` is a $state name, and the compiler
+        // callifies BARE reads of it — an `{ email: value }` object key would
+        // become `{ email(): value }` and break the build. A property access
+        // (`body.email`) is never touched.
+        const body = {};
+        body.email = value;
+        body.locale = d().locale || "zh-CN";
+        const r = await fetch("/api/newsletter/subscribe", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        // 422 is the endpoint's one keyed failure (api.email_invalid). Every
+        // success answer is byte-identical by design, so there is nothing
+        // else to read out of the response — and nothing else is read.
+        if (r.status === 422) {
+          setStatus("invalid");
+        } else if (!r.ok) {
+          setStatus("failed");
+        } else {
+          let data = null;
+          try {
+            data = await r.json();
+          } catch (e) {
+            data = null;
+          }
+          setStatus(data && data.ok === true ? "ok" : "failed");
+        }
+      } catch (e) {
+        setStatus("failed");
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.setAttribute("style", "");
+      }
+    });
+  });
+</script>
+
+{#if d().head}
+<head>
+  {@html d().head}
+</head>
+{/if}
+
+<section class="df-card">
+  {@html d().main}
+  {@html formHtml()}
+  {#if status()}
+  <p class="df-suggest-status mt-2" style={msgStyle()} role="status">{msgText()}</p>
+  {/if}
+</section>

@@ -1,8 +1,5 @@
 <script>
-  // Categories manager — port of <TaxonomyManager type="category" />. Same
-  // shape as the tags page: a horizontal add bar, one full-width table, and
-  // a modal for editing. Categories additionally carry a parent, description
-  // and an icon (a lucide kebab name; any other text is shown verbatim).
+  // Categories manager — port of <TaxonomyManager type="category" />.
   let d = $data(() => __rvLoad("admin.taxonomies", {}));
   function cats() {
     return d().categories || [];

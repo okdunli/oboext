@@ -1,9 +1,4 @@
-/**
- * Plugin discovery (ported from oboext lib/plugins/registry.ts).
- * A plugin is any `plugins/<slug>/` directory holding a `plugin.json`.
- * Nothing is imported here — discovery stays cheap and side-effect free so
- * the admin can list disabled plugins too.
- */
+// Plugin discovery (ported from Oboext lib/plugins/registry.ts).
 import fs from "fs";
 import path from "path";
 import type { SettingsSchema } from "./settings-schema.js";
@@ -32,23 +27,13 @@ const PLUGINS_DIR = path.join(process.cwd(), "plugins");
 
 export { PLUGINS_DIR };
 
-/**
- * Discovery result cache, keyed by the plugins directory's mtime.
- *
- * `getPluginManifest(slug)` used to call `discoverPlugins()` on every lookup,
- * so `listPlugins()` re-scanned the whole directory once per row — measured at
- * 45.7ms for 18 plugins versus 2.5ms for one scan plus a Map. Any admin page
- * listing plugins paid that on every render.
- *
- * The cache is keyed on the directory mtime rather than being permanent, so a
- * plugin folder appearing or disappearing (zip install, manual copy, delete)
- * is picked up without an explicit invalidation call — the next lookup stats
- * the directory (one syscall) and rescans only when it actually changed.
- */
+// Discovery result cache, keyed by the plugins directory's mtime.
 let cached: { key: string; manifests: PluginManifest[] } | null = null;
 
 function dirFingerprint(): string {
   try {
+    // mtimeMs + size so a same-second change with a different entry count
+    // still invalidates; both are cheap and this runs once per scan attempt.
     const st = fs.statSync(PLUGINS_DIR);
     return `${st.mtimeMs}:${st.size}`;
   } catch {
@@ -74,6 +59,7 @@ export function discoverPlugins(): PluginManifest[] {
       const manifest = JSON.parse(
         fs.readFileSync(manifestPath, "utf-8"),
       ) as PluginManifest;
+      // Directory name always wins so a copy/paste manifest cannot shadow another.
       manifest.slug = entry.name;
       if (!manifest.name) manifest.name = entry.name;
       if (!manifest.updatedAt) {
@@ -111,7 +97,7 @@ export function pluginHasEntry(slug: string): boolean {
 }
 
 /**
- * Does the plugin ship a custom admin panel? rosezm idiom: the plugin's
+ * Does the plugin ship a custom admin panel? Rosezm idiom: the plugin's
  * index.ts fills the admin.panel filter and declares it in plugin.json's
  * `hooks`. The original's on-disk admin.tsx convention is NOT used by this
  * port (those files were removed once ported) — declarative settings live in

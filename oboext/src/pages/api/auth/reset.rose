@@ -22,8 +22,6 @@
       const code = String(body.code || "").trim();
       const password = String(body.password || "");
       if (!account || !code || !password) return jsonFail(t("api.reset_required"), 422);
-      const pwErr = passwordError(password);
-      if (pwErr) return jsonFail(t(pwErr.key || "api.pw_common", pwErr.params), pwErr.status);
 
       const sec = await getAdminSecurity();
       if (!isEntryReferer(request, sec)) return jsonFail(t("api.no_entry"), 404);
@@ -34,6 +32,12 @@
 
         return jsonFail(t("api.reset_wrong"), 401);
       }
+
+      // Context rule (reject a password containing the user's own email/name)
+      // must apply here too, exactly like changeOwnPassword - so the check runs
+      // AFTER the user is resolved, with { email, name } in hand.
+      const pwErr = passwordError(password, { email: user.email, name: user.name });
+      if (pwErr) return jsonFail(t(pwErr.key || "api.pw_common", pwErr.params), pwErr.status);
 
       try {
         await verifyCode({

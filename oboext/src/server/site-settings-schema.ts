@@ -7,7 +7,7 @@ export const SITE_SETTINGS_SCHEMA: SettingsSchema = [
     icon: "Settings",
     description: "站点身份信息，出现在标题栏、页头、页脚与分享卡片上。",
     fields: [
-      { key: "siteTitle", label: "站点名称", type: "text", default: "oboext", half: true },
+      { key: "siteTitle", label: "站点名称", type: "text", default: "Oboext", half: true },
       { key: "tagline", label: "副标题 / 标语", type: "text", default: "", half: true },
       {
         key: "siteDescription",
@@ -99,6 +99,14 @@ export const SITE_SETTINGS_SCHEMA: SettingsSchema = [
         help: "文章未手写摘要时，自动截取的长度。",
       },
       { key: "feedItems", label: "RSS 条目数", type: "number", default: 20, min: 1, max: 100, half: true },
+      {
+        key: "feed_full_text",
+        label: "RSS 输出全文",
+        type: "switch",
+        default: false,
+        half: true,
+        help: "开启后 RSS 输出正文全文而非摘要。",
+      },
       {
         key: "feedContent",
         label: "RSS 输出内容",
@@ -271,6 +279,14 @@ export const SITE_SETTINGS_SCHEMA: SettingsSchema = [
           { value: "utterances", label: "Utterances（GitHub Issues）" },
           { value: "none", label: "不显示评论" },
         ],
+      },
+      {
+        key: "webhook_url",
+        label: "评论 Webhook 地址",
+        type: "text",
+        default: "",
+        placeholder: "https://…",
+        help: "有新评论时向该地址 POST 一条 JSON 通知；留空则禁用。",
       },
       {
         key: "artalkServer",

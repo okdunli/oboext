@@ -10,8 +10,9 @@
       const status = q.get("status") || undefined;
       const limit = q.get("limit") ? Number(q.get("limit")) : undefined;
       const offset = q.get("offset") ? Number(q.get("offset")) : undefined;
+      const sort = q.get("sort") || undefined;
       if (user && can(user.role, "content:read")) {
-        return adminListPages(user, { status, limit, offset });
+        return adminListPages(user, { status, limit, offset, sort });
       }
       return listPublishedPages({ limit, offset });
     });
@@ -39,6 +40,7 @@
         ? body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
         : [];
       if (!ids.length) return jsonFail("未选择任何项目", 422);
+      if (ids.length > 500) return jsonFail("批量操作一次最多 500 项", 422);
       return bulkPages(getContext().user, ids, action);
     });
   }

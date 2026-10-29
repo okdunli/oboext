@@ -1,13 +1,4 @@
-/**
- * Serve /plugin-assets/<slug>/<rel...> from plugins/<slug>/<rel...> on disk —
- * a plugin's admin-panel script and other self-contained static files
- * (parallel to /theme-assets/). GET/HEAD only; a crafted path that escapes
- * the plugins root is rejected (403/404).
- *
- * Why a file and not an inline <script>: the admin document carries a strict
- * CSP (script-src 'self'), so a plugin's behaviour must ship as an external
- * script exactly like the core /public/admin.js does.
- */
+// Serve /plugin-assets/<slug>/<rel...> from plugins/<slug>/<rel...> on disk — a plugin's admin-panel script and other self-contained static files.
 import fs from "fs";
 import path from "path";
 import { PLUGINS_DIR } from "./plugin-registry.js";
@@ -45,6 +36,11 @@ export function servePluginAsset(urlPath: string, method = "GET"): Response {
       headers: {
         "content-type": mimeFor(target),
         "content-length": String(data.length),
+        // R208: plugin files are the least-trusted origin-served bytes (a
+        // third party installs them). Without nosniff a browser may re-sniff
+        // a mislabeled file as HTML/JS and run it - the same type-confusion
+        // XSS class R205 closed for /uploads, /public and /theme-assets.
+        "x-content-type-options": "nosniff",
         "cache-control": "public, max-age=31536000, immutable",
       },
     });

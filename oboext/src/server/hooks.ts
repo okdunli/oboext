@@ -87,7 +87,17 @@ export function removeAllByOwner(owner: string): void {
 export function doAction<P = any>(hook: string, payload?: P): void {
   for (const r of registry().actions.get(hook) ?? []) {
     try {
-      r.callback(payload as P);
+      const out = r.callback(payload as P);
+      // An async action handler (a plugin sending email/webhook on
+      // commentCreated / userLoggedIn / ...) returns a promise. doAction does
+      // not await it, so a rejection would surface as an UNHANDLED rejection and
+      // crash the process under Node's default `--unhandled-rejections=throw`.
+      // Attach a catch so a failing side-effect is logged, not fatal.
+      if (out && typeof (out as Promise<unknown>).then === "function") {
+        (out as Promise<unknown>).catch((err) => {
+          log.error(`[hooks] async action "${hook}" (${r.owner ?? "core"}) failed:`, err);
+        });
+      }
     } catch (err) {
       log.error(`[hooks] action "${hook}" (${r.owner ?? "core"}) failed:`, err);
     }

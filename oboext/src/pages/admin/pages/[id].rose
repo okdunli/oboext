@@ -1,7 +1,12 @@
 <script>
   // Page editor (new + existing), same blocks editor as posts.
   let id = $state("");
-  let d = $data(() => __rvLoad("admin.page", { id: id() }));
+  let d = $data(async () => {
+    const r = await __rvLoad("admin.page", { id: id() });
+    // R228: same dead-bookmark rule as the post editor.
+    if (r.notFound) notFound();
+    return r;
+  });
 
   function pg() {
     return d().page;
@@ -112,6 +117,114 @@
       load();
     }
   }
+  if (typeof document !== "undefined") {
+    // Server auto-draft channel (api/autodraft): 10s debounced POST while
+    // writing + a restore hint when the stored draft is newer than what the
+    // editor loaded. Failures are silent — never interrupt writing.
+    const adm = location.pathname.match(/^\/admin\/(posts|pages)\/(new|\d+)/);
+    if (adm) {
+      const adKey = adm[1] + ":" + adm[2];
+      // djb2 over key-sorted JSON: same content hashes equal regardless of
+      // object key order (JSON.stringify compare was key-order sensitive).
+      function adHash(v) {
+        const cj = (x) => Array.isArray(x) ? "[" + x.map(cj).join(",") + "]"
+          : (x && typeof x === "object") ? "{" + Object.keys(x).sort().map((k) => JSON.stringify(k) + ":" + cj(x[k])).join(",") + "}"
+          : JSON.stringify(x) ?? "null";
+        let h = 5381;
+        const s = cj(v);
+        for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+        return (h >>> 0).toString(16);
+      }
+      let adEd = null;
+      let adTimer = null;
+      function adCapture() {
+        if (!adEd || typeof adEd.payload !== "function") return;
+        try {
+          const titleEl = adEd.root.querySelector("[name=title]");
+          const title = titleEl ? String(titleEl.value || "") : "";
+          const blocks = Array.isArray(adEd.blocks) ? adEd.blocks : [];
+          if (!title.trim() && !blocks.length) return;
+          fetch("/api/autodraft", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ key: adKey, title, content: JSON.stringify(blocks) }),
+          }).catch(() => {});
+        } catch {}
+      }
+      function adBoot(tries) {
+        adEd = window.__admEditor;
+        if (!adEd || typeof adEd.payload !== "function") {
+          if (tries < 100) setTimeout(() => adBoot(tries + 1), 50);
+          return;
+        }
+        const arm = () => {
+          clearTimeout(adTimer);
+          adTimer = setTimeout(adCapture, 10000);
+        };
+        adEd.root.addEventListener("input", arm);
+        adEd.root.addEventListener("change", arm);
+        fetch("/api/autodraft?key=" + encodeURIComponent(adKey), { credentials: "same-origin" })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            const draft = data && data.draft;
+            if (!draft || typeof draft.content !== "string" || !draft.content) return;
+            let blocks = null;
+            try { blocks = JSON.parse(draft.content); } catch { return; }
+            if (!Array.isArray(blocks)) return;
+            const title = String(draft.title || "").trim();
+            if (!blocks.length && !title) return;
+            const cur = Array.isArray(adEd.blocks) ? adEd.blocks : [];
+            if (adHash(blocks) === adHash(cur)) return;
+            if (adEd.entity && adEd.entity.updatedAt && String(draft.updatedAt || "") <= String(adEd.entity.updatedAt)) return;
+            const form = document.querySelector("[data-adm-editor]");
+            if (!form || form.querySelector(".adm-autodraft-banner")) return;
+            const bar = document.createElement("div");
+            bar.className = "adm-autodraft-banner";
+            bar.setAttribute("role", "status");
+            bar.style.cssText = "display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;margin:0 0 14px;border:1px solid #ecd9a8;border-radius:10px;background:#fff9e8;color:#6b5410;font-size:13px";
+            const msg = document.createElement("span");
+            const dt = draft.updatedAt ? new Date(draft.updatedAt) : null;
+            const pad = (n) => String(n).padStart(2, "0");
+            const when = dt && !isNaN(dt.getTime())
+              ? pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes())
+              : "";
+            msg.textContent = "检测到服务器草稿" + (when ? "（" + when + " 保存）" : "") + "，比当前内容新。";
+            const sp = document.createElement("span");
+            sp.style.cssText = "flex:1";
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "adm-btn adm-btn-sm";
+            btn.textContent = "恢复上次草稿";
+            const drop = document.createElement("button");
+            drop.type = "button";
+            drop.className = "adm-btn adm-btn-ghost adm-btn-sm";
+            drop.textContent = "忽略";
+            const dismiss = () => { if (bar.parentNode) bar.parentNode.removeChild(bar); };
+            btn.addEventListener("click", () => {
+              try {
+                const titleEl = adEd.root.querySelector("[name=title]");
+                if (titleEl && draft.title != null) titleEl.value = String(draft.title);
+                adEd.blocks = blocks;
+                if (typeof adEd.render === "function") adEd.render();
+                if (typeof window.admToast === "function") window.admToast("已恢复服务器草稿", "ok");
+              } catch (e) {
+                if (typeof window.admToast === "function") window.admToast("恢复失败", "err");
+              }
+              dismiss();
+            });
+            drop.addEventListener("click", dismiss);
+            bar.appendChild(msg);
+            bar.appendChild(sp);
+            bar.appendChild(btn);
+            bar.appendChild(drop);
+            form.insertBefore(bar, form.firstChild);
+          })
+          .catch(() => {});
+      }
+      adBoot(0);
+    }
+  }
 </script>
 
 <head>
@@ -212,6 +325,11 @@
           <div class="adm-field" style="margin-bottom:12px">
             <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">父页面</span>
             <input class="adm-input" type="number" name="parentId" min="1" placeholder="父页面 ID（可选）" value={parentVal()}>
+          </div>
+          <div class="adm-field" style="margin-bottom:12px">
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">排序</span>
+            <input class="adm-input" type="number" name="order" min="0" max="1000000" placeholder="0" value={val('order')}>
+            <div class="adm-hint" style="margin-top:4px">数字越小越靠前；首页/导航等公开页面列表按此排序，相同则按更新时间。</div>
           </div>
           <div class="adm-field" style="margin-bottom:0">
             <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">特色图 URL</span>

@@ -1,7 +1,5 @@
 <script>
-  // /api/media/replace
-  //   POST ?id=N  multipart {file} - swap the bytes, keep the URL.
-  // A literal route, so it wins over [id].rose for this path.
+  // /api/media/replace POST ?id=N multipart {file} - swap the bytes, keep the URL. A literal route, so it wins over [id].rose for this path.
   import { apiGate, jsonFail } from "@server/admin";
   import { replaceMediaFile } from "@server/media";
 

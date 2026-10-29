@@ -123,7 +123,7 @@ const DEFAULT_SETTINGS: NotifySettings = {
   sms: {
     enabled: false,
     provider: "webhook",
-    signature: "oboext",
+    signature: "Oboext",
     webhook: { ...DEFAULT_WEBHOOK },
     aliyun: { ...DEFAULT_ALIYUN },
     tencent: { ...DEFAULT_TENCENT },
@@ -582,7 +582,7 @@ export async function sendVerificationCode(input: {
   const code = await issueCode(input);
   try {
     const settings = await getSettings();
-    const siteName = settings.siteTitle || "oboext";
+    const siteName = settings.siteTitle || "Oboext";
     if (input.channel === "email") {
       const { subject, text, html } = renderVerificationEmail(
         input.locale ?? DEFAULT_LOCALE,
@@ -608,9 +608,9 @@ export async function sendTestMessage(channel: CodeChannel, target: string): Pro
   if (channel === "email") {
     await deliverViaEmail(
       target,
-      "oboext 通知通道测试",
-      "这是一封来自 oboext 的测试邮件，收到即表示 SMTP / Webhook 配置可用。",
-      "<p>这是一封来自 <b>oboext</b> 的测试邮件，收到即表示通知通道配置可用。</p>",
+      "Oboext 通知通道测试",
+      "这是一封来自 Oboext 的测试邮件，收到即表示 SMTP / Webhook 配置可用。",
+      "<p>这是一封来自 <b>Oboext</b> 的测试邮件，收到即表示通知通道配置可用。</p>",
 
       { code: "888888", purpose: "test" },
     );

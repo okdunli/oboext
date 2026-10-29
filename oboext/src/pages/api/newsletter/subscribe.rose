@@ -1,0 +1,27 @@
+<script>
+  // POST /api/newsletter/subscribe { email, locale }
+  //
+  // Newsletter double-opt-in, step 1: record the address and fire the
+  // confirmation mail (fire-and-forget inside the module — the request never
+  // waits for SMTP, prod-server unconditionally drains request/response
+  // bodies). Every non-error answer is { ok: true } — a confirmed repeat
+  // subscribe and a brand-new one are byte-identical, so the endpoint cannot
+  // probe the list. Errors: 422 api.email_invalid (format), 400 on a body
+  // that is not JSON.
+  import { apiGate, jsonFail, readBody } from "@server/admin";
+  import { subscribe } from "@server/newsletter";
+  import { makeT, headerLocale } from "@server/i18n";
+
+  export async function POST(request) {
+    const t = makeT(headerLocale(request));
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const email = typeof body?.email === "string" ? body.email : "";
+      if (!email.trim()) return jsonFail(t("api.email_required"), 422);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || email.trim().length > 254) {
+        return jsonFail(t("api.email_invalid"), 422);
+      }
+      return subscribe(email, body?.locale);
+    }, t);
+  }
+</script>

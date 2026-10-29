@@ -21,6 +21,13 @@ interface ZipEntry {
   data: Buffer;
 }
 
+export interface UnzipOptions {
+  /** Skip entries by path before their (possibly huge) payload is inflated. */
+  include?: (name: string) => boolean;
+  /** Fail instead of buffering more than this many unpacked bytes in total. */
+  maxTotalBytes?: number;
+}
+
 function u16(b: Buffer, o: number): number {
   return b.readUInt16LE(o);
 }
@@ -37,7 +44,7 @@ function decodeName(raw: Buffer, flags: number): string {
   }
 }
 
-export function unzip(buf: Buffer): ZipEntry[] {
+export function unzip(buf: Buffer, opts?: UnzipOptions): ZipEntry[] {
 
   let eocd = -1;
   const scanStart = Math.max(0, buf.length - 65557);
@@ -60,6 +67,7 @@ export function unzip(buf: Buffer): ZipEntry[] {
   }
 
   const entries: ZipEntry[] = [];
+  let totalBytes = 0;
   let p = cdOffset;
   for (let n = 0; n < total; n++) {
     if (u32(buf, p) !== CD_SIG) {
@@ -76,6 +84,7 @@ export function unzip(buf: Buffer): ZipEntry[] {
     p += 46 + nameLen + extraLen + commentLen;
 
     if (name.endsWith("/")) continue;
+    if (opts?.include && !opts.include(name)) continue;
     if (entries.length >= MAX_ENTRIES) {
       throw new ServiceError("压缩包内文件数量超出上限", 422);
     }
@@ -103,9 +112,14 @@ export function unzip(buf: Buffer): ZipEntry[] {
     } else {
       throw new ServiceError(`暂不支持的压缩方式（method=${method}），请用标准 deflate 重新打包`, 422);
     }
+    totalBytes += data.length;
+    if (opts?.maxTotalBytes && totalBytes > opts.maxTotalBytes) {
+      throw new ServiceError("压缩包解压后体积超出上限，请拆分后重试", 422);
+    }
     entries.push({ name: normalizeZipPath(name), data });
   }
-  if (entries.length === 0) throw new ServiceError("压缩包是空的", 422);
+  if (entries.length === 0)
+    throw new ServiceError(opts?.include ? "压缩包里没有符合要求的文件" : "压缩包是空的", 422);
   return entries;
 }
 

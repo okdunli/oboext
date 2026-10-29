@@ -1,13 +1,4 @@
-/**
- * Plugin service — port of oboext lib/services/plugins.ts.
- *
- * Syncs plugins/ on disk into the `plugins` table (new folders are inserted
- * DISABLED — third-party code is never auto-executed), serves the admin list,
- * and makes sure every enabled plugin is imported and registered before a
- * request renders content. Differences from the original app: no
- * ensureBootstrap (ensureMigrations covers it) and no public-cache bump (this
- * app renders per request with no cross-response cache).
- */
+// Plugin service — port of Oboext lib/services/plugins.ts.
 import { asc, eq, sql } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
 import { plugins, type Plugin } from "./schema.js";
@@ -37,15 +28,12 @@ export type PluginView = Plugin & {
   runnable: boolean;
 };
 
-/**
- * Sync plugins/ on disk into the `plugins` table. New folders are inserted
- * disabled by default; metadata is refreshed. Rows whose folder disappeared
- * simply match no manifest on read (kept so settings survive a temporary move).
- */
+// Sync plugins/ on disk into the `plugins` table.
 export async function syncPlugins(): Promise<void> {
   await ensureMigrations();
   const manifests = discoverPlugins();
   if (manifests.length === 0) return;
+  // One multi-row upsert.
   await db
     .insert(plugins)
     .values(
@@ -70,12 +58,7 @@ export async function syncPlugins(): Promise<void> {
     });
 }
 
-/**
- * Install a plugin from an uploaded zip: validate plugin.json + entry, land
- * it under plugins/<slug>, sync the row (disabled by default). A newly
- * installed plugin only executes after the next build regenerates the static
- * entry table — see plugin-entries.ts.
- */
+// Install a plugin from an uploaded zip: validate plugin.json + entry, land it under plugins/<slug>, sync the row (disabled by default).
 export async function installPluginZip(buf: Buffer): Promise<PluginView> {
   await ensureMigrations();
   const info = installPackage("plugin", buf);
@@ -148,12 +131,7 @@ export async function updatePluginSettings(
   return getPlugin(slug);
 }
 
-/**
- * Ensure every enabled plugin has been imported and had its hooks registered.
- * Call at the top of any request path that renders content or fires hooks.
- * Warm requests short-circuit on a process flag; cold concurrent requests
- * coalesce onto one in-flight promise.
- */
+// Ensure every enabled plugin has been imported and had its hooks registered.
 let pluginsReady = false;
 let pluginsInflight: Promise<void> | null = null;
 
@@ -162,6 +140,8 @@ export function ensurePluginsLoaded(): Promise<void> {
   if (pluginsInflight) return pluginsInflight;
   pluginsInflight = (async () => {
     await ensureMigrations();
+    // Registration order is filter-chain order, so it must not depend on the
+    // physical row order the planner happens to return.
     const rows = await db
       .select({ slug: plugins.slug, settings: plugins.settings, enabled: plugins.enabled })
       .from(plugins)
@@ -182,10 +162,7 @@ export function ensurePluginsLoaded(): Promise<void> {
   return pluginsInflight;
 }
 
-/**
- * Drop plugin caches and immediately reload. For whole-DB restores and
- * similar paths that bypass the normal mutating services.
- */
+// Drop plugin caches and immediately reload. For whole-DB restores and similar paths that bypass the normal mutating services.
 export async function reloadPlugins(): Promise<void> {
   invalidatePluginCache();
   pluginsReady = false;

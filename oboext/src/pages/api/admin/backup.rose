@@ -2,6 +2,7 @@
 
   import { apiGate, jsonFail, requireCap } from "@server/admin";
   import { buildDatabaseBackup, restoreDatabaseBackup } from "@server/backup";
+  import { recordAdminAction } from "@server/security-events";
 
   function compactStamp() {
 
@@ -44,7 +45,11 @@
       } catch {
         return jsonFail("备份文件不是合法 JSON", 400);
       }
-      return restoreDatabaseBackup(parsed);
+      const result = await restoreDatabaseBackup(parsed);
+      await recordAdminAction(getContext().user, "backup.restore", {
+        tables: Object.keys(result.restored ?? {}),
+      });
+      return result;
     });
   }
 </script>

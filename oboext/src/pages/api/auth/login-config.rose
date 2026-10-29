@@ -1,8 +1,5 @@
 <script>
   // GET /api/auth/login-config — which passwordless login channels are on.
-  // { email, sms } from the notify settings (channel master switch AND the
-  // per-scene login switch); the login page renders the code-login entry
-  // only when at least one is true.
   import { apiGate } from "@server/admin";
   import { getNotifySettings } from "@server/notify";
 

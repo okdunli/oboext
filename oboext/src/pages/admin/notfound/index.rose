@@ -1,5 +1,5 @@
 <script>
-  // 404 page settings admin — port of oboext app/admin/notfound/page.tsx.
+  // 404 page settings admin — port of Oboext app/admin/notfound/page.tsx.
   // Uses data-adm-form="notfound" for admin.js to handle submission.
   let cfg = $data(() => __rvLoad("notFoundConfig", {}));
 

@@ -54,6 +54,10 @@ const RESERVED_SEGMENTS = new Set([
   "api",
   "search",
   "archives",
+  // Public .rose routes: an admin-configured register/entry path on one of
+  // these would be shadowed by the real page (resolveInner claims the segment
+  // before it ever looks at the configured path), so they are refused instead.
+  "newsletter",
   "feed.xml",
   "sitemap.xml",
   "robots.txt",

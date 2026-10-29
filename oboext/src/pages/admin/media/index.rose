@@ -1,8 +1,5 @@
 <script>
-  // Media library (port of components/MediaLibrary.tsx). The grid SSRs live
-  // from the database; upload (multipart), selection, bulk delete, alt edit,
-  // copy-link, preview and drag&drop are enhanced by admin.js. Files land in
-  // content/uploads and are served at /uploads/* by _middleware.rose.
+  // Media library (port of components/MediaLibrary.tsx).
   let d = $data(() => __rvLoad("admin.media", {}));
   function items() {
     return d().items || [];

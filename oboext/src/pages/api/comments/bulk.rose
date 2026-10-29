@@ -9,6 +9,11 @@
       const ids = Array.isArray(body.ids)
         ? body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
         : [];
+      if (ids.length > 500)
+        return new Response(JSON.stringify({ error: "批量操作一次最多 500 项" }), {
+          status: 422,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
       if (body.action === "delete") {
         return { ids: await deleteComments(getContext().user, ids) };
       }

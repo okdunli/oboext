@@ -6,15 +6,11 @@
   import { schema, buildContext } from "@server/graphql";
   import { checkQueryDepth, estimateCost, MAX_COST } from "@server/graphql-guard";
 
-  // Same-origin by default. This used to answer "*", which let any page on the
-  // internet drive this endpoint from a logged-in admin's browser - a
-  // cross-site request forgery surface with a JSON API attached, and the
-  // whole /admin surface is reachable through it.
-  //
-  // The admin UI does not use GraphQL at all (it talks to the /api/admin/*
-  // routes), so nothing on the site depends on cross-origin access. A
-  // deployment that genuinely needs it sets GRAPHQL_ALLOWED_ORIGIN to a
-  // comma-separated allowlist rather than reopening the default.
+  // GET selects GraphiQL HTML vs JSON on the Accept header; partition the hot
+  // cache on it so one representation is never replayed as the other.
+  export const hotVary = ["accept"];
+
+  // Same-origin by default.
   function corsOrigin() {
     const raw = process.env.GRAPHQL_ALLOWED_ORIGIN;
     if (!raw) return null;
@@ -25,9 +21,7 @@
   function withCors(origin) {
     const h = { "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "content-type, authorization" };
     const allow = corsOrigin();
-    // Reflect the request origin only when it is on the allowlist. Echoing an
-    // arbitrary origin back is the same thing as "*" whenever the caller
-    // forgets the credentials flag, so the check has to happen here.
+    // Reflect the request origin only when it is on the allowlist.
     if (allow && origin && allow.includes(origin)) {
       h["access-control-allow-origin"] = origin;
       h["vary"] = "origin";
@@ -64,9 +58,7 @@
       return jsonOut({ errors: [{ message: e instanceof Error ? e.message : "Parse error" }] }, 400, origin);
     }
 
-    // Validation runs before the guards so a malformed query fails on its own
-    // terms rather than being reported as "too deep", which would send the
-    // caller looking in the wrong place.
+    // Validation runs before the guards so a malformed query fails on its own terms rather than being reported as "too deep".
     const problems = validate(schema, document, specifiedRules);
     if (problems.length) {
       return jsonOut({ errors: problems.map((p) => ({ message: p.message })) }, 400, origin);
@@ -109,12 +101,12 @@
       "<!DOCTYPE html>",
       "<html><head><meta charset=\"utf-8\"><title>GraphiQL</title>",
       "<link rel=\"stylesheet\" href=\"https://unpkg.com/graphiql@3/graphiql.min.css\">",
-      "<style>body{margin:0}#graphiql{height:100vh}</style></head>",
+      "<st" + "yle>body{margin:0}#graphiql{height:100vh}</st" + "yle></head>",
       "<body><div id=\"graphiql\">Loading...</div>",
-      "<script src=\"https://unpkg.com/react@17/umd/react.production.min.js\"><\/script>",
-      "<script src=\"https://unpkg.com/react-dom@17/umd/react-dom.production.min.js\"><\/script>",
-      "<script src=\"https://unpkg.com/graphiql@3/graphiql.min.js\"><\/script>",
-      "<script>",
+      "<scr" + "ipt src=\"https://unpkg.com/react@17/umd/react.production.min.js\"><\/script>",
+      "<scr" + "ipt src=\"https://unpkg.com/react-dom@17/umd/react-dom.production.min.js\"><\/script>",
+      "<scr" + "ipt src=\"https://unpkg.com/graphiql@3/graphiql.min.js\"><\/script>",
+      "<scr" + "ipt>",
       "ReactDOM.render(React.createElement(GraphiQL,{fetcher:GraphiQL.createFetcher({url:'/api/graphql'})}),document.getElementById('graphiql'));",
       "<\/script></body></html>",
     ].join("\n");
@@ -158,9 +150,7 @@
     return execute(request, body);
   }
 
-  // Same-origin by default (see corsOrigin above). No wildcard: this endpoint
-  // can drive the entire /admin surface, and answering "*" let any page on the
-  // internet issue those requests from a logged-in admin's browser.
+  // Same-origin by default (see corsOrigin above).
   export async function OPTIONS(request) {
     return new Response(null, { status: 204, headers: withCors(request.headers.get("origin")) });
   }

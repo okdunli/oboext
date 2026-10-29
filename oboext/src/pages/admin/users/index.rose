@@ -83,6 +83,9 @@
           <td class="adm-hint">{fmt(u.createdAt)}</td>
           <td>
             <div class="row-actions">
+              {#if u.role !== "subscriber"}
+              <a class="adm-iconbtn" href={"/author/" + u.id} target="_blank" rel="noopener">主页</a>
+              {/if}
               <button class="adm-iconbtn" data-adm-act="user-edit" data-user={userJson(u)}>编辑</button>
               <button
                 class="adm-iconbtn danger"

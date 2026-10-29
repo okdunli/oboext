@@ -12,9 +12,53 @@ import { media } from "./schema.js";
 import { listPosts } from "./queries.js";
 import { uploadsAbsPath } from "./storage.js";
 import { sanitizeHtml } from "./sanitize.js";
+import { authorUrlFor } from "./links.js";
 import fsMod from "node:fs";
 import pathMod from "node:path";
 import { DEFAULT_LOCALE, makeT, type Locale, type Translate } from "./i18n.js";
+
+// The bundled 80x80 brand mark shipped in public/. Doubles as the publisher
+// logo and og:image fallback so a fresh install still has a valid social card.
+export const BRAND_LOGO = "/public/avatar.png";
+
+/** Robots directives for an indexable page. max-image-preview:large is what
+ *  unlocks the large thumbnail in Google Discover and iOS messages. */
+export const ROBOTS_INDEX = "index, follow, max-image-preview:large";
+
+/**
+ * Robots directives for an indexable page, honouring the SEO panel's choice.
+ * R225: the panel has collected this for rounds and nothing read it, so
+ * "noindex,nofollow（完全屏蔽）" did not block a single crawler. Only the
+ * indexable variants carry max-image-preview - it would be noise on a
+ * directive that tells the crawler to skip the page.
+ */
+export function robotsFor(seoRobots: string | undefined | null): string {
+  const v = (seoRobots ?? "").replace(/\s+/g, "").toLowerCase();
+  if (!v || v === "index,follow") return ROBOTS_INDEX;
+  if (v === "index,nofollow") return "index, nofollow, max-image-preview:large";
+  return v === "noindex,nofollow" ? "noindex, nofollow" : "noindex, follow";
+}
+
+/** twitter:card kind. R225: the SEO panel's "Twitter 卡片" setting ("summary"
+ *  = never show the big image) was stored and never read; the per-page choices
+ *  of "summary_large_image" override it. A forced "summary" wins, an explicit
+ *  large-image request falls back to the image-driven default. */
+export function twitterCardKind(card: string | undefined, ogImage: string): string {
+  if (card === "summary") return "summary";
+  return ogImage ? "summary_large_image" : "summary";
+}
+
+/** Absolute og:image / twitter:image URL: the dedicated social image first,
+ *  then the site logo, then the bundled brand mark. The social image is its own
+ *  setting (a 1200x630 card art) and must win over the logo when both are set. */
+export function socialImage(
+  logoUrl: string | undefined,
+  origin: string,
+  ogImageUrl?: string | undefined,
+): string {
+  const u = ogImageUrl || logoUrl || BRAND_LOGO;
+  return u.startsWith("http") ? u : `${origin}${u}`;
+}
 
 export function extractSubtitle(title: string): string {
   // Match pattern: "prefix 123 · subtitle · subsubtitle"
@@ -25,6 +69,14 @@ export function extractSubtitle(title: string): string {
 
 // F2e (responsive variants for uploads): the sibling `.wNNN` files beside an uploaded image (generated at upload time by media.ts) become a srcset.
 const variantCache = new Map<string, string>();
+
+// URL-keyed memo caches would otherwise grow one entry per distinct image for
+// the life of the process. Cap them FIFO (Map preserves insertion order, so the
+// first key is the oldest); an evicted entry is just recomputed on next use.
+function memoSet<V>(m: Map<string, V>, key: string, val: V, cap = 2000): void {
+  m.set(key, val);
+  if (m.size > cap) m.delete(m.keys().next().value as string);
+}
 
 /** Drop the memoized srcset lookup for one uploads URL (after variants land). */
 export function invalidateVariantCache(url: string): void {
@@ -58,12 +110,12 @@ export function imgVariantAttrs(url: string): string {
   } catch {
     attrs = ""; // unreadable dir: no variants, no attrs
   }
-  variantCache.set(url, attrs);
+  memoSet(variantCache, url, attrs);
   return attrs;
 }
 
 // All builders here return TRUSTED html strings. Templates render them with
-// the framework primitive `{@html expr}` (rosezm 0.2.4, P1-2 fix).
+// the framework primitive `{@html expr}` (Rosezm 0.2.4, P1-2 fix).
 
 // --------------------------------------------------------------------- utils
 
@@ -152,7 +204,10 @@ function renderBlock(b: Block): string {
     case "paragraph":
       return `<p>${esc(b.text).replace(/\n/g, "<br/>")}</p>`;
     case "image": {
-      const img = `<img src="${esc(b.url)}" alt="${esc(b.alt || "")}" loading="lazy" />`;
+      // loading/decoding are owned by optimizeContentImages below, which knows
+      // whether this is the body's first (LCP) image; hardcoding lazy here would
+      // force the hero image lazy too.
+      const img = `<img src="${esc(b.url)}" alt="${esc(b.alt || "")}" />`;
       const cap = b.caption ? `<figcaption>${esc(b.caption)}</figcaption>` : "";
       return `<figure class="cms-figure">${img}${cap}</figure>`;
     }
@@ -211,6 +266,27 @@ export function blocksToPlainText(blocks: Block[] | null | undefined): string {
 
 /** One label/value row on the post meta line (plugins append via post.meta). */
 export type MetaItem = { label: string; value: string };
+
+/**
+ * The author byline — the program's ONE definition of how a writer is credited
+ * (R181). A post whose author row resolves links to its `/author/<id>` archive;
+ * an anonymous or deleted-author post keeps the name as plain text, because a
+ * byline that 404s is worse than no byline at all.
+ *
+ * Themes pass their own class so the styling stays theirs while the URL stays
+ * ours, and the href is emitted root-relative into `main`: the framework's
+ * locale pass rewrites it to `/en/author/<id>` on the English tree without any
+ * theme knowing locales exist.
+ */
+export function authorByline(
+  p: { author?: { id?: number | null; name?: string | null } | null },
+  fallback: string,
+  cls = "",
+): string {
+  const name = esc(p.author?.name || fallback);
+  const id = p.author?.id;
+  return id ? `<a href="${authorUrlFor(id)}"${cls ? ` class="${cls}"` : ""}>${name}</a>` : name;
+}
 
 function addHeadingIds(html: string, slug: string): string {
   let i = 0;
@@ -412,9 +488,11 @@ function highlightCodeBlocks(html: string): string {
   });
 }
 
-// Adds loading="lazy" + decoding="async" + intrinsic width/height (CLS guard) and a
-// responsive srcset (when variant siblings exist) to every <img> in post/page bodies,
-// including raw <img> tags from the `html` block. Hero/featured images render separately.
+// Adds decoding="async" + intrinsic width/height (CLS guard) and a responsive
+// srcset (when variant siblings exist) to every <img> in post/page bodies,
+// including raw <img> from the `html` block. The FIRST in-body image is the
+// usual LCP element, so it loads eagerly with high fetch-priority; every later
+// image is lazy. Hero/featured images render separately.
 const contentImgDimCache = new Map<string, [number, number] | null>();
 
 function readImageDims(abs: string): [number, number] | null {
@@ -485,16 +563,38 @@ function readImageDims(abs: string): [number, number] | null {
   }
 }
 
-export function optimizeContentImages(html: string): string {
-  if (!html.includes("<img")) return html;
-  return html.replace(/<img\b([^>]*)>/gi, (full, attrsRaw: string) => {
-    let attrs = (attrsRaw as string).replace(/\s*\/\s*$/, "");
+/**
+ * Off-critical-path loading for body images: every `<img>` gets `loading="lazy"`
+ * + `decoding="async"`, so a long post's images no longer compete with the
+ * first paint. An author-declared value always wins (`loading="eager"` stays
+ * eager). Exception: the FIRST image is normally the page's LCP element, so it
+ * stays eager (with high fetch-priority) and only gains `decoding="async"`.
+ */
+export function addLazyImages(html: string): string {
+  if (!/<img/i.test(html)) return html;
+  let firstSeen = false;
+  return html.replace(/<img\b([^>]*)>/gi, (_full, attrsRaw: string) => {
+    let attrs = attrsRaw.replace(/\s*\/\s*$/, "");
     const hasLoading = /\sloading\s*=/i.test(attrs);
-    const hasDecoding = /\sdecoding\s*=/i.test(attrs);
+    if (!firstSeen) {
+      firstSeen = true;
+      // An author-declared loading is kept, but the first tag still claims the
+      // eager slot so later images do not also render eagerly.
+      if (!hasLoading) attrs = ` loading="eager" fetchpriority="high"${attrs}`;
+    } else if (!hasLoading) {
+      attrs = ` loading="lazy"${attrs}`;
+    }
+    if (!/\sdecoding\s*=/i.test(attrs)) attrs = ` decoding="async"${attrs}`;
+    return `<img${attrs}>`;
+  });
+}
+
+export function optimizeContentImages(html: string): string {
+  if (!/<img/i.test(html)) return html;
+  return addLazyImages(html).replace(/<img\b([^>]*)>/gi, (_full, attrsRaw: string) => {
+    let attrs = attrsRaw.replace(/\s*\/\s*$/, "");
     const hasDims = /\s(width|height)\s*=/i.test(attrs);
     const hasSrcset = /\ssrcset\s*=/i.test(attrs);
-    if (!hasLoading) attrs = ` loading="lazy"${attrs}`;
-    if (!hasDecoding) attrs = ` decoding="async"${attrs}`;
     if (!hasDims || !hasSrcset) {
       const srcM = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(attrs);
       const url = srcM?.[1];
@@ -508,7 +608,7 @@ export function optimizeContentImages(html: string): string {
           if (dim === undefined) {
             const abs = uploadsAbsPath(url);
             dim = abs ? readImageDims(abs) : null;
-            contentImgDimCache.set(url, dim);
+            memoSet(contentImgDimCache, url, dim);
           }
           if (dim) attrs += ` width="${dim[0]}" height="${dim[1]}"`;
         }
@@ -539,7 +639,7 @@ export function imgPerfAttrs(
     if (dim === undefined) {
       const abs = uploadsAbsPath(url);
       dim = abs ? readImageDims(abs) : null;
-      contentImgDimCache.set(url, dim);
+      memoSet(contentImgDimCache, url, dim);
     }
     if (dim) a += ` width="${dim[0]}" height="${dim[1]}"`;
   }
@@ -626,30 +726,51 @@ export function awardBadge(n: number): string {
   );
 }
 
-export function postCard(p: PostView, award = 0, t?: Translate): string {
+export function postCard(p: PostView, award = 0, t?: Translate, high = false): string {
   const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
+  // The first card on a list page is the usual LCP element: serve it eagerly at
+  // high priority. Later cards are below the fold - lazy-load them. width/height
+  // still come from imgPerfAttrs (CLS stays guarded either way).
+  const imgAttrs = high ? { srcset: false } : { srcset: false, lazy: true };
   const img = p.featuredImage
-    ? `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"><img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)}${imgPerfAttrs(p.featuredImage, { srcset: false })} crossorigin="anonymous"></a>`
+    ? `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"><img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)}${imgPerfAttrs(p.featuredImage, imgAttrs)}${high ? ' loading="eager" fetchpriority="high"' : ""} crossorigin="anonymous"></a>`
     : `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"></a>`;
   const subtitle = extractSubtitle(p.title);
+  // Cards have no like BUTTON (the heart is a static count), so "I liked this"
+  // is carried by the same `data-liked="1"` marker theme.js uses on the share
+  // modal plus a localized tooltip. Absent/false keeps the exact bytes the card
+  // always emitted - related/recent/feed call sites pass no `liked` at all.
+  const likes =
+    p.liked === true
+      ? `<span class="likes" data-liked="1" data-toggle="tooltip" title="${L("theme.liked")}"><i class="skyscraper-icons-heart"></i>${p.likes ?? 0}</span>`
+      : `<span class="likes" data-toggle="tooltip" title="${L("post.likes_tip")}"><i class="skyscraper-icons-heart"></i>${p.likes ?? 0}</span>`;
+  // R279: a non-default-locale card carries a small language tag — a visitor
+  // browsing the zh home sees "EN" on the paired twin, and the /en tree shows
+  // the same on unpaired originals. Default-locale rows (the vast majority)
+  // keep the exact bytes they always emitted.
+  const langTag = p.locale && p.locale !== "zh-CN"
+    ? `<span class="card-lang">${esc(p.locale === "en" ? "EN" : p.locale.toUpperCase())}</span>`
+    : "";
   return (
     `<div class="${CARD_COLS}"><div class="post-card">` +
     (award ? awardBadge(award) : "") +
-    `<div class="title"><span>${esc(p.title)}</span>${subtitle ? `<span class="subtitle">${esc(subtitle)}</span>` : ""}</div>` +
+    `<div class="title"><span>${esc(p.title)}</span>${subtitle ? `<span class="subtitle">${esc(subtitle)}</span>` : ""}${langTag}</div>` +
     img +
     `<div class="metas"><time class="time">${fmtDate(p.publishedAt)}</time>` +
     `<div class="info">` +
     `<span class="reads" data-toggle="tooltip" title="${L("post.reads_tip")}"><i class="skyscraper-icons-book-reader"></i>${p.views ?? 0}</span>` +
-    `<span class="likes" data-toggle="tooltip" title="${L("post.likes_tip")}"><i class="skyscraper-icons-heart"></i>${p.likes ?? 0}</span>` +
+    likes +
     `<span class="comments" data-toggle="tooltip" title="${L("comments.title")}"><i class="skyscraper-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
     `</div><a class="read-more" href="${esc(p.url)}">${L("post.read_more")}</a></div></div></div>`
   );
 }
 
-export function nestedCard(p: PostView, t?: Translate): string {
+export function nestedCard(p: PostView, t?: Translate, high = false): string {
   const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
+  // Same LCP rule as postCard: first nested card eager+high, the rest lazy.
+  const imgAttrs = high ? { srcset: false } : { srcset: false, lazy: true };
   const img = p.featuredImage
-    ? `<img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)}${imgPerfAttrs(p.featuredImage, { srcset: false })} crossorigin="anonymous">`
+    ? `<img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)}${imgPerfAttrs(p.featuredImage, imgAttrs)}${high ? ' loading="eager" fetchpriority="high"' : ""} crossorigin="anonymous">`
     : "";
   const subtitle = extractSubtitle(p.title);
   return (
@@ -671,7 +792,7 @@ export const section = (title: string, inner: string): string =>
 export const cardRow = (items: PostView[], awards = false, t?: Translate): string =>
   items.length === 0
     ? `<div class="sk-empty">${(t ?? makeT(DEFAULT_LOCALE))("empty.posts")}</div>`
-    : `<div class="row post-card-row">${items.map((p, i) => postCard(p, awards ? i + 1 : 0, t)).join("")}</div>`;
+    : `<div class="row post-card-row">${items.map((p, i) => postCard(p, awards ? i + 1 : 0, t, i === 0)).join("")}</div>`;
 
 // --------------------------------------------------------------- post pages
 
@@ -683,11 +804,28 @@ const ICON_QQ =
   '<svg width="17" height="17" viewBox="0 0 448 512" fill="currentColor" aria-hidden="true"><path d="M433.754 420.445c-11.526 1.393-44.86-52.741-44.86-52.741c0 31.345-16.136 72.247-51.051 101.786c16.842 5.192 54.843 19.167 45.803 34.421c-7.316 12.343-125.51 7.881-159.632 4.037c-34.122 3.844-152.316 8.306-159.632-4.037c-9.045-15.25 28.918-29.214 45.783-34.415c-34.92-29.539-51.059-70.445-51.059-101.792c0 0-33.334 54.134-44.859 52.741c-5.37-.65-12.424-29.644 9.347-99.704c10.261-33.024 21.995-60.478 40.144-105.779C60.683 98.063 108.982.006 224 0c113.737.006 163.156 96.133 160.264 214.963c18.118 45.223 29.912 72.85 40.144 105.778c21.768 70.06 14.716 99.053 9.346 99.704"></path></svg>';
 const ICON_QZONE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-star"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"></path></svg><span class="z absolute">z</span>';
-const ICON_HEART =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-heart"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg>';
+// The heart glyph has two states, and both are emitted by the SERVER now: the
+// outline heart of an unliked visitor, and the solid one theme.js would have
+// painted on a client-side like (`fill=currentColor`, `stroke-width=0`). Keeping
+// one function means the two states can never drift apart.
+function heartIcon(filled = false): string {
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"' +
+    ` fill="${filled ? "currentColor" : "none"}" stroke="currentColor" stroke-width="${filled ? "0" : "2"}" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-heart">` +
+    '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg>'
+  );
+}
 
 export function shareBar(p: PostView, siteName = "", siteDescription = ""): string {
   const likes = p.likes ?? 0;
+  // `data-liked="1"` + no `-o` class is exactly the state theme.js's mount
+  // handler and paint() produce, so a returning visitor sees the solid heart
+  // before the script runs instead of a flash of outline. A post without the
+  // field (or liked:false) emits the original button byte for byte.
+  const likeBtn =
+    p.liked === true
+      ? `<button type="button" class="likes" data-liked="1">${heartIcon(true)}</button>`
+      : `<button type="button" class="likes -o">${heartIcon()}</button>`;
   return (
     `<div class="share-modal" data-post-id="${p.id}" data-likes="${likes}"` +
     ` data-title="${esc(p.title)}" data-excerpt="${esc(p.excerpt || "")}" data-thumb="${esc(p.featuredImage || "")}"` +
@@ -696,7 +834,7 @@ export function shareBar(p: PostView, siteName = "", siteDescription = ""): stri
     `<button type="button" class="likes">${ICON_WEIBO}</button>` +
     `<button type="button" class="qq">${ICON_QQ}</button>` +
     `<button type="button" class="qzone">${ICON_QZONE}</button>` +
-    `<button type="button" class="likes -o">${ICON_HEART}</button> ${likes}</div>`
+    `${likeBtn} ${likes}</div>`
   );
 }
 
@@ -734,7 +872,7 @@ export function socialImageMetas(
     if (dim === undefined) {
       const absPath = uploadsAbsPath(url);
       dim = absPath ? readImageDims(absPath) : null;
-      contentImgDimCache.set(url, dim);
+      memoSet(contentImgDimCache, url, dim);
     }
     if (dim) {
       parts.push(`<meta property="og:image:width" content="${dim[0]}">`);
@@ -751,8 +889,10 @@ export function postHead(
   siteTitle: string,
   siteDescription: string,
   origin: string,
-  /** Social-card fallback when the post has no cover: the site logo. */
-  logoUrl?: string,
+  // Social-card fallback when the post has no cover, and the publisher mark
+  // Google's article rich result requires. Defaults to the bundled brand mark
+  // so the field is never dropped just because the admin set no logo.
+  logoUrl: string = BRAND_LOGO,
   /** Reading stats for BlogPosting JSON-LD (wordCount / timeRequired). */
   read?: {
     wordCount: number;
@@ -761,16 +901,35 @@ export function postHead(
      *  the canonical is the bare path, which would tell a crawler an
      *  /en page duplicates its zh-CN original. */
     canonical?: string;
+    /** BCP-47 tag of the rendered locale. */
+    inLanguage?: string;
   },
+  /** The dedicated social card image. Beats the logo for og:image but not for
+   *  publisher.logo: the two are different settings with different shapes. */
+  ogImageUrl?: string,
+  /** The site's twitter:card choice ("summary" forbids the big image). */
+  card?: string,
+  /** The SEO panel's robots choice; defaults to index,follow. */
+  robots?: string,
 ): string {
   const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
   const desc = p.seoDescription || p.excerpt || siteDescription;
   const url = read?.canonical ?? `${origin}${p.url}`;
-  const ogImage = p.featuredImage || logoUrl || "";
+  const ogImage = p.featuredImage || ogImageUrl || logoUrl || "";
   const primaryCat = p.categories?.[0]?.name ?? "";
   const tagMetas = (p.tags ?? []).map((t) => `<meta property="article:tag" content="${esc(t.name)}">`).join("");
   const author = p.author?.name;
-  const iso = (v: Date | string | null | undefined) => new Date(v ?? p.publishedAt!).toISOString();
+  // JSON-LD must never fabricate a date: a draft preview can reach here with
+  // neither publishedAt nor updatedAt, and new Date(null) fakes 1970. A
+  // missing/invalid value drops the field (same rule fmtDateSlash follows).
+  const iso = (v: Date | string | null | undefined): string | null => {
+    const src = v ?? p.publishedAt;
+    if (src == null) return null;
+    const d = new Date(src);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  };
+  const publishedIso = iso(p.publishedAt);
+  const modifiedIso = iso(p.updatedAt || p.publishedAt);
   // BreadcrumbList: home -> (primary category) -> this post. The first crumb
   // doubles as the site root entry; a post without categories is Home->Post.
   const crumbs: Array<{ name: string; url: string }> = [
@@ -782,14 +941,45 @@ export function postHead(
     "@context": "https://schema.org",
     "@type": "BlogPosting",
     headline: p.title,
-    description: desc,
-    datePublished: iso(p.publishedAt),
-    dateModified: iso(p.updatedAt || p.publishedAt),
     mainEntityOfPage: { "@type": "WebPage", "@id": url },
-    author: author ? { "@type": "Person", name: author } : undefined,
-    publisher: { "@type": "Organization", name: siteTitle },
+    inLanguage: read?.inLanguage,
+    // The Person node dereferences to the author's own archive, so a search
+    // engine gets one canonical URL per writer instead of an unresolvable
+    // name. Only the display name and that URL are published — never the email.
+    author: p.author
+      ? { "@type": "Person", name: p.author.name, url: `${origin}${authorUrlFor(p.author.id)}` }
+      : undefined,
+    // R222: commentCount feeds the "Discussion forum" / comment rich-result
+    // surfaces and the article snippet; interactionCount is the legacy key
+    // Google still reads alongside it.
+    ...(p.commentsCount
+      ? { commentCount: p.commentsCount, interactionCount: `UserComments:${p.commentsCount}` }
+      : {}),
+    publisher: {
+      "@type": "Organization",
+      name: siteTitle,
+      // Publisher logo must be absolute too (same rule as image). R216:
+      // Google's article rich result wants a raster mark >=112x112; the bundled
+      // BRAND_LOGO fallback is 80x80, so it is still emitted (a logo
+      // beats none) but an admin-set logo always wins.
+      ...(logoUrl
+        ? { logo: { "@type": "ImageObject", url: logoUrl.startsWith("http") ? logoUrl : `${origin}${logoUrl}` } }
+        : {}),
+    },
   };
-  if (p.featuredImage) posting.image = [p.featuredImage];
+  // Missing fields stay absent rather than arriving empty/fabricated: a draft
+  // preview has no publish date, and a post without its own excerpt must not
+  // emit an empty description claim.
+  if (desc) posting.description = desc;
+  if (publishedIso) posting.datePublished = publishedIso;
+  if (modifiedIso) posting.dateModified = modifiedIso;
+  // Structured-data image URLs must be ABSOLUTE (Google ignores a relative
+  // path), exactly like the og:image socialImageMetas emits below. featuredImage
+  // is stored root-relative (/uploads/...), so prefix the origin.
+  if (p.featuredImage)
+    posting.image = [
+      p.featuredImage.startsWith("http") ? p.featuredImage : `${origin}${p.featuredImage}`,
+    ];
   if (p.tags?.length) posting.keywords = p.tags.map((t) => t.name).join(", ");
   if (read) {
     if (read.wordCount > 0) posting.wordCount = read.wordCount;
@@ -798,7 +988,7 @@ export function postHead(
   return [
     `<title>${esc(fullTitle)}</title>`,
     `<meta name="description" content="${esc(desc)}">`,
-    `<meta name="robots" content="index, follow">`,
+    `<meta name="robots" content="${robotsFor(robots)}">`,
     `<link rel="canonical" href="${esc(url)}">`,
     `<meta property="og:title" content="${esc(fullTitle)}">`,
     `<meta property="og:description" content="${esc(desc)}">`,
@@ -808,10 +998,10 @@ export function postHead(
     `<meta property="og:site_name" content="${esc(siteTitle)}">`,
     primaryCat ? `<meta property="article:section" content="${esc(primaryCat)}">` : "",
     tagMetas,
-    `<meta property="article:published_time" content="${iso(p.publishedAt)}">`,
-    `<meta property="article:modified_time" content="${iso(p.updatedAt || p.publishedAt)}">`,
+    publishedIso ? `<meta property="article:published_time" content="${publishedIso}">` : "",
+    modifiedIso ? `<meta property="article:modified_time" content="${modifiedIso}">` : "",
     author ? `<meta property="article:author" content="${esc(author)}">` : "",
-    `<meta name="twitter:card" content="${ogImage ? "summary_large_image" : "summary"}">`,
+    `<meta name="twitter:card" content="${twitterCardKind(card, ogImage)}">`,
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
     jsonLd(posting),
@@ -925,6 +1115,15 @@ function renderCommentNodes(
       const reply = m.open
         ? `<span><div class="flex-shrink-0 reply flex items-center" data-comment-reply=${n.id} title="${esc(L("comments.reply"))}">${ICON_REPLY}</div></span>`
         : "";
+      // Like button. The initial count stays empty on purpose: the comment
+      // markup is render-cached, so a server-side count could go stale, and
+      // the like aggregation endpoint is POST/DELETE-per-comment only — the
+      // client fills the number in from the like/unlike response and tracks
+      // the visitor's own liked ids in localStorage (see comments.js).
+      const like =
+        `<span><button type="button" class="sf-clike" data-comment-like=${n.id} aria-pressed="false" ` +
+        `title="👍" ` +
+        `style="display:inline-flex;align-items:center;gap:3px;border:0;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;color:inherit;opacity:.65;transition:opacity .15s">👍<span data-comment-like-count></span></button></span>`;
       const parentInfo = parentName
         ? `<span class="parent-info">${esc(L("comments.reply_to", { name: esc(parentName) }))}</span>`
         : "";
@@ -936,7 +1135,7 @@ function renderCommentNodes(
         `<div class="avatar relative flex-shrink-0" style="${bg || DFLT_AVATAR_BG}"><div class="highlight"></div></div>` +
         `<div class="body flex-grow"><div class="flex items-start">` +
         `<div class="flex-grow flex items-center justify-between info">${name}<div class="date">${fmtCommentDate(n.createdAt)}</div></div>` +
-        `${reply}</div>` +
+        `${reply}${like}</div>` +
         `<div class="content has-emoji">${parentInfo}${esc(n.content)}</div>` +
         `</div></div>${children}</li>`
       );
@@ -1058,6 +1257,7 @@ export function postPage(
   const meta =
     '<div class="meta">' +
     (cat ? `<span>${esc(cat.name)}</span>` : "") +
+    `<span> · ${authorByline(p, L("post.author_unknown"))}</span>` +
     `<span> · ${fmtDate(p.publishedAt)}</span>` +
     `<span> · ${L("post.reads", { n: p.views ?? 0 })}</span>` +
     `<span> · ${L("post.comments", { n: p.commentsCount ?? 0 })}</span>` +
@@ -1110,6 +1310,15 @@ export function postPage(
     toc +
     `<div class="post-content prose-cms">${renderedBody}</div>` +
     tags +
+    // R280: a paired post offers its counterpart inline. The URL is the
+    // counterpart's own; render.ts has no DB access, so it renders a
+    // placeholder resolved by the paired-URL the loader knows — but postPage
+    // is also used by exports/tests without loaders. Honest minimal form:
+    // derive the /en twin from the row itself (same slug, opposite prefix),
+    // which is exactly the pairing rule.
+    (p.translationOf
+      ? `<div style="margin-top:16px"><a data-no-pjax href="${esc(p.locale === "en" ? p.url.replace(/^\/en(?=\/|$)/, "") || "/" : "/en" + p.url)}" style="font-size:13px">${L("post.read_translation")}</a></div>`
+      : "") +
     shareBar(p) +
     `<div class="post-nav"><a href="${esc(blogIndex)}">← ${L("post.back_list")}</a></div>` +
     "</article>" +
@@ -1145,29 +1354,90 @@ export function jsonLd(obj: unknown): string {
   return `<script type="application/ld+json">${json}</script>`;
 }
 
+// CollectionPage JSON-LD for list/archive views (R89 covers posts/pages; list
+// pages had none). Mirrors postHead's node: a CollectionPage for the page plus
+// an ItemList of the posts on it, so a search engine sees the page as a real
+// set of articles rather than an orphan. `</` in any value is escaped the same
+// way jsonLd does, so a title containing "</script>" cannot close the tag.
+export function collectionJsonLd(p: {
+  url: string;
+  title: string;
+  description?: string;
+  items: { title: string; url: string }[];
+  /** BCP-47 tag of the rendered locale (the /en twin is a different language). */
+  inLanguage: string;
+}): string {
+  const node: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    name: p.title,
+    url: p.url,
+    inLanguage: p.inLanguage,
+  };
+  if (p.description) node.description = p.description;
+  if (p.items.length) {
+    node.hasPart = {
+      "@type": "ItemList",
+      numberOfItems: p.items.length,
+      itemListElement: p.items.map((it, i) => ({
+        "@type": "ListItem",
+        position: i + 1,
+        url: it.url,
+        name: it.title,
+      })),
+    };
+  }
+  return jsonLd(node);
+}
+
+// BreadcrumbList JSON-LD for list/archive views so search engines render
+// SERP breadcrumbs on them too (post pages already get one from postHead).
+// URLs are absolute; callers prefix origin the same way collectionJsonLd does.
+export function breadcrumbListJsonLd(crumbs: { name: string; url: string }[]): string {
+  if (!crumbs.length) return "";
+  return jsonLd({
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: crumbs.map((c, i) => ({
+      "@type": "ListItem",
+      position: i + 1,
+      name: c.name,
+      item: c.url,
+    })),
+  });
+}
+
 export function pageHead(
   p: PageView,
   siteTitle: string,
   siteDescription: string,
   origin: string,
   /** Social-card fallback when the page has no cover: the site logo. */
-  logoUrl?: string,
+  logoUrl: string = BRAND_LOGO,
   /** Reading stats for the WebPage JSON-LD (wordCount / timeRequired). */
   read?: {
     wordCount: number;
     minutes: number;
     /** Self-referencing canonical for the request's locale. */
     canonical?: string;
+    /** BCP-47 tag of the rendered locale. */
+    inLanguage?: string;
   },
+  /** The dedicated social card image; beats the logo for og:image. */
+  ogImageUrl?: string,
+  /** The site's twitter:card choice ("summary" forbids the big image). */
+  card?: string,
+  /** The SEO panel's robots choice; defaults to index,follow. */
+  robots?: string,
 ): string {
   const fullTitle = `${p.seoTitle || p.title} - ${siteTitle}`;
   const desc = p.seoDescription || p.excerpt || siteDescription;
   const url = read?.canonical ?? `${origin}${p.url}`;
-  const ogImage = p.featuredImage || logoUrl || "";
+  const ogImage = p.featuredImage || ogImageUrl || logoUrl || "";
   return [
     `<title>${esc(fullTitle)}</title>`,
     `<meta name="description" content="${esc(desc)}">`,
-    `<meta name="robots" content="index, follow">`,
+    `<meta name="robots" content="${robotsFor(robots)}">`,
     `<link rel="canonical" href="${esc(url)}">`,
     `<meta property="og:title" content="${esc(fullTitle)}">`,
     `<meta property="og:description" content="${esc(desc)}">`,
@@ -1176,7 +1446,7 @@ export function pageHead(
     `<meta property="og:type" content="website">`,
     `<meta property="og:site_name" content="${esc(siteTitle)}">`,
 
-    `<meta name="twitter:card" content="${ogImage ? "summary_large_image" : "summary"}">`,
+    `<meta name="twitter:card" content="${twitterCardKind(card, ogImage)}">`,
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
     jsonLd((() => {
@@ -1186,6 +1456,7 @@ export function pageHead(
         name: fullTitle,
         description: desc,
         url,
+        inLanguage: read?.inLanguage,
       };
       if (read) {
         if (read.wordCount > 0) wp.wordCount = read.wordCount;
@@ -1198,7 +1469,7 @@ export function pageHead(
       "@type": "BreadcrumbList",
       itemListElement: [
         { "@type": "ListItem", position: 1, name: siteTitle, item: `${origin}/` },
-        { "@type": "ListItem", position: 2, name: p.title, url },
+        { "@type": "ListItem", position: 2, name: p.title, item: url },
       ],
     }),
   ]
@@ -1321,7 +1592,7 @@ export function homeHtml(parts: {
     section(L("sidebar.recent"), cardRow(parts.latest, false, parts.t)) +
     (parts.liked.length ? section(L("rank.most_likes"), cardRow(parts.liked, true, parts.t)) : "") +
     (parts.random.length
-      ? section(L("rank.random"), `<div class="row post-card-nested-row">${parts.random.map((c) => nestedCard(c, parts.t)).join("")}</div>`)
+      ? section(L("rank.random"), `<div class="row post-card-nested-row">${parts.random.map((c, i) => nestedCard(c, parts.t, i === 0)).join("")}</div>`)
       : "") +
     "</div>"
   );
@@ -1334,8 +1605,25 @@ export function pager(page: number, totalPages: number, hrefFor: (p: number) => 
   if (totalPages <= 1) return "";
   let html = '<nav class="sk-pager">';
   if (page > 1) html += `<a href="${esc(hrefFor(page - 1))}">‹ ${L("pager.prev")}</a>`;
-  for (let p = 1; p <= totalPages; p++) {
-    html += p === page ? `<em>${p}</em>` : `<a href="${esc(hrefFor(p))}">${p}</a>`;
+  // R235: a big archive rendered one link per page - 1000 posts of archive pages
+  // is 10 links, but a 100k-post site would emit 1000 and bloat the document it
+  // exists to keep small. Above the threshold the numbers collapse to the first,
+  // last and a window around the current page, with the skipped runs elided.
+  const numbers: (number | "gap")[] = [];
+  if (totalPages <= 10) {
+    for (let p = 1; p <= totalPages; p++) numbers.push(p);
+  } else {
+    const lo = Math.max(2, page - 2);
+    const hi = Math.min(totalPages - 1, page + 2);
+    numbers.push(1);
+    if (lo > 2) numbers.push("gap");
+    for (let p = lo; p <= hi; p++) numbers.push(p);
+    if (hi < totalPages - 1) numbers.push("gap");
+    numbers.push(totalPages);
+  }
+  for (const n of numbers) {
+    html += n === "gap" ? `<span class="sk-pager-gap" aria-hidden="true">…</span>`
+      : n === page ? `<em>${n}</em>` : `<a href="${esc(hrefFor(n))}">${n}</a>`;
   }
   if (page < totalPages) html += `<a href="${esc(hrefFor(page + 1))}">${L("pager.next")} ›</a>`;
   return html + "</nav>";
@@ -1355,8 +1643,13 @@ export function listPage(parts: {
   const showPager = parts.showPager ?? true;
   return (
     '<section class="sk-section sk-list-page">' +
-    `<h1 class="title_style_01">${parts.title}</h1>` +
-    `<div class="sk-list-sub sk-muted">${parts.sub}</div>` +
+    // title/sub are plain text (search query, category name, counts) and MUST be
+    // escaped: the search view feeds the raw ?q= value into the title via t(),
+    // and t() interpolates without escaping - so an unescaped render here is a
+    // reflected XSS (/search?q=<img src=x onerror=...>). Matches the other
+    // themes, which already esc() their list titles.
+    `<h1 class="title_style_01">${esc(parts.title)}</h1>` +
+    `<div class="sk-list-sub sk-muted">${esc(parts.sub)}</div>` +
     '<div class="clearfix">' +
     cardRow(parts.items, false, parts.t) +
     "</div>" +
@@ -1388,7 +1681,7 @@ export function topNav(settings: Record<string, any>): string {
     `<form role="search" action="/search" method="get"><input id="pf_header_search" type="search" placeholder="${L("search.placeholder")}" autocomplete="off" name="q" value=""></form></div>` +
     `<div class="color-switcher-wrapper"><div class="mobile-button show-on-desktop" title="${L("sky.color_mode")}"><i class="night-day"></i></div></div>` +
     `<div class="login"><div class="vcard cursor-hand">` +
-    `<img alt="" src="/public/avatar.png" srcset="/public/avatar@2x.png 2x" class="avatar avatar-96 photo avatar-default" height="96" width="96">` +
+    `<img alt="" src="${BRAND_LOGO}" srcset="/public/avatar@2x.png 2x" class="avatar avatar-96 photo avatar-default" height="96" width="96">` +
     `<span class="name">${title} </span><span class="caret"></span></div>` +
     `<div class="login-main"><div class="user-type">${L("sky.welcome")}</div><div class="operation">` +
     `<a href="/about">${L("sky.about")}</a><a href="/admin/login">Login&nbsp;<i class="skyscraper-icons-sign-in"></i></a>` +

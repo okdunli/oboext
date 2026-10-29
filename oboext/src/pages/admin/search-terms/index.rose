@@ -1,0 +1,75 @@
+<script>
+  // Search hot terms (/admin/search-terms) — what readers typed into the site
+  // search, which terms returned nothing (the content gaps), and how often.
+  // Read-only screen: the loader sorts (hits desc, last_at desc) and windows
+  // the table; every string arrives catalog-baked (searchterm.admin_*), so the
+  // page binds no i18n keys of its own. One bare <script> block by R246 rule.
+  let d = $data(() => __rvLoad("admin.searchTerms", { page: __rvQs().get("page") }));
+  function items() { return d().items || []; }
+  function total() { return d().total || 0; }
+  function page() { return d().page || 1; }
+  function pages() { return d().pages || 1; }
+  function s(k) { return (d().s || {})[k] || ""; }
+  function href(p) { return "/admin/search-terms?page=" + p; }
+  function localeLabel(l) { return l === "en" ? "EN" : "中文"; }
+  function fmt(iso) {
+    if (!iso) return "—";
+    const dt = new Date(iso);
+    if (isNaN(dt.getTime())) return "—";
+    const pad = (n) => String(n).padStart(2, "0");
+    return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes());
+  }
+  function emptyHint() { return items().length ? [] : [1]; }
+</script>
+
+<head>
+  <title>搜索热词 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="adm-ic" style="--i:url(/public/icons/search.svg);width:20px;height:20px;color:#818cf8;"></span>
+    <strong style="font-size:16px">{s("title")}</strong>
+    <span class="adm-hint" style="margin:0;">共 {total()} 个词</span>
+  </div>
+</div>
+
+<p class="adm-hint" style="margin:0 0 8px;">{s("lead")}</p>
+
+<div class="adm-card adm-table-wrap">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th>{s("col_term")}</th>
+        <th style="width:90px">{s("col_hits")}</th>
+        <th style="width:90px">{s("col_locale")}</th>
+        <th style="width:160px">{s("col_last")}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each items() as r}
+      <tr>
+        <td>{r.term}</td>
+        <td class="adm-hint">{r.hits}</td>
+        <td class="adm-hint">{localeLabel(r.locale)}</td>
+        <td class="adm-hint">{fmt(r.lastAt)}</td>
+      </tr>
+      {/each}
+    </tbody>
+  </table>
+  {#each emptyHint() as _}
+  <div class="adm-card-bd adm-empty">{s("empty")}</div>
+  {/each}
+</div>
+
+{#if pages() > 1}
+<div class="adm-toolbar" style="gap:6px;">
+  {#if page() > 1}
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() - 1)}>上一页</a>
+  {/if}
+  <span class="adm-hint" style="margin:0;">第 {page()} / {pages()} 页</span>
+  {#if page() < pages()}
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() + 1)}>下一页</a>
+  {/if}
+</div>
+{/if}

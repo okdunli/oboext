@@ -1,8 +1,48 @@
 <script>
-
+  // POST {id, action?: "like"|"unlike"} -> {liked, likes}.
+  // `action` is optional: the shipped theme clients send only {id}, which is
+  // why an unknown/absent action still means "like" (backward compatible), and
+  // `likes` stays in the response for those callers.
+  // Visitor identity: cookie visitor_key or header x-visitor-key; if neither
+  // exists, generate one once and set it back (same cookie parameters as
+  // /api/comment-like, so both like surfaces share ONE identity). Guests may
+  // like - no session required, exactly like comment likes.
   import { apiGate, jsonFail, readBody } from "@server/admin";
-  import { likePost } from "@server/queries";
+  import { likePost, unlikePost } from "@server/post-likes";
   import { makeT, headerLocale } from "@server/i18n";
+
+  const COOKIE = "visitor_key";
+
+  function getCookie(request: Request, name: string): string | null {
+    const header = request.headers.get("cookie") || "";
+    for (const part of header.split(";")) {
+      const [k, ...rest] = part.trim().split("=");
+      if (k === name) return decodeURIComponent(rest.join("="));
+    }
+    return null;
+  }
+
+  // Resolves the visitor key and, when it had to be generated, the Set-Cookie
+  // header to persist it.
+  function resolveVisitor(request: Request): { key: string; setCookie: string | null } {
+    const existing =
+      getCookie(request, COOKIE) || request.headers.get("x-visitor-key") || null;
+    if (existing && existing.trim()) return { key: existing.trim(), setCookie: null };
+    const key = crypto.randomUUID();
+    return {
+      key,
+      setCookie: `${COOKIE}=${encodeURIComponent(key)}; Path=/; Max-Age=31536000; SameSite=Lax`,
+    };
+  }
+
+  function respond(data: unknown, setCookie: string | null, status = 200): Response {
+    const headers: Record<string, string> = {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    };
+    if (setCookie) headers["set-cookie"] = setCookie;
+    return new Response(JSON.stringify(data), { status, headers });
+  }
 
   export async function POST(request) {
     const t = makeT(headerLocale(request));
@@ -10,8 +50,10 @@
       const body = await readBody(request);
       const id = Number(body?.id);
       if (!Number.isInteger(id) || id <= 0) return jsonFail(t("api.bad_request"), 422);
-      const likes = await likePost(id);
-      return { likes };
+      const { key, setCookie } = resolveVisitor(request);
+      const out =
+        body?.action === "unlike" ? await unlikePost(id, key) : await likePost(id, key);
+      return respond(out, setCookie);
     }, t);
   }
 </script>

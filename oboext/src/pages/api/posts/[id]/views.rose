@@ -1,5 +1,10 @@
 <script>
   // /api/posts/:id/views — public read of the current view count.
+  //
+  // READ ONLY on purpose: the view WRITE (and the traffic-source recording,
+  // db/migrations/0041) lives on the page render path in loaders.ts postDetail,
+  // which is where a real landing happens. Incrementing here would count every
+  // live-counter poll as a fresh pageview.
   import { apiGate, jsonOk, jsonFail } from "@server/admin";
   import { getPostViews } from "@server/queries";
   import { makeT, headerLocale } from "@server/i18n";

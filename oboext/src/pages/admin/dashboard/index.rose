@@ -21,6 +21,95 @@
   function pluginCards() {
     return st().cards || [];
   }
+  // 近 7 天每日新增（loader 返回，升序 7 项：{d:"2026-10-20",posts,comments}）。
+  function trends() {
+    return st().trends || [];
+  }
+  // One bar set per series: x/y/w/h precomputed against the day max so the
+  // template stays a dumb rect list. Zero days keep a 1px stub - flat enough
+  // to read as "nothing", tall enough to stay hoverable for its <title>.
+  function trendBars(kind) {
+    const rows = trends();
+    let max = 0;
+    rows.forEach(function (r) {
+      const v = Number(r[kind]) || 0;
+      if (v > max) max = v;
+    });
+    return rows.map(function (r, i) {
+      const v = Number(r[kind]) || 0;
+      const h = Math.max(1, max > 0 ? Math.round((v / max) * 44) : 0);
+      return { x: i * 40 + 6, y: 46 - h, w: 28, h: h, v: v, d: r.d };
+    });
+  }
+  // {#each} compiles its expression as a zero-arg call, so each series needs
+  // its own accessor instead of trendBars("posts").
+  function trendPostBars() {
+    return trendBars("posts");
+  }
+  function trendCommentBars() {
+    return trendBars("comments");
+  }
+  function trendTotal() {
+    return trends().reduce(
+      function (acc, r) {
+        return {
+          posts: acc.posts + (Number(r.posts) || 0),
+          comments: acc.comments + (Number(r.comments) || 0),
+        };
+      },
+      { posts: 0, comments: 0 },
+    );
+  }
+  // 今日来源分布（R255，loader 返回，按 views 降序：{kind,views,uniques}）。
+  // 空数组 = 尚无可统计的数据（rollup 每分钟跑一次），此时整张卡片不渲染，
+  // 而不是画五个 0 让人误以为"今天没流量"。
+  function sources() {
+    return st().sources || [];
+  }
+  function sourceTotal() {
+    return sources().reduce(function (acc, r) {
+      return acc + (Number(r.views) || 0);
+    }, 0);
+  }
+  function sourceKindLabel(k) {
+    return k === "search" ? "搜索引擎"
+      : k === "social" ? "社交媒体"
+      : k === "internal" ? "站内跳转"
+      : k === "direct" ? "直接访问"
+      : "其它来源";
+  }
+  // 占比条：以当前最大来源为满格，避免一个 90% 的搜索引擎把其余全压成 0px。
+  function sourcePct(r) {
+    var max = 0;
+    sources().forEach(function (x) {
+      var v = Number(x.views) || 0;
+      if (v > max) max = v;
+    });
+    var v = Number(r.views) || 0;
+    return max > 0 ? Math.max(2, Math.round((v / max) * 100)) : 0;
+  }
+  // {#each} 编译成零参调用，所以逐行百分比也要有自己的访问器。
+  function sourceRows() {
+    return sources().map(function (r) {
+      return { kind: r.kind, views: Number(r.views) || 0, uniques: Number(r.uniques) || 0, pct: sourcePct(r) };
+    });
+  }
+  // 来源 × 文章（R256，loader 返回：近 7 日按渠道各取 Top 文章，views 降序，
+  // {kind,postId,title,views}）。空数据同样整卡不渲染 —— 没有一周流量时画一张
+  // 空表会让人以为功能坏了，而不是"还没数据"。
+  function topSourcePosts() {
+    return st().topSourcePosts || [];
+  }
+  function topSourcePostRows() {
+    return topSourcePosts().map(function (r) {
+      return {
+        kind: r.kind,
+        postId: r.postId,
+        title: r.title,
+        views: Number(r.views) || 0,
+      };
+    });
+  }
   function linkedCards() {
     return pluginCards().filter(function (c) { return !!c.href; });
   }
@@ -49,6 +138,92 @@
     return '<span class="adm-ic" aria-hidden="true" style="width:' + size +
       "px;height:" + size + "px;--i:url(/public/icons/" + n + ".svg)\"></span>";
   }
+  // 实时：应用侧长轮询 /api/admin-stream —— 三种运行形态（dev / preview /
+  // dist/prod.mjs）唯一都通的通道。框架的 store 广播（客户端 EventSource 连
+  // /__rosezm_store）在这里**故意不用**：一、prod 形态根本没挂载那个端点，
+  // 连接会落到 SPA fallback 的 HTML 上、解析失败后无限重连（静默风暴）；二、
+  // 它的开启条件是**全应用**任一 .rose 脚本原文匹配 store 调用，连注释里的
+  // 字样都算——也就是说写一行注释就足以把整站拖进那条死路。所以本页（与
+  // 其它管理页）不含该调用，且 tests 里有全站守卫断言钉死这一点。
+  //
+  // 节流：5s 窗口 leading+trailing，一次窗口至多一次 refresh()；时间戳挂
+  // window——本脚本随每次重渲重跑，脚本级 let 会被归零。
+
+  function adminEvtNudge() {
+    const now = Date.now();
+    const last = window.__rosezmAdminEvt || 0;
+    if (now - last >= 5000) {
+      window.__rosezmAdminEvt = now;
+      if (window.__rosezmAdminEvtT) {
+        clearTimeout(window.__rosezmAdminEvtT);
+        window.__rosezmAdminEvtT = 0;
+      }
+      refresh();
+    } else if (!window.__rosezmAdminEvtT) {
+      // 尾沿：窗口内被抑制的事件在窗口结束时补一次——纯前沿会把本集群最后
+      // 一条评论丢到下一个事件（B 自己的动作开窗 → A 随后的评论不可见）。
+      window.__rosezmAdminEvtT = setTimeout(function () {
+        window.__rosezmAdminEvtT = 0;
+        window.__rosezmAdminEvt = Date.now();
+        refresh();
+      }, 5000 - (now - last));
+    }
+  }
+
+  onMount(function () {
+    // 轮询循环。端点**立即返回**（绝不在服务端 hold）：框架的 api 分发把整个
+    // 请求单元放进了全局串行队列（src/cli/edge.ts:173 包住 :221-226 的 api
+    // 分发），生产形态走的正是这条路——任何 hold 都会把公开页面排在后台标签
+    // 页后面，实测 3s hold 让并发页面请求也等了 3.1s。所以节奏在客户端：
+    //  - 有新事件（events>0）→ 立刻重问一次（连点两下即收敛，不必等间隔）；
+    //  - 无新事件 → POLL_MS 后再问；
+    //  - 请求失败 → 退避 5s→10s→30s，绝不允许热循环打爆服务端。
+    const POLL_MS = 4000;
+    let stopped = false;
+    let since = 0;
+    let backoff = 5000;
+    let timer = 0;
+    const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    function step(delay) {
+      if (stopped) return;
+      if (delay) {
+        timer = setTimeout(run, delay);
+        return;
+      }
+      run();
+    }
+    function run() {
+      if (stopped) return;
+      const url = "/api/admin-stream?since=" + since;
+      fetch(url, ctl ? { signal: ctl.signal, headers: { accept: "application/json" } } : undefined)
+        .then(function (r) {
+          if (!r.ok) throw new Error("stream " + r.status);
+          backoff = 5000;
+          return r.json();
+        })
+        .then(function (d) {
+          if (stopped) return;
+          if (d && typeof d.ver === "number") since = d.ver;
+          if (d && d.events > 0) {
+            adminEvtNudge();
+            step(); // 还有新事件就立刻再问，连点即收敛
+          } else {
+            step(POLL_MS); // 空闲：按间隔轮询
+          }
+        })
+        .catch(function () {
+          if (stopped) return;
+          step(backoff);
+          backoff = Math.min(backoff * 2, 30000);
+        });
+    }
+    step(0);
+    onCleanup(function () {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      if (ctl) ctl.abort();
+    });
+  });
 </script>
 
 <head>
@@ -100,11 +275,86 @@
     <div class="adm-card-bd" style="display:flex;flex-wrap:wrap;gap:8px;">
       <a class="adm-btn adm-btn-sm" href="/admin/posts/new">新建文章</a>
       <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/comments">审核评论</a>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/security-logs?typePrefix=admin.">审计日志</a>
       <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/categories">管理分类</a>
       <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/settings">站点设置</a>
     </div>
   </div>
 </div>
+
+{#if trends().length > 0}
+<div class="adm-card adm-trends" style="margin-top:16px;">
+  <div class="adm-card-hd">近 7 天趋势
+    <span class="spacer" style="flex:1"></span>
+    <span class="adm-hint" style="font-size:12px">每日新增 · 合计 {trendTotal().posts} 篇文章 / {trendTotal().comments} 条评论</span>
+  </div>
+  <div class="adm-card-bd">
+    <div class="adm-trend-row" style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+      <span style="width:40px;flex:none;display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--adm-muted)">
+        <i style="width:8px;height:8px;border-radius:2px;background:var(--adm-accent);display:inline-block"></i>文章
+      </span>
+      <svg class="adm-spark" viewBox="0 0 280 48" width="280" height="48" role="img" aria-label="近 7 天文章每日新增" style="height:auto;max-width:100%;">
+        {#each trendPostBars() as b}
+        <rect x={b.x} y={b.y} width={b.w} height={b.h} rx="2" fill="var(--adm-accent)"><title>{b.d} 新增文章 {b.v} 篇</title></rect>
+        {/each}
+      </svg>
+    </div>
+    <div class="adm-trend-row" style="display:flex;align-items:center;gap:10px;">
+      <span style="width:40px;flex:none;display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--adm-muted)">
+        <i style="width:8px;height:8px;border-radius:2px;background:var(--adm-green);display:inline-block"></i>评论
+      </span>
+      <svg class="adm-spark" viewBox="0 0 280 48" width="280" height="48" role="img" aria-label="近 7 天评论每日新增" style="height:auto;max-width:100%;">
+        {#each trendCommentBars() as b}
+        <rect x={b.x} y={b.y} width={b.w} height={b.h} rx="2" fill="var(--adm-green)"><title>{b.d} 新增评论 {b.v} 条</title></rect>
+        {/each}
+      </svg>
+    </div>
+  </div>
+</div>
+{/if}
+
+{#if sources().length > 0}
+<div class="adm-card" style="margin-top:16px;">
+  <div class="adm-card-hd">今日来源分布
+    <span class="spacer" style="flex:1"></span>
+    <span class="adm-hint" style="font-size:12px">访次 {sourceTotal()} · 按首次落地页计</span>
+  </div>
+  <div class="adm-card-bd">
+    {#each sourceRows() as r}
+    <div class="adm-trend-row" style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <span style="width:76px;flex:none;font-size:13px;color:var(--adm-muted)">{sourceKindLabel(r.kind)}</span>
+      <span style="flex:1;height:8px;border-radius:4px;background:var(--adm-border);overflow:hidden;display:block;">
+        <i style={"display:block;height:100%;border-radius:4px;background:var(--adm-accent);width:" + r.pct + "%"}></i>
+      </span>
+      <span class="adm-hint" style="width:88px;flex:none;text-align:right;font-size:12px">{r.views} 访次 / {r.uniques} 访客</span>
+    </div>
+    {/each}
+  </div>
+</div>
+{/if}
+
+{#if topSourcePostRows().length > 0}
+<div class="adm-card" style="margin-top:16px;">
+  <div class="adm-card-hd">来源 × 文章
+    <span class="spacer" style="flex:1"></span>
+    <span class="adm-hint" style="font-size:12px">近 7 日 · 各渠道访次最高的文章</span>
+  </div>
+  <div class="table-responsive">
+    <table class="adm-table">
+      <thead><tr><th>渠道</th><th>文章标题</th><th style="text-align:right">浏览量</th></tr></thead>
+      <tbody>
+        {#each topSourcePostRows() as r}
+        <tr>
+          <td style="white-space:nowrap">{sourceKindLabel(r.kind)}</td>
+          <td><a href={"/admin/posts/" + r.postId}><div class="title">{short(r.title, 28)}</div></a></td>
+          <td class="adm-hint" style="text-align:right">{r.views} 访次</td>
+        </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+</div>
+{/if}
 
 <div class="adm-grid adm-cols-2" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
   <div class="adm-card">

@@ -1,18 +1,29 @@
-
-
 import { eq, inArray } from "drizzle-orm";
 import { db } from "./db.js";
 import { pageMetas, postMetas } from "./schema.js";
 
 export type MetaInput = { key: string; value: string };
 
-/** Trim keys, drop empties, cap key length (mirror pages.ts validation). */
-function clean(metas: MetaInput[]): { key: string; value: string }[] {
-  return metas
-    .map((m) => ({ key: String(m.key ?? "").trim(), value: String(m.value ?? "") }))
-    .filter((m) => m.key.length > 0)
-    .map((m) => ({ key: m.key.slice(0, 100), value: m.value }));
+/**
+ * Trim keys, drop empties, cap key length, and DEDUPE by key (last value wins).
+ * post_metas/page_metas have no unique(postId, key) constraint, so without the
+ * dedupe a submit carrying the same key twice inserts duplicate rows that pile
+ * up across saves; getPostMetas silently collapses them last-wins on read, so
+ * the write side must collapse the same way. Exported for the unit test.
+ */
+export function cleanMetas(metas: MetaInput[]): { key: string; value: string }[] {
+  const byKey = new Map<string, string>();
+  for (const m of metas) {
+    const key = String(m.key ?? "").trim().slice(0, 100);
+    if (key.length === 0) continue;
+    byKey.set(key, String(m.value ?? ""));
+  }
+  return [...byKey].map(([key, value]) => ({ key, value }));
 }
+
+const clean = cleanMetas;
+
+// --------------------------------------------------------------------- posts
 
 /** All custom fields of a post as a key→value map. */
 export async function getPostMetas(postId: number): Promise<Record<string, string>> {
@@ -29,10 +40,7 @@ export async function setPostMetas(postId: number, metas: MetaInput[]): Promise<
   if (rows.length) await db.insert(postMetas).values(rows);
 }
 
-/**
- * Batch variant for list reads: one query for the whole page of posts
- * (mirror posts.ts attachMetas). Missing ids simply stay absent.
- */
+// Batch variant for list reads: one query for the whole page of posts (mirror posts.ts attachMetas). Missing ids simply stay absent.
 export async function attachPostMetas(
   ids: number[],
 ): Promise<Record<number, Record<string, string>>> {
@@ -45,6 +53,8 @@ export async function attachPostMetas(
   }
   return out;
 }
+
+// --------------------------------------------------------------------- pages
 
 /** All custom fields of a static page as a key→value map. */
 export async function getPageMetas(pageId: number): Promise<Record<string, string>> {

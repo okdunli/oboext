@@ -6,7 +6,7 @@ import { users, oauthIdentities } from "./schema.js";
 import { getSecret, hashPassword } from "./auth.js";
 import type { SessionUser } from "./auth.js";
 import { getOption, setOption } from "./options.js";
-import { addPasswordlessMark, getPasswordlessSet } from "./passwordless.js";
+import { addPasswordlessMark, isPasswordlessUser } from "./passwordless.js";
 import { getMemberSettings } from "./members.js";
 import { ServiceError } from "./errors.js";
 
@@ -375,7 +375,9 @@ const PRESETS: Record<PresetKind, Preset> = {
         avatarUrl: str(me.avatarUrl) || null,
         email: str(me.email) || null,
 
-        emailVerified: !!str(me.email),
+        // DingTalk does not attest email ownership, so an unverified email must
+        // never merge into a local account (mergeByEmail account takeover).
+        emailVerified: false,
         raw: me,
       };
     },
@@ -467,20 +469,21 @@ const PRESETS: Record<PresetKind, Preset> = {
       const openId = str(me.id);
       if (!openId) throw new ServiceError("GitHub 未能获取用户信息", 502);
 
-      let email = str(me.email);
-      let emailVerified = !!email;
-      if (!email) {
-
-        const list = (await http("https://api.github.com/user/emails", {
-          headers: auth,
-        }).then((r) => r.json())) as Array<Record<string, unknown>>;
-        const primary = (Array.isArray(list) ? list : []).find(
-          (x) => x.primary && x.verified,
-        );
-        if (primary) {
-          email = str(primary.email);
-          emailVerified = true;
-        }
+      // The public profile email (GET /user) is NOT a verification signal -
+      // GitHub lets a user put any address there. The only trustworthy source
+      // is /user/emails filtered to primary && verified (scope user:email).
+      // Trusting the public email made mergeByEmail an account-takeover route.
+      let email: string | null = null;
+      let emailVerified = false;
+      const list = (await http("https://api.github.com/user/emails", {
+        headers: auth,
+      }).then((r) => r.json())) as Array<Record<string, unknown>>;
+      const primary = (Array.isArray(list) ? list : []).find(
+        (x) => x.primary && x.verified,
+      );
+      if (primary) {
+        email = str(primary.email);
+        emailVerified = true;
       }
       return {
         openId,
@@ -535,7 +538,9 @@ const PRESETS: Record<PresetKind, Preset> = {
         avatarUrl: str(me.avatar_url) || null,
         email: str(me.email) || null,
 
-        emailVerified: !!str(me.email),
+        // linux.do does not attest email ownership; treat as unverified so it
+        // cannot merge into a local account by email.
+        emailVerified: false,
         raw: me,
       };
     },
@@ -858,7 +863,10 @@ export async function verifyOAuthState(token: string): Promise<StateClaims> {
 }
 
 function safeRedirect(redir: string | undefined): string {
-  if (redir && redir.startsWith("/") && !redir.startsWith("//")) return redir;
+  // A safe redirect is same-origin: a leading "/" whose next char is neither "/"
+  // nor "\". Browsers normalise "\" to "/", so "/\evil.com" and "/\ /evil.com"
+  // are protocol-relative and would bounce the user off-site right after login.
+  if (redir && /^\/[^/\\]/.test(redir) && !redir.includes("\\")) return redir;
   return "/";
 }
 
@@ -1338,8 +1346,8 @@ export async function unbindUserIdentity(
     .select({ id: oauthIdentities.id })
     .from(oauthIdentities)
     .where(eq(oauthIdentities.userId, userId));
-  const nopassword = await getPasswordlessSet();
-  if (rest.length <= 1 && nopassword.has(userId)) {
+  const nopassword = await isPasswordlessUser(userId);
+  if (rest.length <= 1 && nopassword) {
     throw new ServiceError(
       "请先在账号设置中设置登录密码，再解绑最后一个第三方账号",
       422,

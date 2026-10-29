@@ -1,22 +1,68 @@
 <script>
-  // /api/settings — GET the singleton row (public read, mirrors the original:
-  // the site theme/login screens read it unauthenticated), PATCH whitelisted
-  // columns (settings:manage).
+  // /api/settings — GET the singleton row (public read, mirrors the original: the site theme/login screens read it unauthenticated)
   import { apiGate, readBody, requireCap, updateSettings } from "@server/admin";
   import { getSettings } from "@server/queries";
+  import { setOption } from "@server/options";
+
+  // The "RSS 输出全文" checkbox is option feed_full_text in the generic options
+  // store. The one-true behavior switch inside buildFeed() is the site_settings
+  // feedContent column (R238 folded design: excerpt|full drives both the query
+  // and the <description> branch), and updateSettings()'s whitelist in admin.ts
+  // already persists it with commit-point cache invalidation. So the checkbox
+  // save: (1) writes the requested option key feed_full_text, (2) mirrors the
+  // same intent onto feedContent — updateSettings only persists whitelisted
+  // keys that arrive in the body, so removing the field key from the payload
+  // keeps the form's other untouched feedContent select value from being
+  // clobbered when the two disagree.
+  const OPTION_KEY = "feed_full_text";
+  // "评论 Webhook 地址" is likewise an options-store key (webhook.ts reads
+  // getOption("webhook_url")), not a site_settings column — the same no-op
+  // whitelist caveat as above, so the save writes the option directly here
+  // (feed_full_text pattern). Empty string = disabled (fireWebhook no-ops).
+  const WEBHOOK_KEY = "webhook_url";
 
   export async function GET() {
     return apiGate(async () => getSettings());
   }
 
   export async function PATCH(request) {
-    return apiGate(async () =>
-      updateSettings(getContext().user, await readBody(request)),
-    );
+    return apiGate(async () => {
+      const body = await readBody(request);
+      // Auth BEFORE any option write: updateSettings() itself checks the cap,
+      // but the setOption calls above it in this handler would otherwise run
+      // first — a session-less PATCH passes the CSRF gate (it only guards
+      // requests that carry a cookie) and could rewrite feed_full_text /
+      // webhook_url (pointing the comment webhook at an arbitrary URL) before
+      // the later 401. Gated here, both keys are admin-only writes.
+      requireCap(getContext().user, "settings:manage");
+      if (OPTION_KEY in body) {
+        const on = Boolean(body[OPTION_KEY]);
+        await setOption(OPTION_KEY, on);
+        if (on) body.feedContent = "full";
+        else delete body.feedContent;
+      }
+      if (typeof body[WEBHOOK_KEY] === "string") {
+        await setOption(WEBHOOK_KEY, body[WEBHOOK_KEY].trim());
+        delete body[WEBHOOK_KEY]; // not a site_settings column; drop so updateSettings doesn't see it
+      }
+      return updateSettings(getContext().user, body);
+    });
   }
   export async function PUT(request) {
-    return apiGate(async () =>
-      updateSettings(getContext().user, await readBody(request)),
-    );
+    return apiGate(async () => {
+      const body = await readBody(request);
+      requireCap(getContext().user, "settings:manage"); // same pre-write gate as PATCH
+      if (OPTION_KEY in body) {
+        const on = Boolean(body[OPTION_KEY]);
+        await setOption(OPTION_KEY, on);
+        if (on) body.feedContent = "full";
+        else delete body.feedContent;
+      }
+      if (typeof body[WEBHOOK_KEY] === "string") {
+        await setOption(WEBHOOK_KEY, body[WEBHOOK_KEY].trim());
+        delete body[WEBHOOK_KEY];
+      }
+      return updateSettings(getContext().user, body);
+    });
   }
 </script>

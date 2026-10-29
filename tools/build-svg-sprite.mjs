@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Icon optimizer for oboext's admin icon set.
+ * Icon optimizer for Oboext's admin icon set.
  *
  * ## Why this exists
  *

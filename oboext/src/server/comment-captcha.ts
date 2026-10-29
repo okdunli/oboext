@@ -1,11 +1,10 @@
 import crypto from "node:crypto";
 import { getSecret } from "./auth.js";
+import { b64url, makeUsedTracker, rnd, timingSafeEqualText } from "./captcha-common.js";
 
 const VERSION = "oboe.comment-captcha.v1";
 
 const TTL_MS = 10 * 60 * 1000;
-
-const USED_CAP = 5000;
 
 let keyCache: Buffer | null = null;
 function signingKey(): Buffer {
@@ -18,41 +17,10 @@ function signingKey(): Buffer {
   return keyCache;
 }
 
-const used = new Map<string, number>();
-let lastSweep = 0;
-
-function sweepUsed(now: number) {
-
-  if (now - lastSweep < 60_000 && used.size < USED_CAP) return;
-  lastSweep = now;
-  for (const [jti, exp] of used) {
-    if (exp <= now) used.delete(jti);
-  }
-
-  if (used.size >= USED_CAP) {
-    const sorted = [...used.entries()].sort((a, b) => a[1] - b[1]);
-    for (const [jti] of sorted.slice(0, Math.ceil(USED_CAP / 10))) used.delete(jti);
-  }
-}
-
-function b64url(input: Buffer | string): string {
-  return Buffer.from(input).toString("base64url");
-}
+const used = makeUsedTracker();
 
 function sign(bodyB64: string): string {
   return crypto.createHmac("sha256", signingKey()).update(bodyB64).digest("base64url");
-}
-
-function timingSafeEqualText(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ba.length !== bb.length) {
-
-    const dummy = Buffer.alloc(ba.length);
-    crypto.timingSafeEqual(ba, dummy);
-    return false;
-  }
-  return crypto.timingSafeEqual(ba, bb);
 }
 
 function normalizeAnswer(raw: string): string {
@@ -60,10 +28,6 @@ function normalizeAnswer(raw: string): string {
     .replace(/[０-９]/g, (ch) => String(ch.charCodeAt(0) - 0xff10))
     .replace(/\s+/g, "")
     .trim();
-}
-
-function rnd(min: number, max: number): number {
-  return min + crypto.randomInt(min, max + 1);
 }
 
 function makePuzzle(): { text: string; answer: number } {
@@ -160,25 +124,18 @@ function decodeCaptcha(token: string): DecodedCaptcha | null {
   }
 }
 
-/** Non-consuming answer check: signature + expiry + correctness only. Safe to
- *  call from a live "is it right?" probe (the client re-checks on blur) because
- *  it neither reads nor writes the `used` set — the token stays valid for the
- *  real submit-time verifyCommentCaptcha(). */
-export function validateCommentCaptcha(token: string, answer: string): boolean {
-  const decoded = decodeCaptcha(token);
-  if (!decoded || !answer) return false;
-  return normalizeAnswer(answer) === String(decoded.v);
-}
-
 export function verifyCommentCaptcha(token: string, answer: string): boolean {
   const decoded = decodeCaptcha(token);
   if (!decoded || !answer) return false;
 
   const now = Date.now();
   if (used.has(decoded.j)) return false;
+  // Burn the token on the FIRST submit attempt, right or wrong: the arithmetic
+  // answer space is tiny, so leaving a wrong guess un-spent let one token be
+  // brute-forced 0..18 at submit. One guess per token forces a fresh captcha
+  // (bounded by the issue rate) per attempt.
+  used.add(decoded.j, decoded.e);
   if (normalizeAnswer(answer) !== String(decoded.v)) return false;
 
-  used.set(decoded.j, decoded.e);
-  sweepUsed(now);
   return true;
 }

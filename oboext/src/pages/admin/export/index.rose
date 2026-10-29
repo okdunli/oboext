@@ -1,64 +1,20 @@
 <script>
 
   let s = $data(() => __rvLoad("admin.session", {}));
-</script>
 
-<head>
-  <title>内容导出 - 管理后台</title>
-</head>
-
-<div class="adm-toolbar">
-  <div style="display:flex;align-items:center;gap:8px;">
-    <span class="adm-ic" style="--i:url(/public/icons/file-text.svg);width:20px;height:20px;color:#818cf8;"></span>
-    <strong style="font-size:16px">内容导出</strong>
-  </div>
-</div>
-
-<form method="get" action="/api/admin/export">
-  <div class="adm-card" style="margin-bottom:16px;">
-    <div class="adm-card-hd"><strong style="font-size:14px;">导出范围</strong></div>
-    <div class="adm-card-bd" style="display:grid;gap:10px;">
-      <label class="adm-switch" style="margin:0;"><span><span class="t">文章</span><span class="d">全部文章（含草稿）的标题、元信息与正文</span></span><input type="checkbox" name="scope" value="posts" checked></label>
-      <label class="adm-switch" style="margin:0;"><span><span class="t">独立页面</span><span class="d">全部页面的标题、元信息与正文</span></span><input type="checkbox" name="scope" value="pages" checked></label>
-      <label class="adm-switch" style="margin:0;"><span><span class="t">评论</span><span class="d">全部评论的作者、内容与状态</span></span><input type="checkbox" name="scope" value="comments" checked></label>
-      <label class="adm-switch" style="margin:0;"><span><span class="t">分类与标签</span><span class="d">全部分类与标签的名称和别名</span></span><input type="checkbox" name="scope" value="taxonomies" checked></label>
-      <label class="adm-switch" style="margin:0;"><span><span class="t">站点设置</span><span class="d">站点基础设置项</span></span><input type="checkbox" name="scope" value="settings" checked></label>
-    </div>
-  </div>
-
-  <div class="adm-card" style="margin-bottom:16px;">
-    <div class="adm-card-hd"><strong style="font-size:14px;">导出格式</strong></div>
-    <div class="adm-card-bd" style="display:grid;gap:10px;">
-      <label class="adm-switch" style="margin:0;"><span><span class="t">JSON</span><span class="d">完整结构化数据，适合再导入或程序处理</span></span><input type="radio" name="format" value="json" checked></label>
-      <label class="adm-switch" style="margin:0;"><span><span class="t">Markdown</span><span class="d">正文转为 Markdown 的纯文本，适合审阅与迁移</span></span><input type="radio" name="format" value="markdown"></label>
-      <p class="adm-hint" style="margin:4px 0 0;">与「备份恢复」的整库备份互补：这里只导内容语义数据，媒体文件请单独保管。</p>
-    </div>
-  </div>
-
-  <div class="adm-toolbar">
-    <span style="flex:1"></span>
-    <button class="adm-btn" type="submit"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/download.svg)"></span>开始导出</button>
-  </div>
-</form>
-
-<div class="adm-card" style="margin-top:16px;" data-adm-import>
-  <div class="adm-card-hd"><strong style="font-size:14px;">内容导入</strong><span class="adm-hint" style="margin-left:auto">支持本站导出的 JSON，或 Markdown（<code>## 标题</code> + <code>- 别名：</code> 元信息，与导出一致）</span></div>
-  <div class="adm-card-bd" style="display:grid;gap:10px;">
-    <input type="file" id="imp-file" accept=".json,.md,.markdown,.txt">
-    <label class="adm-switch" style="margin:0;"><span><span class="t">跳过已存在</span><span class="d">别名已存在时保留线上版本，只导入新条目</span></span><input type="radio" name="imp-policy" value="skip" checked></label>
-    <label class="adm-switch" style="margin:0;"><span><span class="t">覆盖已存在</span><span class="d">别名已存在时用导入内容覆盖（覆盖前会自动留存历史版本）</span></span><input type="radio" name="imp-policy" value="overwrite"></label>
-    <p class="adm-hint" style="margin:0;">导入范围仅标题/别名/状态/摘要/正文/发布时间；分类、标签与评论请用「备份恢复」或重新配置。建议先「预演导入」核对数量与冲突。</p>
-    <div class="adm-toolbar">
-      <span style="flex:1"></span>
-      <button class="adm-btn adm-btn-ghost" type="button" id="imp-dry">预演导入</button>
-      <button class="adm-btn" type="button" id="imp-run">执行导入</button>
-    </div>
-    <div class="adm-hint" id="imp-out" style="margin:0;white-space:pre-wrap;"></div>
-  </div>
-</div>
-
-<script>
-  (function () {
+  // 内容导入面板的浏览器端绑定。
+  //
+  // 为什么必须待在这唯一一个 script 块里：编译器的 COMPONENT_RE
+  // （src/compiler/index.ts:32）不带 g，只匹配第一个 script 块，后面的块既
+  // 不进 script 也不留在模板里，构建成功且零警告地被丢掉
+  // （_FRAMEWORK_GOTCHAS.md §2.1）。
+  //
+  // 为什么用 onMount 而不是裸 IIFE：编译器的裸 IIFE 既不触发 needsClient，
+  // 本页就会落进 noJsRoutes，连这一块脚本都不发给浏览器（构建期 :6214 的
+  // zero-JS 文档直接收尾），按钮依旧是死的。onMount 是框架的挂载钩子，
+  // 在 document 缺失时直接返回（rosezm/runtime 的 index），因此服务端渲染
+  // 不会抛；它同时是「本页需要客户端包」的判定依据。
+  onMount(function () {
     var box = document.querySelector("[data-adm-import]");
     if (!box || box.__impBound) return;
     box.__impBound = true;
@@ -74,13 +30,31 @@
     function describe(data) {
       var lines = [];
       var p = data.posts || {}, g = data.pages || {};
-      lines.push("格式：" + (data.format === "markdown" ? "Markdown" : "JSON"));
+      var label = data.format === "markdown" ? "Markdown" : data.format === "wxr" ? "WordPress (WXR)" : data.format === "zip" ? "ZIP（多文件 Markdown）" : "JSON";
+      lines.push("格式：" + label);
+      if (data.bundle) {
+        var skipped = data.bundle.skipped || [];
+        lines.push("ZIP 内容：已解析 " + data.bundle.files + " 个 Markdown 文件" + (skipped.length ? "，跳过 " + skipped.length + " 个" : ""));
+        if (skipped.length) lines.push("跳过：" + skipped.slice(0, 5).map(function (s) {
+          return s.name + "（" + s.reason + "）";
+        }).join("；") + (skipped.length > 5 ? " 等" : ""));
+      }
       lines.push("文章：共 " + p.total + " 条，可新建 " + p.creates + " 条，冲突 " + p.conflicts + " 条，无效 " + p.issues + " 条");
       if (g.total) lines.push("页面：共 " + g.total + " 条，可新建 " + g.creates + " 条，冲突 " + g.conflicts + " 条，无效 " + g.issues + " 条");
+      if (data.comments) lines.push("评论：随新建条目导入 " + data.comments + " 条");
       if (data.applied) {
         var a = data.applied;
         lines.push("已执行：文章 新建 " + a.posts.created + " / 覆盖 " + a.posts.updated + " / 跳过 " + a.posts.skipped +
           (g.total ? "；页面 新建 " + a.pages.created + " / 覆盖 " + a.pages.updated + " / 跳过 " + a.pages.skipped : ""));
+        if (a.comments) lines.push("评论已导入 " + a.comments + " 条");
+        if (a.terms && (a.terms.categories || a.terms.tags)) {
+          lines.push("分类新建 " + a.terms.categories + " 个，标签新建 " + a.terms.tags + " 个");
+        }
+        if (a.authors && (a.authors.matched || a.authors.created || a.authors.capped)) {
+          var au = a.authors;
+          lines.push("作者：归属 " + au.matched + " 条，新建账号 " + au.created + " 个" +
+            (au.capped ? "，超出上限未归属 " + au.capped + " 条" : ""));
+        }
         if (a.errors && a.errors.length) lines.push("失败 " + a.errors.length + " 条：" + a.errors.slice(0, 5).join("；"));
       }
       if (data.issues && data.issues.length) {
@@ -114,5 +88,60 @@
     }
     box.querySelector("#imp-dry").addEventListener("click", function () { run(true); });
     box.querySelector("#imp-run").addEventListener("click", function () { run(false); });
-  })();
+  });
 </script>
+
+<head>
+  <title>内容导出 - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="adm-ic" style="--i:url(/public/icons/file-text.svg);width:20px;height:20px;color:#818cf8;"></span>
+    <strong style="font-size:16px">内容导出</strong>
+  </div>
+</div>
+
+<form method="get" action="/api/admin/export">
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-hd"><strong style="font-size:14px;">导出范围</strong></div>
+    <div class="adm-card-bd" style="display:grid;gap:10px;">
+      <label class="adm-switch" style="margin:0;"><span><span class="t">文章</span><span class="d">全部文章（含草稿）的标题、元信息与正文</span></span><input type="checkbox" name="scope" value="posts" checked></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">独立页面</span><span class="d">全部页面的标题、元信息与正文</span></span><input type="checkbox" name="scope" value="pages" checked></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">评论</span><span class="d">全部评论的作者、内容与状态</span></span><input type="checkbox" name="scope" value="comments" checked></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">分类与标签</span><span class="d">全部分类与标签的名称和别名</span></span><input type="checkbox" name="scope" value="taxonomies" checked></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">站点设置</span><span class="d">站点基础设置项</span></span><input type="checkbox" name="scope" value="settings" checked></label>
+    </div>
+  </div>
+
+  <div class="adm-card" style="margin-bottom:16px;">
+    <div class="adm-card-hd"><strong style="font-size:14px;">导出格式</strong></div>
+    <div class="adm-card-bd" style="display:grid;gap:10px;">
+      <label class="adm-switch" style="margin:0;"><span><span class="t">JSON</span><span class="d">完整结构化数据，适合再导入或程序处理</span></span><input type="radio" name="format" value="json" checked></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">Markdown</span><span class="d">正文转为 Markdown 的纯文本，适合审阅与迁移</span></span><input type="radio" name="format" value="markdown"></label>
+      <label class="adm-switch" style="margin:0;"><span><span class="t">WordPress (WXR)</span><span class="d">WordPress 交换格式（.xml），可直接导入 WordPress / 兼容站点；固定包含全部文章与独立页面（含封面附件、SEO 字段、自定义字段与评论），忽略上方范围勾选</span></span><input type="radio" name="format" value="wxr"></label>
+      <p class="adm-hint" style="margin:4px 0 0;">与「备份恢复」的整库备份互补：这里只导内容语义数据，媒体文件请单独保管。</p>
+    </div>
+  </div>
+
+  <div class="adm-toolbar">
+    <span style="flex:1"></span>
+    <button class="adm-btn" type="submit"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/download.svg)"></span>开始导出</button>
+  </div>
+</form>
+
+<div class="adm-card" style="margin-top:16px;" data-adm-import>
+  <div class="adm-card-hd"><strong style="font-size:14px;">内容导入</strong><span class="adm-hint" style="margin-left:auto">支持本站导出的 JSON、Markdown（文章与独立页面，导出后可原样再导入）、带 YAML front matter 的 Markdown（Hugo / Hexo / Jekyll / Obsidian）、整站 ZIP 压缩包（多文件 Markdown 批量导入），以及 WordPress 导出的 WXR（<code>.xml</code>）</span></div>
+  <div class="adm-card-bd" style="display:grid;gap:10px;">
+    <input type="file" id="imp-file" accept=".json,.md,.markdown,.txt,.xml,.zip">
+    <label class="adm-switch" style="margin:0;"><span><span class="t">跳过已存在</span><span class="d">别名已存在时保留线上版本，只导入新条目</span></span><input type="radio" name="imp-policy" value="skip" checked></label>
+    <label class="adm-switch" style="margin:0;"><span><span class="t">覆盖已存在</span><span class="d">别名已存在时用导入内容覆盖（覆盖前会自动留存历史版本）</span></span><input type="radio" name="imp-policy" value="overwrite"></label>
+    <p class="adm-hint" style="margin:0;">导入范围：标题、别名、状态、摘要、封面、正文、发布时间、置顶（WXR <code>wp:is_sticky</code>）、评论开关、页面排序（WXR <code>wp:menu_order</code> / front matter <code>order</code>、<code>weight</code>），以及文章的分类与标签（按名称匹配，缺失时自动新建）和作者归属（WXR <code>dc:creator</code> 与 <code>wp:author</code>、front matter <code>author</code>：按昵称匹配现有账号，匹配不到时新建作者账号，单次最多 50 个）；Markdown 文件开头的 YAML front matter（Hugo / Hexo / Jekyll / Obsidian 的 <code>---</code> 块，含 <code>layout: page</code>、<code>draft</code>、<code>sticky</code>）会被识别，没有 front matter 时按标题分段解析；ZIP 会逐个读取其中的 <code>.md</code> / <code>.markdown</code> / <code>.txt</code>（自动跳过 <code>__MACOSX</code>、隐藏目录与根目录说明文档），<code>内容/YYYY-MM-DD-标题.md</code> 的文件名日期会补为发布时间；WXR 里的评论会随新建条目一并导入（已存在而被跳过或覆盖的条目不重复导入评论）。单次上限 8MB / 200 条。媒体文件请用「备份恢复」或在对应页面单独处理。建议先「预演导入」核对数量与冲突。</p>
+    <div class="adm-toolbar">
+      <span style="flex:1"></span>
+      <button class="adm-btn adm-btn-ghost" type="button" id="imp-dry">预演导入</button>
+      <button class="adm-btn" type="button" id="imp-run">执行导入</button>
+    </div>
+    <div class="adm-hint" id="imp-out" style="margin:0;white-space:pre-wrap;"></div>
+  </div>
+</div>

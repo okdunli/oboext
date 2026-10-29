@@ -5,7 +5,8 @@
     __rvLoad("admin.posts", {
       status: __rvQs().get("status") || "",
       search: __rvQs().get("q") || "",
-      page: Number(__rvQs().get("page") || 1),
+      locale: __rvQs().get("locale") || "",
+      page: __rvQs().get("page"),
       after: __rvQs().get("after") || "",
     }),
   );
@@ -60,7 +61,12 @@
     return p.url || "#";
   }
   function tabClass(s) {
-    return (__rvQs().get("status") || "") === s ? "is-active" : "";
+    // R281: the language tabs compare against ?locale, the status tabs
+    // against ?status — one helper, dimension decided by the value.
+    const qs = __rvQs();
+    return (s === "en" || s === "zh-CN"
+      ? qs.get("locale") || ""
+      : qs.get("status") || "") === s ? "is-active" : "";
   }
   function prevPage() {
     return Math.max(1, data().page - 1);
@@ -102,6 +108,10 @@
     <a class={tabClass("published")} href="/admin/posts?status=published">已发布</a>
     <a class={tabClass("draft")} href="/admin/posts?status=draft">草稿</a>
     <a class={tabClass("archived")} href="/admin/posts?status=archived">已归档</a>
+    <span style="width:1px;height:18px;background:var(--border);display:inline-block;margin:0 6px"></span>
+    <a class={tabClass(__rvQs().get("locale") || "")} href="/admin/posts">全部语言</a>
+    <a class={tabClass("en")} href="/admin/posts?locale=en">EN</a>
+    <a class={tabClass("zh-CN")} href="/admin/posts?locale=zh-CN">中文</a>
   </div>
   <span style="flex:1"></span>
   <form class="adm-search" action="/admin/posts">
@@ -124,6 +134,7 @@
         <th style="width:34px"><input type="checkbox" data-adm-act="check-all"></th>
         <th>标题</th>
         <th style="width:110px">作者</th>
+        <th style="width:60px">语言</th>
         <th style="width:90px">状态</th>
         <th style="width:110px">日期</th>
         <th style="width:60px">浏览</th>
@@ -142,6 +153,7 @@
             {@html tagChipHtml(p.tags)}
           </div>
         </td>
+        <td class="adm-hint">{p.locale === "en" ? "EN" : "中文"}</td>
         <td>{p.authorName || "—"}</td>
         <td><span class={"adm-tag " + p.status}>{statusLabel(p.status)}</span>
           {#if scheduledLabel(p)}<span class="adm-tag scheduled">{scheduledLabel(p)}</span>{/if}

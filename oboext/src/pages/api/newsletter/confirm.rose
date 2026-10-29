@@ -1,0 +1,22 @@
+<script>
+  // GET /api/newsletter/confirm?token=…
+  //
+  // Newsletter double-opt-in, step 2: the link from the confirmation mail.
+  // Answers a 302, never a JSON body — the visitor's browser lands here
+  // straight from the mail client. Success bounces to /?subscribed=1 (the
+  // page surfaces read the param next round); an unknown token bounces to
+  // /?newsletter_error=1. The token is a capability in the DB, so a wrong one
+  // is indistinguishable from a typo and leaks nothing either way. GET is
+  // safe-method CSRF-wise and the redirect returns immediately — no hold, no
+  // stream (prod-server unconditionally drains response bodies).
+  import { confirm } from "@server/newsletter";
+
+  export async function GET(request) {
+    const url = new URL(request.url);
+    const token = url.searchParams.get("token") ?? "";
+    const ok = await confirm(token);
+    const to = new URL("/", url.origin);
+    to.searchParams.set(ok ? "subscribed" : "newsletter_error", "1");
+    return new Response(null, { status: 302, headers: { location: to.toString() } });
+  }
+</script>

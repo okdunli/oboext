@@ -1,10 +1,5 @@
 <script>
-  // Generic host for plugin-owned admin pages (original parity:
-  // app/admin/plugins/[slug]/page.tsx). A plugin opts in purely by
-  // convention: its index.ts fills the admin.panel filter with
-  // server-rendered html (+ optional inline script). The host guards
-  // existence + activation; a missing or disabled plugin answers the
-  // segment 404 (admin/_notfound.rose), exactly like the original.
+  // Generic host for plugin-owned admin pages (original parity: app/admin/plugins/[slug]/page.tsx).
   let slug = $state("");
   let d = $data(async () => {
     const v = await __rvLoad("admin.plugin-panel", { slug: slug() });

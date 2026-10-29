@@ -169,7 +169,7 @@
 
   var SINGLE_FIELDS = [
     "title", "slug", "excerpt", "status", "publishedAt", "commentStatus",
-    "authorId", "parentId", "featuredImage", "format", "seoTitle", "seoDescription", "seoKeywords",
+    "authorId", "parentId", "order", "featuredImage", "format", "seoTitle", "seoDescription", "seoKeywords", "locale", "translationOf",
   ];
 
   function applyPayload(ed, p) {

@@ -1,0 +1,42 @@
+<script>
+  // /api/redirects — the rule table behind R193. Reads and writes are
+  // settings:manage (admin) because a redirect is a statement about the whole
+  // site's URLs, not about one post: an editor cannot be trusted to move
+  // someone else's path.
+  import { apiGate, readBody, jsonFail, requireCap } from "@server/admin";
+  import { listRedirects, createRedirect, deleteRedirects } from "@server/redirects";
+
+  export async function GET() {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      return listRedirects();
+    });
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const body = await readBody(request);
+      const row = await createRedirect(body || {});
+      return new Response(JSON.stringify(row), {
+        status: 201,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    });
+  }
+
+  // Bulk in shape, like every other admin list: DELETE /api/redirects?ids=3,7
+  export async function DELETE(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const raw = new URL(request.url).searchParams.get("ids");
+      if (!raw) return jsonFail("缺少 ids 参数", 400);
+      const ids = raw
+        .split(",")
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0);
+      if (!ids.length) return jsonFail("无效 ids", 400);
+      return deleteRedirects(ids);
+    });
+  }
+</script>

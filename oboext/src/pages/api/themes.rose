@@ -1,8 +1,5 @@
 <script>
-  // /api/themes
-  //   GET  public list: rows + read-only manifest meta + active slug (the
-  //       original serves this unauthenticated; only writes need settings:manage)
-  //   POST create a real themes/<slug> folder from the default template
+  // /api/themes GET public list: rows + read-only manifest meta + active slug (the original serves this unauthenticated; only writes need).
   import { apiGate, readBody, jsonFail, requireCap } from "@server/admin";
   import {
     listThemes,

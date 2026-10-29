@@ -1,5 +1,3 @@
-
-
 import crypto from "node:crypto";
 
 const B32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -46,6 +44,7 @@ export function hotp(secret: Buffer, counter: number): string {
   const msg = Buffer.alloc(8);
   msg.writeBigUInt64BE(BigInt(counter));
   const digest = crypto.createHmac("sha1", secret).update(msg).digest();
+  // Dynamic truncation（RFC 4226 §5.3）。
   const offset = digest[digest.length - 1] & 0x0f;
   const bin =
     ((digest[offset] & 0x7f) << 24) |

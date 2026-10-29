@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * make-variants.mjs — generate `.wNNN` responsive variants for the images the
- * rosezm compiler turns into srcset (framework A4).
+ * Rosezm compiler turns into srcset (framework A4).
  *
  * A source image `public/img/hero.jpg` produces `hero.w400.jpg`,
  * `hero.w800.jpg`, `hero.w1600.jpg` (same directory, same format, downscaled,
@@ -26,7 +26,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const appRoot = path.resolve(here, "..", "..");
+const appRoot = path.resolve(here, "..", ".."); // the app root containing oboext/
 const args = process.argv.slice(2);
 
 let widths = [400, 800, 1600];
@@ -70,6 +70,9 @@ for (const input of inputs) {
 }
 if (!jobs.length) { console.log("Nothing to do."); process.exit(0); }
 
+// One PowerShell invocation for the whole batch: start a GDI+ graphics
+// pipeline per image, clamp to the source width (never upscale), and write
+// beside the original.
 const psJobs = JSON.stringify(jobs.map((j) => ({ s: j.src, d: j.dst, w: j.width, jpeg: j.jpeg })));
 const ps = `
 $jobs = '${psJobs.replace(/'/g, "''")}' | ConvertFrom-Json

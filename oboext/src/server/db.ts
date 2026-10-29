@@ -1,4 +1,4 @@
-// Dual-driver lazy database client — ported from the original app (db/index.ts), adapted for rosezm's server bundle.
+// Dual-driver lazy database client — ported from the original app (db/index.ts), adapted for Rosezm's server bundle.
 import fs from "fs";
 import path from "path";
 import { createRequire } from "node:module";
@@ -36,7 +36,7 @@ export type Db = PgliteDatabase<typeof schema>;
 // adapter included), so runtime resolution falls back to the project root -
 // the servers are started from the project root by convention. Production
 // imports dist/server.js in place and always takes the fast path. Framework
-// root cause + suggested fix: rosezm BUG.md (dev temp-copy vs bare
+// root cause + suggested fix: Rosezm BUG.md (dev temp-copy vs bare
 // specifiers).
 export async function importDriver(spec: string): Promise<any> {
   try {
@@ -59,7 +59,7 @@ const globalForDb = globalThis as unknown as {
   __oboeMigrated?: Promise<void>;
   __oboeReady?: Promise<any>;
   __oboePglite?: any;
-  // Published so the rosezm framework's render entry points (renderPage / renderPageStream) can await database readiness before painting a page.
+  // Published so the Rosezm framework's render entry points (renderPage / renderPageStream) can await database readiness before painting a page.
   __rosezmAppReady?: Promise<void>;
 };
 
@@ -106,7 +106,7 @@ function acquireAppLock(dataDir: string): void {
       );
       if (holder && holder !== process.pid && pidIsAlive(holder)) {
         throw new Error(
-          `PGlite data directory ${dataDir} is already open in another oboext process (pid ${holder}). ` +
+          `PGlite data directory ${dataDir} is already open in another Oboext process (pid ${holder}). ` +
             "PGlite supports one process per data directory — stop that server first. " +
             `If it crashed without cleaning up, delete ${lockPath} and retry.`,
         );
@@ -184,6 +184,13 @@ function registerGracefulShutdown(): () => void {
   const closeDb = async (): Promise<void> => {
     const client = pgliteClient;
     pgliteClient = null;
+    // R267: cancel a pending debounced snapshot. The shutdown path writes its
+    // own (after a checkpoint, before the close); letting the timer fire later
+    // would dump a closing instance and race that write.
+    if (snapshotTimer) {
+      clearTimeout(snapshotTimer);
+      snapshotTimer = null;
+    }
     if (!client || client.closed) return;
     const snap = snapshotPath(currentDataDir);
     try {
@@ -543,6 +550,59 @@ function snapshotPath(dir: string): string {
 let currentDataDir = "";
 
 /**
+ * R267: the recovery snapshot used to be written ONLY on a clean shutdown, so
+ * a crash or a hard kill rolled the database back to the last clean close.
+ * Measured in this repo: the tar was 18 minutes behind the live data while the
+ * server ran. That is the exact scenario the snapshot exists for.
+ *
+ * The fix is a DEBOUNCED snapshot on write, not a periodic timer:
+ *   - a periodic dump pays 0.8s of dumpDataDir() (measured, 6.7MB) whether or
+ *     not anything changed, and blocks the event loop doing it;
+ *   - a debounce pays only after real writes, and collapses a burst (an import
+ *     writing thousands of rows) into one dump.
+ *
+ * Callers mark, they never dump: `markDataChanged()` is cheap and sync, so a
+ * write path can call it without awaiting anything. The timer is unref'd so a
+ * pending snapshot never holds the process open.
+ */
+// Env override exists for tests: waiting a real minute per assertion is not a
+// test, it is a timeout.
+const SNAPSHOT_DEBOUNCE_MS = Math.max(Number(process.env.SNAPSHOT_DEBOUNCE_MS) || 60_000, 100);
+let snapshotTimer: NodeJS.Timeout | null = null;
+let snapshotInFlight = false;
+
+export function markDataChanged(): void {
+  if (process.env.OBOEXT_PGLITE_SNAPSHOT === "0") return;
+  if (!pgliteClient || !currentDataDir) return;
+  if (snapshotTimer) return; // already scheduled - one dump per quiet window
+  snapshotTimer = setTimeout(() => {
+    snapshotTimer = null;
+    void takeSnapshotNow();
+  }, SNAPSHOT_DEBOUNCE_MS);
+  snapshotTimer.unref?.();
+}
+
+/** Dump now (used by the debounce and by an explicit flush). Never throws. */
+async function takeSnapshotNow(): Promise<void> {
+  if (snapshotInFlight) return; // a dump is already reading the live instance
+  const client = pgliteClient;
+  const dir = currentDataDir;
+  if (!client || !dir || client.closed) return;
+  snapshotInFlight = true;
+  try {
+    // CHECKPOINT first, same reason the shutdown path does it: dumpDataDir
+    // reads a LIVE instance, and the checkpoint makes the captured tar
+    // self-consistent instead of carrying an unflushed WAL.
+    await client.query("CHECKPOINT");
+    await writeRecoverySnapshot(client, snapshotPath(dir));
+  } catch (err) {
+    log.error("[db] background snapshot failed:", (err as Error)?.message ?? err);
+  } finally {
+    snapshotInFlight = false;
+  }
+}
+
+/**
  * Write the recovery snapshot from a live instance.
  *
  * Atomic by way of write-then-rename: a snapshot half-written is worse than
@@ -595,9 +655,12 @@ async function openPgliteWithRecovery(
   const hasSnapshot = fs.existsSync(snap);
   const forced = process.env.OBOEXT_PGLITE_RECOVER === "1";
 
+  let failed: any = null;
   try {
     const client = new PGliteCtor(dir, pgliteOptions());
+    failed = client;
     await client.waitReady;
+    failed = null;
     return { client, recovered: false };
   } catch (err) {
     const message = (err as Error)?.message ?? String(err);
@@ -612,13 +675,43 @@ async function openPgliteWithRecovery(
           "or restore a backup.",
       );
     }
+    // R266: release the FAILED attempt before touching the directory. On
+    // Windows its NODEFS file handles keep `dir` busy, renameSync throws
+    // EPERM/EBUSY, and the old fall-through then handed an existing directory
+    // to loadDataDir — which refuses one holding PG_VERSION ("Database already
+    // exists, cannot load from tarball"). That error hid the real cause, and
+    // the documented workaround (OBOEXT_PGLITE_RECOVER=1) reran the exact same
+    // path, so recovery could never succeed. Closed here, best effort: the
+    // instance already failed, so a throw while closing changes nothing.
+    try {
+      if (failed) await failed.close();
+    } catch {
+      /* best effort - the wreck directory move below is the real recovery step */
+    }
     // Moved aside rather than deleted, so the wreck survives for a post-mortem.
     const wreck = dir + ".damaged-" + Date.now();
     try {
       fs.renameSync(dir, wreck);
       log.warn(`[db] damaged directory moved to ${wreck}`);
-    } catch {
-      // fall through: loadDataDir writes a fresh directory anyway
+    } catch (renameErr) {
+      // R266: rename can still fail (handle released a moment too late, or a
+      // lock file left by a killed process). Deleting is the correct fallback:
+      // the snapshot is the durable copy and loadDataDir REFUSES a directory
+      // that still holds PG_VERSION, so leaving the wreck here guarantees the
+      // recovery fails with the same misleading message as before.
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+        log.warn(
+          `[db] could not move the damaged directory aside (${(renameErr as Error)?.message}); ` +
+            `deleted it instead - the snapshot at ${snap} is the durable copy`,
+        );
+      } catch (rmErr) {
+        throw new Error(
+          `PGlite data directory ${dir} could not be moved or deleted while recovering ` +
+            `(${(renameErr as Error)?.message} / ${(rmErr as Error)?.message}). ` +
+            `Move the directory aside by hand, then start with OBOEXT_PGLITE_RECOVER=1 to restore ${snap}.`,
+        );
+      }
     }
     // loadDataDir needs a Blob (it calls .arrayBuffer()); a Buffer does not
     // have that method and fails with "e.arrayBuffer is not a function".
@@ -656,10 +749,30 @@ async function openPgliteWithRecovery(
  * bought nothing and the strict path is the one whose guarantees are
  * documented.
  *
- * The only option actually passed is loadDataDir, and only on the recovery
- * path - see openPgliteWithRecovery.
+ * R248: the pg_trgm extension ships inside the PGlite package
+ * (`@electric-sql/pglite/contrib/pg_trgm`) but is NOT loaded by default - it
+ * must be handed to the constructor. It powers the search indexes of migration
+ * 0034 (gin_trgm_ops over title/excerpt/body_plain), which is why the option
+ * is wired here and not per-callsite. The migration itself is written to
+ * tolerate the extension being absent (Neon / a future PGlite without it):
+ * CREATE EXTENSION is IF NOT EXISTS and the indexes simply do not exist where
+ * it fails - the queries fall back to plain ILIKE, exactly the pre-0034
+ * behaviour. (A tarball path or URL string is NOT accepted by 0.2.17 - it
+ * fails with "g.setup is not a function"; only the JS module object works.)
+ *
+ * The only other option actually passed is loadDataDir, and only on the
+ * recovery path - see openPgliteWithRecovery.
  */
 function pgliteOptions(): Record<string, unknown> {
+  try {
+    // Dynamic: a static import would pull the extension into every bundle of
+    // db.ts, including the Neon path that never uses it.
+    const req = createRequire(import.meta.url);
+    const { pg_trgm } = req("@electric-sql/pglite/contrib/pg_trgm");
+    return { extensions: { pg_trgm } };
+  } catch {
+    /* a driver layout without contrib/ - the migration degrades gracefully */
+  }
   return {};
 }
 
@@ -905,6 +1018,34 @@ async function resyncSequences(): Promise<void> {
   );
 }
 
+// R200: backfill body_plain for existing rows (the column ships empty from the
+// migration). Pure SQL jsonb projection mirrors blocksToPlainText in
+// render.ts — heading/paragraph/quote/code/list/image caption — so no content
+// crosses the wire. Idempotent: only NULL rows with a non-empty body are
+// touched, so it is safe to run on every boot and no-ops once caught up.
+async function backfillPostBodyPlain(): Promise<void> {
+  await rawQuery(`
+    UPDATE posts
+    SET body_plain = (
+      SELECT string_agg(
+        CASE (b->>'type')
+          WHEN 'heading' THEN b->>'text'
+          WHEN 'paragraph' THEN b->>'text'
+          WHEN 'quote' THEN b->>'text'
+          WHEN 'code' THEN b->>'code'
+          WHEN 'list' THEN (
+            SELECT string_agg(elem, ' ') FROM jsonb_array_elements_text(b->'items') AS t(elem)
+          )
+          WHEN 'image' THEN coalesce(b->>'caption', b->>'alt')
+          ELSE NULL
+        END, E'\n'
+      )
+      FROM jsonb_array_elements(content) AS e(b)
+    )
+    WHERE body_plain IS NULL AND jsonb_array_length(content) > 0;
+  `);
+}
+
 /** Apply SQL migrations once per process; safe to await every request. */
 export function ensureMigrations(): Promise<void> {
   if (!globalForDb.__oboeMigrated) {
@@ -937,6 +1078,9 @@ export function ensureMigrations(): Promise<void> {
       // finishes long before any real write can land. A failure here also no
       // longer fails the whole boot — it self-heals on the next one.
       withDbRetry(() => resyncSequences()).catch(() => {});
+      // R200: detached, idempotent backfill of body_plain for rows that predate
+      // the column. Off the render path like the resync above.
+      withDbRetry(() => backfillPostBodyPlain()).catch(() => {});
     })().catch((err) => {
       globalForDb.__oboeMigrated = undefined;
       throw err;
@@ -1060,7 +1204,7 @@ export { schema };
  * Boot-time warmup + render-readiness publication.
  *
  * ensureMigrations() is memoized on globalThis (one promise per process) and
- * idempotent; every later awaiter — the middleware, the rosezm framework's
+ * idempotent; every later awaiter — the middleware, the Rosezm framework's
  * render entry points — shares this very promise. Kicking it at module load
  * means PGlite opens, migrations apply and sequences resync while the server
  * is still starting, instead of the first request paying the whole cold path.
@@ -1091,3 +1235,36 @@ const __rosezmAppReady =
   process.env.rosezm_BUILDING === "1" ? Promise.resolve() : ensureMigrations();
 globalForDb.__rosezmAppReady = __rosezmAppReady;
 void __rosezmAppReady.catch(() => {});
+
+// R187: retention (security-log prune, damaged-directory sweep) runs on this
+// process's own clock. It used to be reachable only from recordLoginEvent, so
+// the first sign-in of the hour paid the bulk delete inside its own request and
+// an idle site never pruned at all - see retention.ts for the measurements.
+// Deferred by a dynamic import: retention.ts pulls in security-events.ts, which
+// imports this module, and the cycle is only safe once db.ts has finished
+// evaluating. currentDataDir is empty for the postgres driver, which simply
+// leaves the filesystem sweep out of the pass.
+if (process.env.rosezm_BUILDING !== "1") {
+  void __rosezmAppReady
+    .then(() => import("./retention.js"))
+    .then((m) => m.startRetention(currentDataDir))
+    // debug, not warn: the only way this rejects today is a failed migration,
+    // and the prerender stage hits that by design (ensureMigrations resolves
+    // db/migrations from process.cwd(), which is the temp stage directory).
+    // The prune itself is warn-only, so a real runtime failure still surfaces.
+    .catch((e) => log.debug("[db] retention did not start: " + (e && (e as Error).message)));
+}
+
+// R241: a scheduled post becomes visible by TIME GATE (publishedAt <= now()),
+// which has no commit point to hook - so every public cache kept serving the
+// pre-due answer until its own TTL ran out (30s memo, up to 5x under SWR, up to
+// 300s for the loader KV). The sweeper drops the same caches a manual publish
+// would, on the minute the row comes due. See publish-sweeper.ts.
+if (process.env.rosezm_BUILDING !== "1") {
+  void __rosezmAppReady
+    .then(() => import("./publish-sweeper.js"))
+    .then((m) => m.startPublishSweeper())
+    // Same reasoning as retention above: the sweeper is housekeeping, and a
+    // failed boot gate must not turn into an unhandled rejection here.
+    .catch((e) => log.debug("[db] publish sweeper did not start: " + (e && (e as Error).message)));
+}

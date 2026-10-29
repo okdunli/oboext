@@ -1,0 +1,24 @@
+<script>
+  // /api/redirects/:id — DELETE one rule. There is no PUT on purpose: a rule
+  // is two strings and a flag, and the honest edit of a mapping is a create
+  // that has to pass the same normalisation, cycle and uniqueness checks the
+  // first one did.
+  import { apiGate, requireCap, jsonFail } from "@server/admin";
+  import { deleteRedirects } from "@server/redirects";
+
+  function pathId(request) {
+    const n = Number(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+    return Number.isInteger(n) && n > 0 ? n : 0;
+  }
+
+  export async function DELETE(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "settings:manage");
+      const id = pathId(request);
+      if (!id) return jsonFail("重定向规则不存在", 404);
+      const out = await deleteRedirects([id]);
+      if (!out.affected) return jsonFail("重定向规则不存在", 404);
+      return out;
+    });
+  }
+</script>

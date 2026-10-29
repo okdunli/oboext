@@ -1,9 +1,9 @@
 // Media library service — ported from lib/services/media.ts.
-import { and, asc, desc, eq, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db } from "./db.js";
 import { media as mediaTable, posts, pages, type Media } from "./schema.js";
 import type { SessionUser } from "./auth.js";
-import { can, requireUser, ServiceError } from "./admin.js";
+import { can, requireCap, requireUser, ServiceError } from "./admin.js";
 import { uploadFile, deleteFile, uploadsAbsPath, sniffMime, mimeFor } from "./storage.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -11,9 +11,47 @@ import fs from "node:fs";
 import path from "node:path";
 import { invalidateVariantCache } from "./render.js";
 import { createLogger } from "./logger.js";
+import { normalizeWindow, ilikeEscape } from "./queries.js";
+import { recordAdminAction } from "./security-events.js";
 const log = createLogger("media");
 
 const execFileP = promisify(execFile);
+
+// Media-library uploads are served straight from the app origin, so an
+// executable / active-document type (.js, .mjs, .html, .svg, ...) is a stored-XSS
+// vector: a visitor who opens the raw URL runs attacker script in the site
+// origin. Allowlist the types a blog media library actually needs; reject
+// everything else. (Theme/plugin assets install through a separate admin path
+// and are not subject to this.) Serving also sets nosniff (storage.ts), which
+// covers content/extension mismatch, but an ALLOWED active type would still run
+// - hence the allowlist excludes them outright.
+const MEDIA_ALLOWED_EXT = new Set([
+  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".ico", ".bmp",
+  ".pdf", ".txt", ".md", ".csv", ".json",
+  ".mp3", ".wav", ".ogg", ".m4a",
+  ".mp4", ".webm",
+  ".woff", ".woff2", ".ttf",
+]);
+
+export function assertMediaTypeAllowed(name: string): void {
+  const ext = path.extname(name || "").toLowerCase();
+  if (!MEDIA_ALLOWED_EXT.has(ext)) {
+    throw new ServiceError(
+      `不支持的文件类型${ext ? `：${ext}` : ""}`,
+      415,
+      "api.media_type",
+    );
+  }
+}
+
+// Upload size ceiling. The dev server caps request bodies at rosezm_MAX_BODY
+// (tools/serve.mjs sets 25MB), but the production server streams the body with
+// no such cap - so without this a huge upload would be written straight to disk
+// (disk-fill DoS). 25MB default matches the dev cap; override per deployment.
+export const MEDIA_MAX_BYTES = Math.max(
+  1,
+  Number(process.env.OBOEXT_MEDIA_MAX_BYTES) || 25 * 1024 * 1024,
+);
 
 // Image variants are produced through PowerShell's System.Drawing (GDI+).
 const variantsSupported = process.platform === "win32";
@@ -219,19 +257,30 @@ export async function listMedia(
   offset = 0,
   filter: { q?: string; type?: string; tag?: string } = {},
 ): Promise<{ items: Media[]; total: number }> {
-  requireUser(user);
-  const n = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  // R264: `media:read` existed in the capability matrix with ZERO consumers
+  // (grep found only its declarations). The gate here was requireUser — i.e.
+  // "is signed in" — so a plain reader (subscriber) could list the media
+  // library through /api/media, while the admin screen is adminOnly. Wiring the
+  // capability it always had keeps authors working: author/editor/admin all
+  // hold media:read; only subscriber does not.
+  requireCap(user, "media:read");
+  // R158: shared window clamp - `?offset=abc` used to reach .offset(NaN) and
+  // `?limit=-5` a negative LIMIT (500s for any signed-in session).
+  const { limit: n, offset: off } = normalizeWindow({ limit, offset }, 50);
   const conds: SQL[] = [];
   const q = String(filter.q || "").trim();
+  // user input, so the wildcards must be escaped the same way every other
+  // search in the app escapes them (ilikeEscape + ESCAPE '\') - a raw `%` would
+  // match every row and `a_b` would also match `axb`.
   if (q) {
-    const like = `%${q}%`;
-    conds.push(or(sql`${mediaTable.filename} ILIKE ${like}`, sql`${mediaTable.alt} ILIKE ${like}`)!);
+    const like = `%${ilikeEscape(q)}%`;
+    conds.push(or(sql`${mediaTable.filename} ILIKE ${like} ESCAPE '\\'`, sql`${mediaTable.alt} ILIKE ${like} ESCAPE '\\'`)!);
   }
   const type = String(filter.type || "").trim();
   if (type === "image") conds.push(sql`${mediaTable.mimeType} LIKE 'image/%'`);
   else if (type === "doc") conds.push(sql`NOT (${mediaTable.mimeType} LIKE 'image/%')`);
   const tag = String(filter.tag || "").trim();
-  if (tag) conds.push(sql`${mediaTable.tags} ILIKE ${"%" + tag + "%"}`);
+  if (tag) conds.push(sql`${mediaTable.tags} ILIKE ${"%" + ilikeEscape(tag) + "%"} ESCAPE '\\'`);
   // an always-true predicate keeps the two queries identical in shape
   const where: SQL = conds.length ? and(...conds)! : sql`true`;
   const rows = await db
@@ -240,7 +289,7 @@ export async function listMedia(
     .where(where)
     .orderBy(asc(mediaTable.sortOrder), desc(mediaTable.createdAt))
     .limit(n)
-    .offset(Math.max(0, offset));
+    .offset(off);
   const [c] = await db.select({ n: sql<number>`count(*)` }).from(mediaTable).where(where);
   return { items: rows, total: Number(c?.n ?? 0) };
 }
@@ -258,6 +307,14 @@ export async function createMediaFromFile(
 ): Promise<Media> {
   const user = requireUser(userIn);
   if (!can(user.role, "media:upload")) throw new ServiceError("无权上传媒体", 403);
+  assertMediaTypeAllowed(file.name);
+  if (file.size > MEDIA_MAX_BYTES) {
+    throw new ServiceError(
+      `文件过大（上限 ${Math.floor(MEDIA_MAX_BYTES / 1024 / 1024)}MB）`,
+      413,
+      "api.media_too_large",
+    );
+  }
   const result = await uploadFile(file, "media");
   // F2e: fire-and-forget responsive variants (.w400/.w800/.w1600 beside the
   // original, same PowerShell pipeline as tools/make-variants.mjs). The
@@ -302,6 +359,7 @@ export async function deleteMedia(userIn: SessionUser | null, id: number): Promi
     await removeVariants(abs);
   }
   await db.delete(mediaTable).where(eq(mediaTable.id, id));
+  await recordAdminAction(user, "media.delete", { id });
   return { id };
 }
 
@@ -499,14 +557,88 @@ export async function replaceMediaFile(
   return row;
 }
 
+/**
+ * Batched usage check - the shape the bulk delete path needs.
+ *
+ * Doing this per URL costs one full pass per table per URL, because the
+ * content arm is a leading-wildcard match that no index can serve (pg_trgm is
+ * not compiled into PGlite, so the LIKE has to read every row). Measured on a
+ * 5 001-post fixture: 50 URLs as 50 individual checks = 1 141 ms, the same 50
+ * as one literal-alternation regex = 84 ms, and the returned row set is
+ * identical (diff empty both ways). One pass therefore costs what one check
+ * costs instead of what N checks cost.
+ *
+ * The URLs go through inArray() as bound parameters and the pattern through a
+ * bound text parameter, so nothing here is string-concatenated into SQL; every
+ * metacharacter is escaped before it reaches the regex, otherwise a filename
+ * like "a.b.png" would also match "axb.png".
+ */
+function regexEscape(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export async function countUsageForUrls(urls: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const uniq = [...new Set(urls.filter((u) => u))];
+  for (const u of uniq) out.set(u, 0);
+  if (!uniq.length) return out;
+  const pat = `(${uniq.map(regexEscape).join("|")})`;
+  const legs = await Promise.all([
+    db
+      .select({ feat: posts.featuredImage, body: sql<string | null>`${posts.content}::text` })
+      .from(posts)
+      .where(or(inArray(posts.featuredImage, uniq), sql`${posts.content}::text ~ ${pat}`)),
+    db
+      .select({ feat: pages.featuredImage, body: sql<string | null>`${pages.content}::text` })
+      .from(pages)
+      .where(or(inArray(pages.featuredImage, uniq), sql`${pages.content}::text ~ ${pat}`)),
+  ]);
+  for (const rows of legs) {
+    for (const r of rows) {
+      // One per row, matching what the single-URL check counts (rows, not
+      // occurrences), so the two paths can never disagree about a count.
+      for (const u of uniq) {
+        if (r.feat === u || (r.body !== null && r.body.includes(u))) out.set(u, out.get(u)! + 1);
+      }
+    }
+  }
+  return out;
+}
+
 export async function deleteMediaMany(
   userIn: SessionUser | null,
   ids: number[],
-): Promise<{ deleted: number[]; skipped: number[] }> {
+  opts: { force?: boolean } = {},
+): Promise<{
+  deleted: number[];
+  skipped: number[];
+  referenced: Array<{ id: number; url: string; count: number }>;
+}> {
   const user = requireUser(userIn);
   const deleted: number[] = [];
   const skipped: number[] = [];
+  const referenced: Array<{ id: number; url: string; count: number }> = [];
+  // The single-item panel asks /api/media/usage before its confirm; the bulk
+  // path had no equivalent, so "delete 40 selected" removed files that articles
+  // still pointed at and the admin found out from broken images. Guarded here,
+  // where an API caller cannot walk around it.
+  const block = new Set<number>();
+  if (!opts.force && ids.length) {
+    const rows = await db
+      .select({ id: mediaTable.id, url: mediaTable.url })
+      .from(mediaTable)
+      .where(inArray(mediaTable.id, ids));
+    const counts = await countUsageForUrls(rows.map((r) => r.url));
+    for (const r of rows) {
+      const c = counts.get(r.url) ?? 0;
+      if (c > 0) {
+        block.add(r.id);
+        referenced.push({ id: r.id, url: r.url, count: c });
+      }
+    }
+  }
   for (const id of ids) {
+    if (block.has(id)) continue;
     try {
       await deleteMedia(user, id);
       deleted.push(id);
@@ -514,5 +646,8 @@ export async function deleteMediaMany(
       skipped.push(id);
     }
   }
-  return { deleted, skipped };
+  // deleteMedia already logged one media.delete per row; this bulk line is the
+  // "one selection, one intent" record an operator can actually search by.
+  await recordAdminAction(user, "media.bulk_delete", { ids: deleted, skipped });
+  return { deleted, skipped, referenced };
 }

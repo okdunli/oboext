@@ -1,5 +1,5 @@
 import { buildSchema, GraphQLError } from "graphql";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { categories, media, pages, posts, tags, users } from "./schema.js";
 import {
@@ -8,12 +8,19 @@ import {
   signSession,
   verifyChallengeTicket,
   verifyCredentials,
+  assertLoginAllowed,
+  recordLoginEvent,
+  LOGIN_EVENTS,
+  clientIp,
+  LoginThrottledError,
   type SessionUser,
 } from "./auth.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { HOOKS, applyAsyncFilters } from "./hooks.js";
 import { ServiceError } from "./errors.js";
+import { roleAllows } from "./admin-menu.js";
 import { attachTaxonomies, listCategories, listPosts, listTags } from "./queries.js";
+import { offsetNum } from "./paging.js";
 import { listMedia } from "./media.js";
 import { adminListUsers } from "./admin.js";
 import {
@@ -87,6 +94,10 @@ const typeDefs = /* GraphQL */ `
     publishedAt: DateTime
     createdAt: DateTime
     updatedAt: DateTime
+    "R278: the post's content language (i18n LOCALES)."
+    locale: String!
+    "R278: id of the post this row translates; null for originals. Any signed-in reader may see it — pairing is public metadata, not a draft state."
+    translationOf: Int
   }
 
   type Page {
@@ -205,7 +216,17 @@ const typeDefs = /* GraphQL */ `
 
 // ---- Local read helpers (authed-aware, per-request) ----
 
-type Ctx = { user: SessionUser | null };
+type Ctx = { user: SessionUser | null; ip: string | null };
+
+// scheduled: JS twin of queries.publishedVisible — a published post or page
+// whose publishedAt is still in the future stays a 404 for guests, not just
+// hidden from listings.
+const notYetVisible = (publishedAt: Date | null) =>
+  !!publishedAt && publishedAt.getTime() > Date.now();
+
+// SQL twin for the guest pages listing (posts listing rides the gate inside
+// queries.listPosts; pages don't).
+const publishedPageVisible = or(isNull(pages.publishedAt), lte(pages.publishedAt, sql`now()`));
 
 async function postById(id: number, authed: boolean) {
   const [row] = await db
@@ -219,7 +240,7 @@ async function postById(id: number, authed: boolean) {
     .leftJoin(users, eq(posts.authorId, users.id))
     .where(eq(posts.id, id));
   if (!row) throw new ServiceError("文章不存在", 404);
-  if (!authed && row.post.status !== "published")
+  if (!authed && (row.post.status !== "published" || notYetVisible(row.post.publishedAt)))
     throw new ServiceError("文章不存在", 404);
   return row;
 }
@@ -236,7 +257,7 @@ async function postBySlug(slug: string, authed: boolean) {
     .leftJoin(users, eq(posts.authorId, users.id))
     .where(eq(posts.slug, slug));
   if (!row) throw new ServiceError("文章不存在", 404);
-  if (!authed && row.post.status !== "published")
+  if (!authed && (row.post.status !== "published" || notYetVisible(row.post.publishedAt)))
     throw new ServiceError("文章不存在", 404);
   return row;
 }
@@ -244,7 +265,7 @@ async function postBySlug(slug: string, authed: boolean) {
 async function pageById(id: number, authed: boolean) {
   const [row] = await db.select().from(pages).where(eq(pages.id, id));
   if (!row) throw new ServiceError("页面不存在", 404);
-  if (!authed && row.status !== "published")
+  if (!authed && (row.status !== "published" || notYetVisible(row.publishedAt)))
     throw new ServiceError("页面不存在", 404);
   return row;
 }
@@ -252,7 +273,7 @@ async function pageById(id: number, authed: boolean) {
 async function pageBySlug(slug: string, authed: boolean) {
   const [row] = await db.select().from(pages).where(eq(pages.slug, slug));
   if (!row) throw new ServiceError("页面不存在", 404);
-  if (!authed && row.status !== "published")
+  if (!authed && (row.status !== "published" || notYetVisible(row.publishedAt)))
     throw new ServiceError("页面不存在", 404);
   return row;
 }
@@ -296,13 +317,13 @@ async function listPagesPublic(
   authed: boolean,
 ) {
   const n = Math.min(Math.max(Number(limit) || 20, 1), 100);
-  const off = Math.max(0, Number(offset) || 0);
+  const off = offsetNum(offset);
   const where =
     status && authed
       ? eq(pages.status, status as any)
       : authed
         ? undefined
-        : eq(pages.status, "published");
+        : and(eq(pages.status, "published"), publishedPageVisible);
   const rows = await db
     .select()
     .from(pages)
@@ -357,7 +378,7 @@ const queryResolvers: Record<string, Resolver> = {
         ]);
         return wrap(() =>
           listPosts({
-            status: ctx.user ? args.status : "published",
+            status: mayReadDrafts(ctx.user) ? args.status : "published",
             authorId: args.authorId,
             categorySlug,
             tagSlug,
@@ -367,26 +388,47 @@ const queryResolvers: Record<string, Resolver> = {
           }),
         );
       },
-      post: (_p, { id }, ctx) => wrap(() => postById(id, !!ctx.user).then(toPost)),
+      post: (_p, { id }, ctx) => wrap(() => postById(id, mayReadDrafts(ctx.user)).then(toPost)),
       postBySlug: (_p, { slug }, ctx) =>
-        wrap(() => postBySlug(slug, !!ctx.user).then(toPost)),
+        wrap(() => postBySlug(slug, mayReadDrafts(ctx.user)).then(toPost)),
       pages: (_p, args, ctx) =>
-        wrap(() => listPagesPublic(args.status, args.limit, args.offset, !!ctx.user)),
-      page: (_p, { id }, ctx) => wrap(() => pageById(id, !!ctx.user)),
-      pageBySlug: (_p, { slug }, ctx) => wrap(() => pageBySlug(slug, !!ctx.user)),
+        wrap(() => listPagesPublic(args.status, args.limit, args.offset, mayReadDrafts(ctx.user))),
+      page: (_p, { id }, ctx) => wrap(() => pageById(id, mayReadDrafts(ctx.user))),
+      pageBySlug: (_p, { slug }, ctx) => wrap(() => pageBySlug(slug, mayReadDrafts(ctx.user))),
       categories: () => wrap(() => listCategories()),
       category: (_p, { id }) => wrap(() => categoryById(id)),
       tags: () => wrap(() => listTags()),
       tag: (_p, { id }) => wrap(() => tagById(id)),
+      // R261: `listMedia` gates on requireUser ("signed in"), but the media
+      // LIBRARY is an editor surface — measured before this fix: a reader
+      // (subscriber) listed it through GraphQL, while the REST screen is
+      // adminOnly in the sidebar. Same predicate as mayReadDrafts above; the
+      // media service itself is left alone because the post editor (which
+      // authors DO use) reaches it by another path.
       media: (_p, { limit }, ctx) =>
-        wrap(() => listMedia(requireUser(ctx), limit ?? 50).then((r) => r.items)),
+        wrap(() => {
+          if (!mayReadDrafts(ctx.user)) throw new ServiceError("权限不足", 403);
+          return listMedia(requireUser(ctx), limit ?? 50).then((r) => r.items);
+        }),
       users: (_p, _a, ctx) => wrap(() => adminListUsers(requireUser(ctx))),
 };
 
 const mutationResolvers: Record<string, Resolver> = {
-  login: async (_p, { email, password }) => {
-        const user = await verifyCredentials(email, password);
-        if (!user) throw new GraphQLError("邮箱或密码错误", { extensions: { code: "UNAUTHENTICATED" } });
+  login: async (_p, { email, password }, ctx) => {
+        const account = String(email ?? "");
+        try {
+          await assertLoginAllowed(account, ctx.ip);
+        } catch (e) {
+          await recordLoginEvent({ eventType: LOGIN_EVENTS.LOCKED, account, ip: ctx.ip });
+          if (e instanceof LoginThrottledError)
+            throw new GraphQLError(e.message, { extensions: { code: "THROTTLED" } });
+          throw e;
+        }
+        const user = await verifyCredentials(account, password);
+        if (!user) {
+          await recordLoginEvent({ eventType: LOGIN_EVENTS.FAIL, account, ip: ctx.ip });
+          throw new GraphQLError("邮箱或密码错误", { extensions: { code: "UNAUTHENTICATED" } });
+        }
 
         await ensurePluginsLoaded();
         const challenged = await applyAsyncFilters<{
@@ -406,12 +448,20 @@ const mutationResolvers: Record<string, Resolver> = {
         const token = await signSession(user);
         return { token, user };
       },
-      login2fa: async (_p, { ticket, code }) => {
+      login2fa: async (_p, { ticket, code }, ctx) => {
         const user = await verifyChallengeTicket(ticket);
         if (!user) {
           throw new GraphQLError("验证已过期，请重新登录", {
             extensions: { code: "UNAUTHENTICATED" },
           });
+        }
+        try {
+          await assertLoginAllowed(user.name, ctx.ip);
+        } catch (e) {
+          await recordLoginEvent({ eventType: LOGIN_EVENTS.LOCKED, userId: user.id, account: user.name, ip: ctx.ip });
+          if (e instanceof LoginThrottledError)
+            throw new GraphQLError(e.message, { extensions: { code: "THROTTLED" } });
+          throw e;
         }
         await ensurePluginsLoaded();
         const verdict = await applyAsyncFilters<{
@@ -420,6 +470,7 @@ const mutationResolvers: Record<string, Resolver> = {
           ok: boolean;
         }>(HOOKS.authChallengeVerify, { user, code, ok: false });
         if (!verdict.ok) {
+          await recordLoginEvent({ eventType: LOGIN_EVENTS.FAIL, userId: user.id, account: user.name, ip: ctx.ip });
           throw new GraphQLError("动态码或恢复码不正确", {
             extensions: { code: "UNAUTHENTICATED" },
           });
@@ -466,7 +517,22 @@ function attach(rootType: string, resolvers: Record<string, Resolver>) {
 attach("Query", queryResolvers);
 attach("Mutation", mutationResolvers);
 
+/**
+ * R260: "logged in" is not "may read unpublished rows".
+ *
+ * Every resolver below used `!!ctx.user` as the draft predicate, so a plain
+ * reader (subscriber — the membership tier) could pull every draft post and
+ * page through /api/graphql. Measured before this fix: reader drafts_visible=1,
+ * identical to admin. The REST admin loaders had the same defect and were fixed
+ * in R258/R259; this is the other door into the same tables, so it uses the
+ * same predicate (`adminOnly` = admin || editor) rather than inventing a
+ * fourth definition of "staff".
+ */
+function mayReadDrafts(user: { role?: string } | null | undefined): boolean {
+  return !!user && roleAllows(user.role as never, { adminOnly: true });
+}
+
 export async function buildContext(req: Request): Promise<Ctx> {
   const user = await getSessionFromRequest(req);
-  return { user };
+  return { user, ip: clientIp(req) };
 }

@@ -1,5 +1,5 @@
 /**
- * oboext build plugin.
+ * Oboext build plugin.
  *
  * Build time (transform):
  *  1. isomorphic preamble in every page/layout component:
@@ -21,7 +21,7 @@
  *     rewritten to absolute source paths; api modules never enter the client
  *     bundle, so pglite/drizzle stay out of the browser.
  *
- * As of rosezm 0.2.4 the old runtime hooks are gone: {@html} emits trusted
+ * As of Rosezm 0.2.4 the old runtime hooks are gone: {@html} emits trusted
  * strings natively (P1-2), head <style> passes through (P1-3/head merge),
  * bare <form> no longer pulls the client bundle (P1-3 heuristic), the zero-JS
  * shell ships without #app/demo styles (P1-1), and queries route by pathname
@@ -68,12 +68,22 @@ function __rvLoad(key, payload) {
 
 // Public pages may run plugin code: enabled plugins inject zero-dependency
 // inline <script>s through the footer.html/head.tags filters (identical
-// contract to the original oboext, which shipped no CSP at all). Plugin
+// contract to the original Oboext, which shipped no CSP at all). Plugin
 // code is super-admin trusted, so script-src allows 'unsafe-inline' on the
 // public site; the hash-token policy never covered an emitted script anyway
 // (every route is csr=false, so the framework ships no inline bundle).
 // Admin pages ship NO plugin HTML and only external /public/admin.js, so
-// they keep the strict policy without 'unsafe-inline'.
+// they keep a strict policy — but WITHOUT overriding script-src entirely:
+// R244's realtime wiring made /admin, /admin/dashboard and /admin/comments
+// client-JS routes (a $store(...) subscription + refresh()), and the split
+// bundle boots them from an INLINE <script type="module"> bootstrap. A
+// route-declared script-src overrides the framework's hash policy wholesale
+// (pageHeaders merge is last-write-wins), which would reject that bootstrap
+// and silently kill the whole client bundle on those pages. So admin pages
+// omit script-src from their header export and let the framework's
+// 'sha256-<bootstrap>' policy stand; every other directive stays app-owned.
+// The three pages load no external scripts beyond 'self', so the framework
+// default is exactly the strictness the old override wanted to keep.
 const SCRIPT_HOSTS =
   "https://giscus.app https://utteranc.es https://cdn.jsdelivr.net https://*.disqus.com";
 const CSP_COMMON =
@@ -81,10 +91,15 @@ const CSP_COMMON =
   "img-src 'self' data: https://picsum.photos https://fastly.picsum.photos https://www.gravatar.com https://cn.gravatar.com https://cravatar.cn https://weavatar.com https://seccdn.libravatar.org https://q1.qlogo.cn https://*.disquscdn.com; " +
   "font-src 'self' data:; connect-src 'self' https:; frame-src https://giscus.app https://*.disqus.com; " +
   "form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'";
-const cspHeadersFor = (admin) => `
-export const headers = {
+const cspHeadersFor = (admin) =>
+  admin
+    ? `export const headers = {
+  "Content-Security-Policy": ${JSON.stringify(CSP_COMMON)},
+};
+`
+    : `export const headers = {
   "Content-Security-Policy":
-    "script-src 'self' ${admin ? "" : "'unsafe-inline' "}${SCRIPT_HOSTS}; " +
+    "script-src 'self' 'unsafe-inline' ${SCRIPT_HOSTS}; " +
     ${JSON.stringify(CSP_COMMON)},
 };
 `;
@@ -111,7 +126,16 @@ export default [
       const body = m[1];
       const cspHeaders = cspHeadersFor(filePath.replace(/\\/g, "/").includes("/pages/admin/"));
       const injected = `${PREAMBLE}\n${cspHeaders}\n${body}`;
-      return code.slice(0, m.index) + code.slice(m.index).replace(m[0], `<script>${injected}</script>`);
+      // Functional replacement, NOT a replacement string: `injected` carries
+      // the page's own script verbatim, and a replacement STRING expands
+      // `$&`, `$'`, `` $` ``, `$$` and `$n` inside it. One page escaping a
+      // regex (`w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")` - the standard idiom)
+      // then inlined `$&` = the whole matched script block into its own
+      // source, and esbuild died on an unterminated string literal. A
+      // function receives the matched text literally, so user code may
+      // contain any `$` sequence.
+      const tail = code.slice(m.index).replace(m[0], () => `<script>${injected}</script>`);
+      return code.slice(0, m.index) + tail;
     },
   },
 ];

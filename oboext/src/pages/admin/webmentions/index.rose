@@ -1,0 +1,102 @@
+<script>
+  // Webmention inbox (/admin/webmentions) — mentions from other sites, with the
+  // two facts the comments queue cannot show: which host it came from and which
+  // of our pages it points at. Reception files each accepted mention as a
+  // PENDING comment (R255), so approving here is the same act as approving a
+  // comment — the row just carries its provenance. One bare <script> block by
+  // R246 rule; every string arrives catalog-baked (webmention.admin_*).
+  let d = $data(() => __rvLoad("admin.webmentions", {
+    page: __rvQs().get("page"),
+    status: __rvQs().get("status"),
+  }));
+  function items() { return d().items || []; }
+  function counts() { return d().counts || {}; }
+  function total() { return d().total || 0; }
+  function page() { return d().page || 1; }
+  function pages() { return d().pages || 1; }
+  function curStatus() { return d().status || ""; }
+  function s(k) { return (d().s || {})[k] || ""; }
+  function href(p) {
+    const st = curStatus();
+    return "/admin/webmentions?page=" + p + (st ? "&status=" + st : "");
+  }
+  function filterHref(st) { return "/admin/webmentions" + (st ? "?status=" + st : ""); }
+  function statusLabel(st) {
+    return st === "accepted" ? s("st_accepted") : st === "rejected" ? s("st_rejected") : s("st_pending");
+  }
+  function statusColor(st) {
+    return st === "accepted" ? "#4ade80" : st === "rejected" ? "#f87171" : "#fbbf24";
+  }
+  // Only pending rows offer actions: an already-decided mention has a comment
+  // whose state is the record, and re-deciding it here would be a second edit.
+  function actionable(st) { return st === "pending"; }
+  function fmt(iso) {
+    if (!iso) return "—";
+    const dt = new Date(iso);
+    if (isNaN(dt.getTime())) return "—";
+    const pad = (n) => String(n).padStart(2, "0");
+    return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes());
+  }
+</script>
+
+<head>
+  <title>Webmention - 管理后台</title>
+</head>
+
+<div class="adm-toolbar">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="adm-ic" style="--i:url(/public/icons/message-square.svg);width:20px;height:20px;color:#818cf8;"></span>
+    <strong style="font-size:16px">{s("title")}</strong>
+    <span class="adm-hint" style="margin:0;">共 {total()} 条</span>
+  </div>
+</div>
+
+<p class="adm-hint" style="margin:0 0 8px;">{s("lead")}</p>
+
+<div class="adm-toolbar" style="gap:6px;flex-wrap:wrap;">
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={filterHref("")}>{s("filter_all")} ({total()})</a>
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={filterHref("pending")}>{s("st_pending")} ({counts().pending || 0})</a>
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={filterHref("accepted")}>{s("st_accepted")} ({counts().accepted || 0})</a>
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={filterHref("rejected")}>{s("st_rejected")} ({counts().rejected || 0})</a>
+</div>
+
+<div class="adm-card adm-table-wrap">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th>{s("col_source")}</th>
+        <th>{s("col_target")}</th>
+        <th>{s("col_post")}</th>
+        <th>{s("col_status")}</th>
+        <th>{s("col_time")}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#if items().length === 0}
+        <tr><td colspan="5" style="text-align:center;color:#71717a;padding:24px;">{s("empty")}</td></tr>
+      {:else}
+        {#each items() as it}
+          <tr>
+            <td><span style="font-family:ui-monospace,monospace;font-size:12px;">{it.sourceHost}</span></td>
+            <td><span style="font-family:ui-monospace,monospace;font-size:12px;color:#a1a1aa;">{it.targetPath}</span></td>
+            <td>{it.postTitle || "—"}</td>
+            <td><span style={"color:" + statusColor(it.status) + ";font-size:12px;"}>{statusLabel(it.status)}</span></td>
+            <td><span class="adm-hint" style="margin:0;">{fmt(it.createdAt)}</span></td>
+          </tr>
+        {/each}
+      {/if}
+    </tbody>
+  </table>
+</div>
+
+{#if pages() > 1}
+<div class="adm-toolbar" style="justify-content:center;gap:6px;">
+  {#if page() > 1}
+    <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() - 1)}>‹</a>
+  {/if}
+  <span class="adm-hint" style="margin:0;">{page()} / {pages()}</span>
+  {#if page() < pages()}
+    <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() + 1)}>›</a>
+  {/if}
+</div>
+{/if}

@@ -638,7 +638,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'oboext'"
+          "default": "'xoboe'"
         },
         "footer_text": {
           "name": "footer_text",

@@ -1,4 +1,4 @@
-// `[tag]` macros expanded at render time — port of oboext lib/shortcodes.ts.
+// `[tag]` macros expanded at render time — port of Oboext lib/shortcodes.ts.
 import { applyFilters, HOOKS } from "./hooks.js";
 import { createLogger } from "./logger.js";
 const log = createLogger("shortcodes");
@@ -63,6 +63,36 @@ function esc(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+// esc() neutralizes HTML metacharacters but NOT a dangerous URL scheme, and
+// shortcode output is not re-sanitized after expansion - so [button
+// href="javascript:..."] or [embed url="data:text/html,..."] would be a stored
+// XSS. Allow only http(s)/mailto/tel and same-origin relative URLs; anything
+// else (javascript:, data:, vbscript:, protocol-relative //host) degrades to a
+// safe fallback. Callers still esc() the result for the attribute context.
+function safeUrl(u: string | undefined, fallback = "#"): string {
+  const t = String(u ?? "").trim();
+  if (!t) return fallback;
+  // Protocol-relative (//host) and backslash forms are external - reject.
+  if (t.startsWith("//") || t.startsWith("/\\")) return fallback;
+  const scheme = /^([a-z][a-z0-9+.\-]*):/i.exec(t);
+  if (scheme) return /^(https?|mailto|tel)$/i.test(scheme[1]) ? t : fallback;
+  return t; // relative path / anchor / query - same-origin, safe
+}
+
+// Guard a user attr used as a CSS VALUE inside a shortcode's inline style.
+// esc() stops attribute breakout but not CSS: a `;` would append declarations.
+// Mirrors sanitize.ts's value rule (reject metacharacters + dangerous
+// functions), while still allowing the legitimate shapes these attrs take:
+// named/hex colors, rgb()/var()/calc() functions, and percentages.
+function cssValue(v: string | undefined, fallback: string): string {
+  const t = String(v ?? "").trim();
+  if (!t || t.length > 120) return fallback;
+  if (/url\(|expression|javascript|vbscript|behavior|@import|\\|<|>|&|\{|\}|;|"|'/i.test(t)) {
+    return fallback;
+  }
+  return t;
 }
 
 /** Parse `type="warn" title=Hello flag` into an attribute map. */
@@ -181,7 +211,7 @@ function registerBuiltins() {
         ? "background:var(--accent);color:var(--accent-text);border:1px solid transparent"
         : "background:transparent;color:var(--accent);border:1px solid var(--accent)";
       const target = a.target === "_blank" ? ' target="_blank" rel="noopener"' : "";
-      return `<a class="oboe-btn" href="${esc(a.href || "#")}"${target} style="display:inline-flex;align-items:center;gap:.4rem;padding:.5rem 1.1rem;border-radius:var(--radius);font-size:.9rem;font-weight:500;text-decoration:none;${style}">${inner || esc(a.label || "查看")}</a>`;
+      return `<a class="oboe-btn" href="${esc(safeUrl(a.href))}"${target} style="display:inline-flex;align-items:center;gap:.4rem;padding:.5rem 1.1rem;border-radius:var(--radius);font-size:.9rem;font-weight:500;text-decoration:none;${style}">${inner || esc(a.label || "查看")}</a>`;
     },
   });
 
@@ -216,8 +246,8 @@ function registerBuiltins() {
     example: '[badge color="var(--success)"]NEW[/badge]',
     render: (a, inner) =>
       `<span class="oboe-badge" style="display:inline-block;padding:.1rem .45rem;border-radius:5px;font-size:.75em;font-weight:600;background:${esc(
-        a.color || "var(--accent-soft)",
-      )};color:${esc(a.text || "var(--accent)")}">${inner}</span>`,
+        cssValue(a.color, "var(--accent-soft)"),
+      )};color:${esc(cssValue(a.text, "var(--accent)"))}">${inner}</span>`,
   });
 
   registerShortcode({
@@ -254,11 +284,11 @@ function registerBuiltins() {
       const yt = url.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([\w-]+)/i);
       if (bili) src = `https://player.bilibili.com/player.html?bvid=${bili[1]}&high_quality=1`;
       else if (yt) src = `https://www.youtube.com/embed/${yt[1]}`;
-      const ratio = a.ratio || "56.25%";
+      const ratio = cssValue(a.ratio, "56.25%");
       return `<div class="oboe-embed" style="position:relative;padding-bottom:${esc(
         ratio,
       )};height:0;overflow:hidden;border-radius:var(--radius);margin:1.5rem 0"><iframe src="${esc(
-        src,
+        safeUrl(src),
       )}" style="position:absolute;inset:0;width:100%;height:100%;border:0" allowfullscreen loading="lazy"></iframe></div>`;
     },
   });
@@ -268,7 +298,7 @@ function registerBuiltins() {
     description: "本地/直链视频播放器",
     example: '[video src="/uploads/media/demo.mp4" poster="/uploads/media/p.jpg"]',
     render: (a) =>
-      `<video class="oboe-video" src="${esc(a.src || "")}"${
+      `<video class="oboe-video" src="${esc(safeUrl(a.src, ""))}"${
         a.poster ? ` poster="${esc(a.poster)}"` : ""
       } controls${a.loop ? " loop" : ""}${a.muted ? " muted" : ""} style="width:100%;border-radius:var(--radius);margin:1.5rem 0"></video>`,
   });
@@ -278,7 +308,7 @@ function registerBuiltins() {
     description: "音频播放器",
     example: '[audio src="/uploads/media/song.mp3"]',
     render: (a) =>
-      `<audio class="oboe-audio" src="${esc(a.src || "")}" controls style="width:100%;margin:1.25rem 0"></audio>`,
+      `<audio class="oboe-audio" src="${esc(safeUrl(a.src, ""))}" controls style="width:100%;margin:1.25rem 0"></audio>`,
   });
 
   registerShortcode({
@@ -286,9 +316,9 @@ function registerBuiltins() {
     description: "外链卡片",
     example: '[linkcard href="https://example.com" title="标题" desc="描述"]',
     render: (a) =>
-      `<a class="oboe-linkcard" href="${esc(a.href || "#")}" target="_blank" rel="noopener" style="display:flex;gap:.9rem;align-items:center;padding:.9rem 1rem;border:1px solid var(--border);border-radius:var(--radius);text-decoration:none;margin:1.25rem 0;background:var(--surface)">${
+      `<a class="oboe-linkcard" href="${esc(safeUrl(a.href))}" target="_blank" rel="noopener" style="display:flex;gap:.9rem;align-items:center;padding:.9rem 1rem;border:1px solid var(--border);border-radius:var(--radius);text-decoration:none;margin:1.25rem 0;background:var(--surface)">${
         a.icon
-          ? `<img src="${esc(a.icon)}" alt="" style="width:36px;height:36px;border-radius:8px;object-fit:cover"/>`
+          ? `<img src="${esc(safeUrl(a.icon, ""))}" alt="" style="width:36px;height:36px;border-radius:8px;object-fit:cover"/>`
           : ""
       }<span style="min-width:0"><strong style="display:block;color:var(--text)">${esc(
         a.title || a.href || "",

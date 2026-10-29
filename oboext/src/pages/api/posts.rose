@@ -9,6 +9,7 @@
     parseBulkAction,
   } from "@server/admin";
   import { listPosts } from "@server/queries";
+  import { memoQuery } from "@server/cache";
 
   export async function GET(request) {
     return apiGate(async () => {
@@ -16,7 +17,7 @@
       const q = new URL(request.url).searchParams;
       // Guests are pinned to published, exactly like the original GET.
       const status = user ? q.get("status") || undefined : "published";
-      return listPosts({
+      const opts = {
         status,
         authorId: q.get("authorId") ? Number(q.get("authorId")) : undefined,
         categoryId: q.get("categoryId") ? Number(q.get("categoryId")) : undefined,
@@ -24,7 +25,30 @@
         search: q.get("search")?.trim() || undefined,
         limit: q.get("limit") ? Number(q.get("limit")) : 20,
         offset: q.get("offset") ? Number(q.get("offset")) : 0,
-      });
+      };
+      if (user) return listPosts(opts);
+      // R156: this route is the OTHER per-keystroke search surface (the bluemix
+      // React popover) and, for guests, the answer is the same for everybody.
+      // Memoized 20s per full option signature: typing "ja"/"jav"/"java" is one
+      // ILIKE scan per prefix per minute instead of one per keystroke per
+      // visitor. The key lowercases the search (ILIKE is case-insensitive) and
+      // the `sq:` prefix is dropped by invalidateContentCaches at every content
+      // write, so a publish appears on the next keystroke. Authenticated
+      // requests (admin tables) bypass the memo entirely - they may read
+      // drafts and must never be served another caller's rows.
+      const sig = [
+        status ?? "",
+        opts.authorId ?? "",
+        opts.categoryId ?? "",
+        opts.tagId ?? "",
+        (opts.search ?? "").toLowerCase(),
+        opts.limit,
+        opts.offset,
+      ].join("|");
+      const payload = await memoQuery(`sq:posts:${sig}`, 20_000, () => listPosts(opts));
+      // Fresh containers: the memo entry is shared, callers get their own
+      // top-level array (item objects are read-only here - the gate serializes).
+      return { ...payload, items: [...payload.items] };
     });
   }
 
@@ -48,6 +72,7 @@
         ? body.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0)
         : [];
       if (!ids.length) return jsonFail("未选择任何项目", 422);
+      if (ids.length > 500) return jsonFail("批量操作一次最多 500 项", 422);
       return bulkPosts(getContext().user, ids, action);
     });
   }

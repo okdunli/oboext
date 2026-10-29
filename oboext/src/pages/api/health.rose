@@ -1,16 +1,36 @@
 <script>
 
+  // GET /api/health — liveness + dependency self-check.
+  //
+  // Design decision: the HTTP status is ALWAYS 200. "status" reports whether
+  // the process is alive; "db" reports whether the database dependency is
+  // reachable. A degraded-but-alive service (e.g. a cold/suspended Neon
+  // compute) must not be removed from the load balancer — it self-heals once
+  // the dependency returns, and a 503 here would take it out of rotation for
+  // a transient failure. Use the JSON body, not the status code, for alerting.
+  //
+  // No caching: a health probe must reflect the live state on every hit.
+  // No sensitive data: no connection strings, paths, or internal counters.
+
   import { ping } from "@server/db";
 
+  // Build-time constant, kept in sync with the root package.json by
+  // scripts/health-endpoint.test.mts (a JSON import is not reliable under the
+  // esbuild rose bundler).
+  const VERSION = "0.2.9";
+
   export async function GET() {
+    let db = "ok";
     try {
       await ping();
-      return { ok: true, time: new Date().toISOString() };
     } catch {
-      return new Response(JSON.stringify({ ok: false, time: new Date().toISOString() }), {
-        status: 503,
-        headers: { "content-type": "application/json; charset=utf-8" },
-      });
+      db = "fail";
     }
+    return {
+      status: "ok",
+      db,
+      uptimeSeconds: Math.floor(process.uptime()),
+      version: VERSION,
+    };
   }
 </script>

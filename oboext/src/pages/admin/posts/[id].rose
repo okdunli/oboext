@@ -1,7 +1,12 @@
 <script>
   // Post editor (new + existing).
   let id = $state("");
-  let d = $data(() => __rvLoad("admin.post", { id: id() }));
+  let d = $data(async () => {
+    const r = await __rvLoad("admin.post", { id: id() });
+    // R228: a dead bookmark answers the admin segment's 404, not a 500.
+    if (r.notFound) notFound();
+    return r;
+  });
 
   function p() {
     return d().post;
@@ -48,6 +53,22 @@
     return d().formats || [];
   }
 
+  // 近 30 天来源摘要（R256，loader 返回 {kind,views,uniques} 按 views 降序）。
+  // 空数组 = 这篇近 30 天没有可统计的落地访问，整块不渲染而不是画零。
+  function postSources() {
+    return (d().postSources || []).map(function (r) {
+      return {
+        label: r.kind === "search" ? "搜索引擎"
+          : r.kind === "social" ? "社交媒体"
+          : r.kind === "internal" ? "站内跳转"
+          : r.kind === "direct" ? "直接访问"
+          : "其它来源",
+        views: Number(r.views) || 0,
+        uniques: Number(r.uniques) || 0,
+      };
+    });
+  }
+
   function curFormat() {
     const v = d().post ? d().post.format : "";
     const list = formatDefs();
@@ -74,8 +95,53 @@
     const x = d().post;
     return x ? "/api/posts/" + x.id : "";
   }
+  // Newsletter manual fanout: only for a post that is (already) published.
+  function canFanout() {
+    return isLive() && !isNew();
+  }
+  function fanoutPostId() {
+    const x = d().post;
+    return x ? String(x.id) : "";
+  }
   function postDataAttr() {
     return JSON.stringify(d());
+  }
+  if (typeof document !== "undefined") {
+    // Newsletter manual fanout button: confirm -> POST /api/newsletter/send ->
+    // toast the claimed count. The endpoint returns immediately (SMTP is
+    // fire-and-forget server-side); queued = newly claimed (post, subscriber)
+    // pairs, 0 = already sent or no confirmed subscriber.
+    const nlBtn = document.querySelector("[data-adm-newsletter-send]");
+    if (nlBtn) {
+      nlBtn.addEventListener("click", async () => {
+        const postId = nlBtn.getAttribute("data-post-id") || "";
+        if (!postId) return;
+        if (!confirm("向全部已确认订阅者群发这篇文章？已发过的订阅者不会重发。")) return;
+        nlBtn.disabled = true;
+        try {
+          const r = await fetch("/api/newsletter/send", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ postId: Number(postId) }),
+          });
+          const data = r.ok ? await r.json() : null;
+          if (!r.ok || !data || data.ok !== true) {
+            throw new Error((data && data.error) || "群发请求失败（" + r.status + "）");
+          }
+          const n = Number(data.queued) || 0;
+          if (typeof window.admToast === "function") {
+            window.admToast(n > 0 ? "已入队 " + n + " 位订阅者，邮件后台发送中" : "没有新收件人：已发过或暂无已确认订阅者", n > 0 ? "ok" : "err");
+          }
+        } catch (e) {
+          if (typeof window.admToast === "function") {
+            window.admToast(e instanceof Error ? e.message : "群发请求失败", "err");
+          }
+        } finally {
+          nlBtn.disabled = false;
+        }
+      });
+    }
   }
   if (typeof document !== "undefined") {
     const revBox = document.querySelector('[data-adm-revisions="post"]');
@@ -157,6 +223,114 @@
       load();
     }
   }
+  if (typeof document !== "undefined") {
+    // Server auto-draft channel (api/autodraft): 10s debounced POST while
+    // writing + a restore hint when the stored draft is newer than what the
+    // editor loaded. Failures are silent — never interrupt writing.
+    const adm = location.pathname.match(/^\/admin\/(posts|pages)\/(new|\d+)/);
+    if (adm) {
+      const adKey = adm[1] + ":" + adm[2];
+      // djb2 over key-sorted JSON: same content hashes equal regardless of
+      // object key order (JSON.stringify compare was key-order sensitive).
+      function adHash(v) {
+        const cj = (x) => Array.isArray(x) ? "[" + x.map(cj).join(",") + "]"
+          : (x && typeof x === "object") ? "{" + Object.keys(x).sort().map((k) => JSON.stringify(k) + ":" + cj(x[k])).join(",") + "}"
+          : JSON.stringify(x) ?? "null";
+        let h = 5381;
+        const s = cj(v);
+        for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+        return (h >>> 0).toString(16);
+      }
+      let adEd = null;
+      let adTimer = null;
+      function adCapture() {
+        if (!adEd || typeof adEd.payload !== "function") return;
+        try {
+          const titleEl = adEd.root.querySelector("[name=title]");
+          const title = titleEl ? String(titleEl.value || "") : "";
+          const blocks = Array.isArray(adEd.blocks) ? adEd.blocks : [];
+          if (!title.trim() && !blocks.length) return;
+          fetch("/api/autodraft", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ key: adKey, title, content: JSON.stringify(blocks) }),
+          }).catch(() => {});
+        } catch {}
+      }
+      function adBoot(tries) {
+        adEd = window.__admEditor;
+        if (!adEd || typeof adEd.payload !== "function") {
+          if (tries < 100) setTimeout(() => adBoot(tries + 1), 50);
+          return;
+        }
+        const arm = () => {
+          clearTimeout(adTimer);
+          adTimer = setTimeout(adCapture, 10000);
+        };
+        adEd.root.addEventListener("input", arm);
+        adEd.root.addEventListener("change", arm);
+        fetch("/api/autodraft?key=" + encodeURIComponent(adKey), { credentials: "same-origin" })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            const draft = data && data.draft;
+            if (!draft || typeof draft.content !== "string" || !draft.content) return;
+            let blocks = null;
+            try { blocks = JSON.parse(draft.content); } catch { return; }
+            if (!Array.isArray(blocks)) return;
+            const title = String(draft.title || "").trim();
+            if (!blocks.length && !title) return;
+            const cur = Array.isArray(adEd.blocks) ? adEd.blocks : [];
+            if (adHash(blocks) === adHash(cur)) return;
+            if (adEd.entity && adEd.entity.updatedAt && String(draft.updatedAt || "") <= String(adEd.entity.updatedAt)) return;
+            const form = document.querySelector("[data-adm-editor]");
+            if (!form || form.querySelector(".adm-autodraft-banner")) return;
+            const bar = document.createElement("div");
+            bar.className = "adm-autodraft-banner";
+            bar.setAttribute("role", "status");
+            bar.style.cssText = "display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;margin:0 0 14px;border:1px solid #ecd9a8;border-radius:10px;background:#fff9e8;color:#6b5410;font-size:13px";
+            const msg = document.createElement("span");
+            const dt = draft.updatedAt ? new Date(draft.updatedAt) : null;
+            const pad = (n) => String(n).padStart(2, "0");
+            const when = dt && !isNaN(dt.getTime())
+              ? pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes())
+              : "";
+            msg.textContent = "检测到服务器草稿" + (when ? "（" + when + " 保存）" : "") + "，比当前内容新。";
+            const sp = document.createElement("span");
+            sp.style.cssText = "flex:1";
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "adm-btn adm-btn-sm";
+            btn.textContent = "恢复上次草稿";
+            const drop = document.createElement("button");
+            drop.type = "button";
+            drop.className = "adm-btn adm-btn-ghost adm-btn-sm";
+            drop.textContent = "忽略";
+            const dismiss = () => { if (bar.parentNode) bar.parentNode.removeChild(bar); };
+            btn.addEventListener("click", () => {
+              try {
+                const titleEl = adEd.root.querySelector("[name=title]");
+                if (titleEl && draft.title != null) titleEl.value = String(draft.title);
+                adEd.blocks = blocks;
+                if (typeof adEd.render === "function") adEd.render();
+                if (typeof window.admToast === "function") window.admToast("已恢复服务器草稿", "ok");
+              } catch (e) {
+                if (typeof window.admToast === "function") window.admToast("恢复失败", "err");
+              }
+              dismiss();
+            });
+            drop.addEventListener("click", dismiss);
+            bar.appendChild(msg);
+            bar.appendChild(sp);
+            bar.appendChild(btn);
+            bar.appendChild(drop);
+            form.insertBefore(bar, form.firstChild);
+          })
+          .catch(() => {});
+      }
+      adBoot(0);
+    }
+  }
 </script>
 
 <head>
@@ -178,6 +352,9 @@
       data-url={deleteUrl()}
       data-confirm="确认删除这篇文章？此操作不可撤销。"
     >删除</button>
+    {/if}
+    {#if canFanout()}
+    <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-newsletter-send data-post-id={fanoutPostId()}>Newsletter 群发</button>
     {/if}
     <button type="submit" class="adm-btn adm-btn-ghost adm-btn-sm" data-save-as="draft">存为草稿</button>
     <button type="submit" class="adm-btn adm-btn-sm" data-save-as="">保存</button>
@@ -348,6 +525,36 @@
       </div>
 
       <div class="adm-card">
+        <div class="adm-card-hd"><strong>语言与翻译</strong></div>
+        <div class="adm-card-bd">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <select class="adm-input" name="locale" style="width:auto">
+              <option value="zh-CN" selected={val('locale') !== 'en'}>中文（原文）</option>
+              <option value="en" selected={val('locale') === 'en'}>English（译文）</option>
+            </select>
+            <input
+              class="adm-input"
+              name="translationOf"
+              type="number"
+              min="1"
+              data-num
+              style="width:140px"
+              placeholder="原文文章 ID"
+              value={val('translationOf') || ""}
+            >
+            {#if d().translationOriginal}
+            <a href={d().translationOriginal.editHref} style="font-size:12px;color:var(--muted)">
+              ↳ {d().translationOriginal.title}
+            </a>
+            {/if}
+          </div>
+          <div class="adm-hint" style="margin-top:8px">
+            英文译文可填写它翻译的中文文章 ID；中文原文留空。两篇将互为翻译对（发布语义在后续版本接入 SEO 输出）。
+          </div>
+        </div>
+      </div>
+
+      <div class="adm-card">
         <div class="adm-card-hd"><strong>SEO</strong></div>
         <div class="adm-card-bd">
           <input class="adm-input" name="seoTitle" placeholder="SEO 标题" value={val('seoTitle')} style="margin-bottom:10px">
@@ -379,6 +586,17 @@
   <div class="adm-card-hd"><strong>历史版本</strong><span class="adm-hint" style="margin-left:auto">每次保存自动留存，可回滚；回滚前会先保存当前版本</span></div>
   <div class="adm-card-bd">
     <div class="adm-rev-list" data-adm-rev-list></div>
+  </div>
+</div>
+{/if}
+
+{#if !isNew() && postSources().length > 0}
+<div class="adm-card" style="margin-top:16px">
+  <div class="adm-card-hd"><strong>近 30 天来源</strong><span class="adm-hint" style="margin-left:auto">访次 · 按首次落地页计</span></div>
+  <div class="adm-card-bd">
+    {#each postSources() as r}
+    <div class="adm-hint" style="margin-bottom:4px">{r.label}：{r.views} 访次 / {r.uniques} 访客</div>
+    {/each}
   </div>
 </div>
 {/if}

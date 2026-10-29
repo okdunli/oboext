@@ -1,14 +1,4 @@
-/**
- * Menu service — ported from lib/services/menus.ts.
- *
- * Menus live by logical location ("header" | "footer" | "sidebar", declared
- * by the active theme). Items are either custom links or references
- * (post/page/category/tag) stored by stable slug; reference URLs are resolved
- * against the current permalink config on every READ (no rotting snapshots —
- * changing the permalink prefix follows automatically). The admin manager
- * edits one menu's whole item tree in a single PUT (two-phase transaction
- * keeps parent ids stable). Every read hits the live database.
- */
+// Menu service — ported from lib/services/menus.ts.
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./db.js";
 import {
@@ -22,6 +12,7 @@ import {
 } from "./schema.js";
 import type { SessionUser } from "./auth.js";
 import { invalidatePrefix, memoQuery, SIDEBAR_TTL } from "./cache.js";
+import { zhCatalog, type Translate } from "./i18n.js";
 import { requireUser, requireCap, ServiceError } from "./admin.js";
 import {
   getPermalinkConfig,
@@ -64,18 +55,13 @@ export type MenuItemInput = {
 
 type LegacyKind = "category" | "tag" | "page";
 
-/** The unprefixed head a base may have been written as before ("blog/category" →
- *  "category"). Empty when the configured base is already a single segment, in
- *  which case a stored "/category/<slug>" is correct as-is. */
+// The unprefixed head a base may have been written as before ("blog/category" → "category").
 function legacyHead(base: string): string {
   const segs = base.split("/").filter(Boolean);
   return segs.length > 1 ? segs[segs.length - 1] : "";
 }
 
-/** Menu rows carried over from an older install keep a URL snapshot taken before
- *  the base changed, so "/category/<slug>" no longer sits under blog/category and
- *  dead-ends on 404. Recognise the unprefixed form of a taxonomy/page route so it
- *  can be re-based onto the live config; everything else stays untouched. */
+// Menu rows carried over from an older install keep a URL snapshot taken before the base changed.
 function legacyLinkTarget(
   url: string,
   cfg: PermalinkConfig,
@@ -239,9 +225,12 @@ export async function getMenuByLocation(location: string): Promise<MenuWithItems
 export async function listMenus(): Promise<MenuWithItems[]> {
   await ensureDefaultMenus();
   const all = await db.select().from(menus).orderBy(asc(menus.id));
+  // One flatItems round trip per menu used to run serially; they are
+  // independent, so fetch them together.
   const flats = await Promise.all(all.map((menu) => flatItems(menu.id)));
   const result: MenuWithItems[] = [];
   for (let i = 0; i < all.length; i++) {
+    // admin sees draft/unpublished references resolved too
     result.push({
       id: all[i].id,
       location: all[i].location,
@@ -294,7 +283,8 @@ function cleanItem(it: MenuItemInput, i: number) {
       typeof it.parentId === "number" && Number.isInteger(it.parentId) ? it.parentId : null,
     order: typeof it.order === "number" ? it.order : i,
     type,
-    label,
+    // A default label typed/saved verbatim keeps its translation marker.
+    label: menuLabelStore(label),
     url: String(it.url ?? "").slice(0, 500),
     referenceSlug: it.referenceSlug ? String(it.referenceSlug).slice(0, 200) : null,
     target: String(it.target ?? "_self").slice(0, 20) || "_self",
@@ -321,6 +311,10 @@ export async function updateMenu(
   const items = input.items;
   if (items) {
     const cleaned = items.map(cleanItem);
+    // Whole-list replace. delete+insert gives every row a new id, so writing
+    // old parentIds directly would flatten the tree; the two-phase pass maps
+    // client ids (positive = persisted, negative = new this save) to real ids
+    // and only then backfills parentId. Self/dangling parents become null.
     await db.transaction(async (tx) => {
       await tx.delete(menuItems).where(eq(menuItems.menuId, id));
       const idMap = new Map<number, number>();
@@ -385,10 +379,48 @@ export async function deleteMenu(
 }
 
 /** Idempotent default menus (header/footer), ported from bootstrap.ts. */
+// Menu labels are free text (admin intent) and are never rewritten — EXCEPT
+// the seeded defaults, which the program itself wrote. Those are stored as an
+// "@key" marker (fresh installs) or as the zh-CN value of a known key (older
+// installs). A custom label such as "我的首页" never matches and stays literal.
+export const MENU_DEFAULT_KEYS = ["crumb.home", "sidebar.all_posts", "sidebar.all_pages", "sky.about"];
+const MENU_DEFAULT_BY_ZH = new Map(MENU_DEFAULT_KEYS.map((k) => [zhCatalog[k], k]));
+
+/** The stored marker/legacy-zh label as readable text, for the admin editor. */
+export function menuLabelDisplay(label: string): string {
+  const key = label.startsWith("@") ? label.slice(1) : MENU_DEFAULT_BY_ZH.get(label) ?? "";
+  return key && zhCatalog[key] !== undefined ? zhCatalog[key] : label;
+}
+
+/** Re-encode a default label back to its "@key" marker on save, so it keeps translating. */
+export function menuLabelStore(label: string): string {
+  const key = MENU_DEFAULT_BY_ZH.get(label);
+  return key ? `@${key}` : label;
+}
+
+/** Translate seeded-default labels for the request locale (nested menus too). */
+export function localizeMenu<T extends { label?: string; children?: unknown }>(items: T[], t: Translate): T[] {
+  return items.map((it) => {
+    const raw = String(it.label ?? "");
+    const key = raw.startsWith("@") ? raw.slice(1) : MENU_DEFAULT_BY_ZH.get(raw);
+    const label = key && zhCatalog[key] !== undefined ? t(key) : it.label;
+    return {
+      ...it,
+      ...(label !== it.label ? { label } : {}),
+      ...(Array.isArray(it.children) && it.children.length
+        ? { children: localizeMenu(it.children as { label?: string; children?: unknown }[], t) }
+        : {}),
+    };
+  }) as T[];
+}
+
 async function seedDefaultMenus(): Promise<void> {
   const defaults = [
-    { location: "header", name: "顶部导航", item: { label: "首页", url: "/", order: 1, icon: "house" } },
-    { location: "footer", name: "底部导航", item: { label: "首页", url: "/", order: 1, icon: null } },
+    // "@crumb.home" is a translation marker, not a literal: chrome() resolves
+    // it per request locale (loaders.ts localizeMenu), so a default menu says
+    // "首页" on / and "Home" on /en. Admin-typed labels stay literal.
+    { location: "header", name: "顶部导航", item: { label: "@crumb.home", url: "/", order: 1, icon: "house" } },
+    { location: "footer", name: "底部导航", item: { label: "@crumb.home", url: "/", order: 1, icon: null } },
   ];
   for (const m of defaults) {
     const [row] = await db
@@ -408,6 +440,9 @@ async function seedDefaultMenus(): Promise<void> {
   }
 }
 
+// Process-level memo, mirroring ensureBootstrap in bootstrap.ts: concurrent
+// first callers share one promise; a failure clears it so the next read
+// retries. onConflictDoNothing makes the SQL itself idempotent.
 let seeded = false;
 let seedPromise: Promise<void> | null = null;
 export function ensureDefaultMenus(): Promise<void> {

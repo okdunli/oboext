@@ -4,12 +4,23 @@
   // The single public content entry point (original parity: app/(site)/[[...slug]]/page.tsx).
 
   // // An unresolvable path throws notFound(): the framework answers with the app's own 404 route and a real 404 status (the nearest segment's //).
+  // R193: before that 404, one more question — a redirect rule answers only
+  // where nothing resolved, which is what keeps `/blog/old` from ever
+  // shadowing a post that later re-claims the `old` slug. `redirect()` is the
+  // framework's own control-flow signal (runtime/index.ts:1991, whose doc
+  // example is literally "a renamed slug"), so the 30x carries a real status
+  // and a real Location instead of an HTML page a crawler may not honour.
   let slug = $state([]);
   let view = $data(async () => {
     const v = await __rvLoad("resolve", {
       segments: slug(),
-      page: Number(__rvQs().get("page") || 1),
+      page: __rvQs().get("page"),
     });
+    // R196: a renamed/slashed URL is answered by the middleware (which runs
+    // before renderPage and emits the 30x directly) — see _middleware.rose and
+    // Rosezm BUG.md AO. Calling redirect() here crashes the prod edge handler
+    // (edge.ts:269 ignores page.redirect and feeds undefined state to buildShell),
+    // so the catch-all only resolves and 404s; content wins over any rule there.
     if (!v) notFound();
     return v;
   });
@@ -25,4 +36,7 @@
 </head>
 {/if}
 
+{#if view().notice && view().notice.kind}
+<div class="rv-notice" role="status" data-newsletter-notice={view().notice.kind} style="max-width:1200px;margin:0 auto;padding:14px 16px;border:1px solid var(--border-color,var(--border,#e5e7eb));border-radius:12px;">{view().notice.text}</div>
+{/if}
 {@html view().main}

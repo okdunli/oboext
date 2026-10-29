@@ -1,4 +1,4 @@
-// The public surface a plugin is handed at setup time (ported from oboext lib/plugins/api.ts).
+// The public surface a plugin is handed at setup time (ported from Oboext lib/plugins/api.ts).
 import {
   addAction,
   addFilter,

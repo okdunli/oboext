@@ -1,5 +1,17 @@
 // Static pages service — ported from lib/services/pages.ts + metas.ts.
-import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNull,
+  lte,
+  lt,
+  or,
+  sql,
+} from "drizzle-orm";
 import { db } from "./db.js";
 import { pages as pagesTable, type Block, type Page } from "./schema.js";
 import type { SessionUser } from "./auth.js";
@@ -7,9 +19,12 @@ import { can, requireCap, requireUser, ServiceError, slugify } from "./admin.js"
 import { blocksToPlainText } from "./admin.js";
 import { getPageMetas, setPageMetas } from "./metas.js";
 import { getPermalinkConfig, pageUrlFor } from "./links.js";
+import { captureRename } from "./redirects.js";
 import { invalidateContentCaches, memoQuery, SIDEBAR_TTL } from "./cache.js";
 import { snapshotRevision } from "./revisions.js";
 import { decodeCursor, encodeCursor } from "./cursor.js";
+import { normalizeWindow } from "./queries.js";
+import { recordAdminAction } from "./security-events.js";
 
 export type PageView = Page & {
   url: string;
@@ -28,6 +43,8 @@ export type PageInput = {
   seoKeywords?: string | null;
   commentStatus?: "open" | "closed";
   parentId?: number | null;
+  /** Menu weight: lower sorts first in public page listings. */
+  order?: number;
   publishedAt?: string | null;
   metas?: { key: string; value: string }[];
 };
@@ -62,6 +79,7 @@ type ValidatedPage = {
   seoKeywords?: string | null;
   commentStatus?: "open" | "closed";
   parentId?: number | null;
+  order?: number;
   metas?: { key: string; value: string }[];
 };
 
@@ -133,6 +151,13 @@ function validate(input: Partial<PageInput>): ValidatedPage {
       out.parentId = n;
     }
   }
+  if (input.order !== undefined && input.order !== null) {
+    const n = Number(input.order);
+    // WordPress menu_order is a non-negative integer; 0 is the default.
+    if (!Number.isInteger(n) || n < 0 || n > 1_000_000)
+      throw new ServiceError("排序值必须是 0 到 1000000 的整数", 422);
+    out.order = n;
+  }
   if (input.metas !== undefined) {
     if (!Array.isArray(input.metas)) throw new ServiceError("自定义字段格式不正确", 422);
     out.metas = input.metas
@@ -168,12 +193,18 @@ export async function hydrate(row: Page): Promise<PageView> {
  *  the catch-all router resolves the slug on every render, so under the 1s
  *  public render cache an unmemoized read is a remote round trip every second.
  *  create/update/deletePage drop it, so an edit is visible at once. */
+// Scheduled publishing (R240 symmetry): pages run the same gate as posts —
+// status 'published' + a future publishedAt is still "scheduled", hidden from
+// every guest read. SQL twin of queries.publishedVisible (that one is bound to
+// the posts table, so pages get their own; publishedAt is nullable on both).
+const publishedPageVisible = or(isNull(pagesTable.publishedAt), lte(pagesTable.publishedAt, sql`now()`));
+
 export async function getPublishedPageRow(slug: string): Promise<Page | null> {
   return memoQuery<Page | null>(`pg:${slug}`, SIDEBAR_TTL, async () => {
     const [row] = await db
       .select()
       .from(pagesTable)
-      .where(and(eq(pagesTable.slug, slug), eq(pagesTable.status, "published")))
+      .where(and(eq(pagesTable.slug, slug), eq(pagesTable.status, "published"), publishedPageVisible))
       .limit(1);
     return row ?? null;
   });
@@ -188,18 +219,23 @@ export async function getPublishedPage(slug: string): Promise<PageView | null> {
 }
 
 /** Public GET /api/pages parity: guests see published pages only. */
-export async function listPublishedPages(f: { limit?: number; offset?: number } = {}): Promise<{
+export async function listPublishedPages(f: { limit?: number; offset?: number; windowCap?: number } = {}): Promise<{
   items: (Page & { url: string })[];
   total: number;
 }> {
-  const limit = Math.min(f.limit ?? 20, 100);
-  const offset = f.offset ?? 0;
-  const where = eq(pagesTable.status, "published");
+  // R158: /api/pages is PUBLIC and passes Number(q.get(...)) straight in -
+  // clamp through the shared helper (NaN limit used to reach .limit(NaN)).
+  // R247: windowCap raises the ceiling for the sitemap/page directory only.
+  const { limit, offset } = normalizeWindow(f, 20, f.windowCap);
+  const where = and(eq(pagesTable.status, "published"), publishedPageVisible);
   const rows = await db
     .select()
     .from(pagesTable)
     .where(where)
-    .orderBy(desc(pagesTable.updatedAt))
+    // Menu weight first (WordPress menu_order), then the previous recency
+    // order. Every page defaults to 0, so an install that never touches the
+    // field keeps today's ordering exactly.
+    .orderBy(asc(pagesTable.order), desc(pagesTable.updatedAt))
     .limit(limit)
     .offset(offset);
   const [totalRows, cfg] = await Promise.all([
@@ -217,7 +253,7 @@ export async function getPublishedPageById(id: number): Promise<PageView | null>
   const [row] = await db
     .select()
     .from(pagesTable)
-    .where(and(eq(pagesTable.id, id), eq(pagesTable.status, "published")))
+    .where(and(eq(pagesTable.id, id), eq(pagesTable.status, "published"), publishedPageVisible))
     .limit(1);
   return row ? hydrate(row) : null;
 }
@@ -227,16 +263,20 @@ export async function getPublishedPageById(id: number): Promise<PageView | null>
 /** Admin page list — all statuses, newest-updated first, like the original. */
 export async function adminListPages(
   user: SessionUser | null,
-  f: { status?: string; limit?: number; offset?: number; after?: string } = {},
+  f: { status?: string; limit?: number; offset?: number; after?: string; sort?: string } = {},
 ): Promise<{ items: (Page & { url: string })[]; total: number; nextCursor?: string }> {
   requireCap(user, "content:read");
-  const limit = Math.min(f.limit ?? 50, 100);
-  const offset = f.offset ?? 0;
+  // R158: same shared clamp (admin route, but a bad ?limit must 200 not 500).
+  const { limit, offset } = normalizeWindow(f, 50);
+  // R177: the menu-order view edits the tree by hand, so it reads in the same
+  // order the public site serves and pages by offset instead of a timestamp
+  // cursor (an edited weight would otherwise skip or repeat rows mid-crawl).
+  const byOrder = f.sort === "order";
   const conditions = [];
   if (f.status) conditions.push(eq(pagesTable.status, f.status as any));
   // Keyset on (updated_at, id), same shape as adminListPosts: the timestamp
   // rides the cursor as the database's own text so microseconds survive.
-  const cur = decodeCursor(f.after);
+  const cur = byOrder ? null : decodeCursor(f.after);
   const keyset = cur && cur.t != null;
   if (keyset && cur) {
     const boundary = sql`${cur.t}::timestamptz`;
@@ -250,14 +290,25 @@ export async function adminListPages(
   const where = conditions.length ? and(...conditions) : undefined;
   // Rows, total count and permalink config are mutually independent - one
   // wave instead of rows -> (count + config).
+  // R202: same rule as adminListPosts - the pages list renders title/slug/
+  // status/order/date only, so the two whole-body columns stay out of the row
+  // shape; the editor reads the real body from adminGetPage (single row).
   const rowsQ = db
     .select({
-      page: pagesTable,
+      page: {
+        ...getTableColumns(pagesTable),
+        content: sql<string>`''`,
+        bodyPlain: sql<string>`NULL`,
+      } as typeof pagesTable,
       updatedAtText: sql<string>`${pagesTable.updatedAt}::text`,
     })
     .from(pagesTable)
     .where(where)
-    .orderBy(desc(pagesTable.updatedAt), desc(pagesTable.id))
+    .orderBy(
+      ...(byOrder
+        ? [asc(pagesTable.order), asc(pagesTable.id)]
+        : [desc(pagesTable.updatedAt), desc(pagesTable.id)]),
+    )
     .limit(limit);
   const rowsP = keyset ? rowsQ : rowsQ.offset(offset);
   const [rows, totalRows, cfg] = await Promise.all([
@@ -270,7 +321,7 @@ export async function adminListPages(
     items,
     total: Number(totalRows[0]?.n ?? 0),
   };
-  if (rows.length === limit) {
+  if (!byOrder && rows.length === limit) {
     const last = rows[rows.length - 1];
     out.nextCursor = encodeCursor({ t: last.updatedAtText, id: last.page.id });
   }
@@ -323,6 +374,7 @@ export async function createPage(user: SessionUser | null, raw: Partial<PageInpu
       seoKeywords: input.seoKeywords !== undefined ? clean(input.seoKeywords) : null,
       commentStatus: input.commentStatus ?? "open",
       parentId: input.parentId ?? null,
+      order: input.order ?? 0,
       publishedAt: input.publishedAt
         ? new Date(input.publishedAt)
         : status === "published"
@@ -392,10 +444,18 @@ export async function updatePage(user: SessionUser | null, id: number, raw: Part
         input.seoKeywords !== undefined ? clean(input.seoKeywords) : existing.seoKeywords,
       commentStatus: input.commentStatus ?? existing.commentStatus,
       parentId: input.parentId !== undefined ? input.parentId : existing.parentId,
+      order: input.order !== undefined ? input.order : existing.order,
       publishedAt,
       updatedAt: new Date(),
     })
     .where(eq(pagesTable.id, id));
+
+  // R193: same contract as updatePost — a page's URL is its slug, so a rename
+  // has to claim the old path or the links to it start answering 404.
+  if (slug !== existing.slug) {
+    const cfg = await getPermalinkConfig();
+    await captureRename(pageUrlFor(cfg, existing), pageUrlFor(cfg, { ...existing, slug }));
+  }
 
   if (input.metas) await setPageMetas(id, input.metas);
   invalidateContentCaches();
@@ -403,11 +463,12 @@ export async function updatePage(user: SessionUser | null, id: number, raw: Part
 }
 
 export async function deletePage(user: SessionUser | null, id: number): Promise<{ id: number }> {
-  requirePageManager(user);
+  const u = requirePageManager(user);
   const [existing] = await db.select({ id: pagesTable.id }).from(pagesTable).where(eq(pagesTable.id, id));
   if (!existing) throw new ServiceError("页面不存在", 404);
   await db.delete(pagesTable).where(eq(pagesTable.id, id));
   invalidateContentCaches();
+  await recordAdminAction(u, "pages.delete", { id });
   return { id };
 }
 
@@ -421,7 +482,7 @@ export async function bulkPages(
   ids: number[],
   action: "publish" | "draft" | "archive" | "delete",
 ): Promise<{ affected: number }> {
-  requirePageManager(user);
+  const u = requirePageManager(user);
   const cleanIds = ids.filter((n) => Number.isInteger(n) && n > 0);
   if (!cleanIds.length) return { affected: 0 };
   if (action === "delete") {
@@ -438,5 +499,9 @@ export async function bulkPages(
       .where(inArray(pagesTable.id, cleanIds));
   }
   invalidateContentCaches();
+  await recordAdminAction(u, action === "delete" ? "pages.bulk_delete" : "pages.bulk_status", {
+    ids: cleanIds,
+    action,
+  });
   return { affected: cleanIds.length };
 }

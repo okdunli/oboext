@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { getSecret } from "./auth.js";
 import type { AdminSecurity } from "./security.js";
 import { type Translate } from "./i18n.js";
+import { b64url, makeUsedTracker, rnd, timingSafeEqualText } from "./captcha-common.js";
 
 export const CAPTCHA_COOKIE = "oboe_captcha";
 
@@ -18,8 +19,6 @@ const VERSION = "oboe.login-captcha.v1";
 
 const TTL_MS = 10 * 60 * 1000;
 
-const USED_CAP = 5000;
-
 const REMOTE_TIMEOUT_MS = 8000;
 
 const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -35,39 +34,10 @@ function signingKey(): Buffer {
   return keyCache;
 }
 
-const used = new Map<string, number>();
-let lastSweep = 0;
-
-function sweepUsed(now: number) {
-  if (now - lastSweep < 60_000 && used.size < USED_CAP) return;
-  lastSweep = now;
-  for (const [jti, exp] of used) {
-    if (exp <= now) used.delete(jti);
-  }
-  if (used.size >= USED_CAP) {
-    const sorted = [...used.entries()].sort((a, b) => a[1] - b[1]);
-    for (const [jti] of sorted.slice(0, Math.ceil(USED_CAP / 10))) used.delete(jti);
-  }
-}
-
-function b64url(input: Buffer | string): string {
-  return Buffer.from(input).toString("base64url");
-}
+const used = makeUsedTracker();
 
 function sign(bodyB64: string): string {
   return crypto.createHmac("sha256", signingKey()).update(bodyB64).digest("base64url");
-}
-
-function timingSafeEqualText(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ba.length !== bb.length) {
-
-    const dummy = Buffer.alloc(ba.length);
-    crypto.timingSafeEqual(ba, dummy);
-    return false;
-  }
-  return crypto.timingSafeEqual(ba, bb);
 }
 
 function normalizeAnswer(raw: string): string {
@@ -86,16 +56,73 @@ export function generateCaptchaCode(): string {
   return out;
 }
 
-function rnd(min: number, max: number): number {
-  return min + crypto.randomInt(min, max + 1);
-}
+/**
+ * 5x7 bitmap glyphs for the builtin captcha, one string row per pixel row
+ * ("#" = filled). Rendered as <rect> pixels, never as text - see captchaSvg.
+ * Exported only for scripts/captcha-svg-vector.test.mts, which locks full
+ * ALPHABET coverage and the 7x5 shape of every glyph.
+ */
+export const CAPTCHA_FONT: Record<string, string[]> = {
+  A: [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+  B: ["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."],
+  C: [".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."],
+  D: ["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."],
+  E: ["#####", "#....", "#....", "####.", "#....", "#....", "#####"],
+  F: ["#####", "#....", "#....", "####.", "#....", "#....", "#...."],
+  G: [".###.", "#...#", "#....", "#.###", "#...#", "#...#", ".###."],
+  H: ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+  J: ["..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##.."],
+  K: ["#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"],
+  M: ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
+  N: ["#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"],
+  P: ["####.", "#...#", "#...#", "####.", "#....", "#....", "#...."],
+  Q: [".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"],
+  R: ["####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"],
+  S: [".####", "#....", "#....", ".###.", "....#", "....#", "####."],
+  T: ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
+  U: ["#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+  V: ["#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."],
+  W: ["#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"],
+  X: ["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"],
+  Y: ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
+  Z: ["#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"],
+  "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"],
+  "3": ["#####", "...#.", "..#..", "...#.", "....#", "#...#", ".###."],
+  "4": ["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."],
+  "5": ["#####", "#....", "####.", "....#", "....#", "#...#", ".###."],
+  "6": [".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."],
+  "7": ["#####", "....#", "...#.", "..#..", "..#..", "..#..", "..#.."],
+  "8": [".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."],
+  "9": [".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."],
+};
 
+/**
+ * The builtin captcha image, drawn entirely from vector primitives.
+ *
+ * The previous renderer drew each answer character as an SVG <text> node with
+ * a rotate() transform - the rotation only misled human eyes, while a bot
+ * parsed the XML and read the answer straight out of the text node with zero
+ * OCR (the whole point of the image defeated by a DOM query). Glyphs are now
+ * 5x7 pixel matrices rendered as <rect>s inside a rotated <g>: there is no
+ * text node and no character string anywhere in the output, so a solver must
+ * actually recognize pixels (template-match or model) instead of parsing.
+ *
+ * Geometry: 4px pixels make a 20x28 glyph box (120x40 frame, glyphs centred
+ * vertically, pitch (W-44)/(n-1) keeps the last glyph + rotation inside the
+ * frame); rotation happens around the glyph centre so the pixel box cannot
+ * clip. Noise paths/circles stay as before - they never carried the answer.
+ * Consumed only as an <img src> (login-card/register render 120x38 boxes and
+ * refresh on click), so nothing else depends on the SVG's internals.
+ */
 export function captchaSvg(code: string): string {
   const W = 120;
   const H = 40;
+  const PX = 4;
+  const GW = 5 * PX;
+  const GH = 7 * PX;
   const chars = [...code];
   const n = chars.length;
-  const step = (W - 28) / (n - 1);
+  const step = n > 1 ? (W - 44) / (n - 1) : 0;
   const fills = ["#0f172a", "#1e3a8a", "#334155", "#7c2d12", "#164e63"];
 
   const noise: string[] = [];
@@ -116,11 +143,19 @@ export function captchaSvg(code: string): string {
 
   const glyphs = chars
     .map((ch, i) => {
+      const g = CAPTCHA_FONT[ch] ?? CAPTCHA_FONT["8"]!;
       const x = 14 + i * step + rnd(-2, 2);
-      const y = 28 + rnd(-2, 2);
+      const y = (H - GH) / 2 + rnd(-2, 2);
       const rot = rnd(-20, 20);
       const fill = fills[crypto.randomInt(fills.length)];
-      return `<text x="${x}" y="${y}" transform="rotate(${rot} ${x} ${y})" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="24" font-weight="700" fill="${fill}">${ch}</text>`;
+      let px = "";
+      for (let r = 0; r < 7; r++) {
+        const row = g[r]!;
+        for (let c = 0; c < 5; c++) {
+          if (row[c] === "#") px += `<rect x="${c * PX}" y="${r * PX}" width="${PX}" height="${PX}"/>`;
+        }
+      }
+      return `<g transform="translate(${x} ${y}) rotate(${rot} ${GW / 2} ${GH / 2})" fill="${fill}">${px}</g>`;
     })
     .join("");
 
@@ -179,9 +214,14 @@ function verifyBuiltin(
   const payload = parseToken(cookieToken);
   if (!payload || used.has(payload.j)) return t("api.captcha_wrong");
   if (!answer || !answer.trim()) return t("api.captcha_required");
+  // Burn the token on the first non-empty attempt (right or wrong): the code is
+  // single-use, so a wrong guess cannot be retried against the same token. The
+  // login client already refreshes the captcha on every completed request
+  // (login-card.js done()), so this costs no UX. An EMPTY answer returns
+  // "required" without burning, so a user who simply hasn't typed yet can still
+  // fill it in.
+  used.add(payload.j, payload.e);
   if (normalizeAnswer(answer) !== payload.c) return t("api.captcha_wrong");
-  used.set(payload.j, payload.e);
-  sweepUsed(Date.now());
   return null;
 }
 
@@ -266,7 +306,9 @@ export async function verifyLoginCaptcha(
   t: Translate,
 ): Promise<string | null> {
   if (!sec.captchaEnabled) return null;
-  if (!answer || !answer.trim()) return t("api.captcha_required");
+  // body.captcha is untrusted JSON: a number/bool/object would throw on .trim()
+  // and surface as a 500. Coerce non-strings to the "required" path.
+  if (typeof answer !== "string" || !answer.trim()) return t("api.captcha_required");
   return sec.captchaMode === "custom"
     ? verifyRemote(sec, answer, t)
     : verifyBuiltin(answer, cookieToken, t);
@@ -280,7 +322,7 @@ export async function verifyCaptchaFor(
   t: Translate,
 ): Promise<string | null> {
   if (!enabled) return null;
-  if (!answer || !answer.trim()) return t("api.captcha_required");
+  if (typeof answer !== "string" || !answer.trim()) return t("api.captcha_required");
   return sec.captchaMode === "custom"
     ? verifyRemote(sec, answer, t)
     : verifyBuiltin(answer, cookieToken, t);

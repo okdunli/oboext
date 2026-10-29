@@ -1,5 +1,3 @@
-
-
 import { getOption, setOption } from "./options.js";
 import type { SessionUser } from "./auth.js";
 

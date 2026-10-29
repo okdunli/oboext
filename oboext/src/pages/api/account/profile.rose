@@ -1,7 +1,7 @@
 <script>
 
   import { jsonFail, readBody, apiGate } from "@server/admin";
-  import { sessionCookiePair } from "@server/csrf";
+  import { sessionCookiePair, withCookies } from "@server/csrf";
   import { getOwnProfile, changeOwnProfile } from "@server/account";
   import { normalizeContactTarget } from "@server/auth";
   import { verifyCode } from "@server/verify-codes";

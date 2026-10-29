@@ -1,8 +1,5 @@
 <script>
-  // /api/media
-  //   GET    list (any session)  ?limit=&offset=
-  //   POST   multipart upload {file, alt?} (media:upload)
-  //   DELETE ?ids=1,2,3  bulk delete (owner or content:update:any)
+  // /api/media GET list (any session) ?limit=&offset= POST multipart upload {file.
   import { apiGate, jsonFail } from "@server/admin";
   import { listMedia, createMediaFromFile, deleteMediaMany } from "@server/media";
 
@@ -42,7 +39,11 @@
         .map((s) => Number(s.trim()))
         .filter((n) => Number.isInteger(n) && n > 0);
       if (!ids.length) return jsonFail("无效 ids", 400);
-      return deleteMediaMany(getContext().user, ids);
+      if (ids.length > 500) return jsonFail("批量操作一次最多 500 项", 422);
+      // force=1 is the second click of the admin panel's confirm; without it a
+      // selected item that content still references is skipped, not deleted.
+      const force = q.get("force") === "1" || q.get("force") === "true";
+      return deleteMediaMany(getContext().user, ids, { force });
     });
   }
 </script>

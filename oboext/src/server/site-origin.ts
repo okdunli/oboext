@@ -69,3 +69,25 @@ export function resolveOrigin(
 export function resetStickyOrigin(): void {
   stickyOrigin = "";
 }
+
+/**
+ * Host of this site, for classifying a referrer as "internal" (0041).
+ *
+ * Uses the same two signals resolveOrigin does, in the same order: the
+ * configured origin when set, else the remembered request origin. It
+ * deliberately does NOT re-read request headers - a per-request host would make
+ * the classification depend on which header a proxy happened to forward, and
+ * "is this referrer us?" is a property of the site, not of the request.
+ *
+ * "" when nothing is known yet (a cold process before its first request, or a
+ * test): callers treat that as "cannot tell", never as "no site".
+ */
+export function ownHost(): string {
+  const origin = configuredOrigin() || stickyOrigin;
+  if (!origin) return "";
+  try {
+    return new URL(origin).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}

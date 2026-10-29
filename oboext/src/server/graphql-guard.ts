@@ -1,35 +1,16 @@
-/**
- * Query guards for the GraphQL endpoint.
- *
- * The endpoint had no limits at all, and `graphql.rose` answers OPTIONS with
- * `access-control-allow-origin: *`. Those two facts combine badly: any site a
- * logged-in admin visits can drive /api/graphql from the browser, and a single
- * query can fan out to an unbounded number of database round trips. Session
- * cookies are SameSite=Lax so they are not attached to a cross-site POST, but
- * that protects credentials only - the read-heavy public fields are open, and
- * the guard belongs on the query document rather than on the transport.
- *
- * Both checks run BEFORE execution, so a rejected query costs one parse.
- */
+// Query guards for the GraphQL endpoint.
 
-/** Deepest object nesting a legitimate client needs. The public schema's own
- *  shape is Query -> PostList -> Post -> (User | Category | Tag), so four
- *  levels is generous; the cap exists to stop fan-out, not to shape queries. */
+// Deepest object nesting a legitimate client needs.
 export const MAX_DEPTH = 12;
 
-/** Ceiling on the cost estimate before the query is refused.
- *
- *  Chosen against the shapes real clients send: the heaviest one this schema
- *  supports (a 20-post list with author, categories and tags expanded) scores
- *  260, and a 50-page list with full content scores 300. 1500 leaves several
- *  times that headroom while still rejecting the wide-and-shallow query that
- *  exists only to pull the whole database through one round trip. */
+// Ceiling on the cost estimate before the query is refused.
 export const MAX_COST = 1500;
 
 /** The page-size cap the resolvers already enforce, mirrored here so the cost
  *  estimate reflects reality rather than assuming the caller was reasonable. */
 export const MAX_PAGE_SIZE = 100;
 
+// Graphql-js AST node kinds that contain a nested selection set.
 const SELECTION_HOLDERS = new Set([
   'OperationDefinition',
   'FragmentDefinition',
@@ -38,15 +19,7 @@ const SELECTION_HOLDERS = new Set([
   'InlineFragment',
 ]);
 
-/**
- * The selection set directly under a node, if it has one.
- *
- * graphql-js nests as node -> selectionSet -> selections[], so a FIELD does
- * not carry `selections` itself: only a SelectionSet does. Checking the wrong
- * level looks exactly like an AST with no nesting at all, which is how an
- * earlier version of this function reported depth 0 for a 60-level query and
- * silently allowed everything.
- */
+// The selection set directly under a node, if it has one.
 function innerSelections(node: unknown): readonly unknown[] | null {
   if (!node || typeof node !== 'object') return null;
   const ss = (node as { selectionSet?: { selections?: unknown } }).selectionSet;
@@ -60,20 +33,13 @@ function ownSelections(node: unknown): readonly unknown[] | null {
   return Array.isArray(sel) ? sel : null;
 }
 
-/** Depth of the deepest selection path, counted over the whole document.
- *
- * Iterative with an explicit stack: recursion would let a document with
- * thousands of nested selections overflow the JS stack before any counter
- * reached the cap, and that is exactly the input being defended against.
- *
- * The depth of a leaf field is counted as the number of selection SETS walked
- * through, so `{ a }` is depth 1 and `{ a { b { c } } }` is depth 3.
- */
+// Depth of the deepest selection path, counted over the whole document.
 export function queryDepth(document: { definitions?: readonly unknown[] }): number {
   const definitions = document?.definitions;
   if (!Array.isArray(definitions)) return 0;
 
   let deepest = 0;
+  // [node, depth] pairs. Seeded with the definitions themselves at depth 0.
   const stack: Array<[unknown, number]> = [];
   for (const def of definitions) stack.push([def, 0]);
 
@@ -81,6 +47,8 @@ export function queryDepth(document: { definitions?: readonly unknown[] }): numb
   while (stack.length) {
     const [node, depth] = stack.pop()!;
     if (!node || typeof node !== 'object') continue;
+    // Fragment definitions can be cyclic in a malformed document; a visited set
+    // keeps this linear instead of hanging.
     if (seen.has(node)) continue;
     seen.add(node);
 
@@ -110,16 +78,7 @@ export function checkQueryDepth(document: { definitions?: readonly unknown[] }):
   return d > MAX_DEPTH ? 'Query is too deeply nested (depth ' + d + ', max ' + MAX_DEPTH + ').' : null;
 }
 
-/**
- * Coarse cost estimate: selection count x the widest page size requested.
- *
- * Deliberately not a "complexity analysis" - it does not resolve fragment
- * spreads and does not follow variable values, so it under-counts some queries
- * and over-counts others. What it does catch is the one shape that hurts and
- * that the depth check cannot see: a query that asks for many rows across
- * many fields. Depth is checkQueryDepth's job; keeping the two separate means
- * each has one threshold to tune.
- */
+// Coarse cost estimate: selection count x the widest page size requested.
 export function estimateCost(document: { definitions?: readonly unknown[] }): number {
   const definitions = document?.definitions;
   if (!Array.isArray(definitions)) return 0;
@@ -137,6 +96,7 @@ export function estimateCost(document: { definitions?: readonly unknown[] }): nu
     if (seen.has(node)) continue;
     seen.add(node);
 
+    // Read this node's own arguments before descending, so a page-size limit is attributed to the field that carries it.
     const args = (node as { arguments?: readonly { value?: { value?: unknown } }[] }).arguments;
     if (Array.isArray(args)) {
       for (const a of args) {

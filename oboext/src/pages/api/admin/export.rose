@@ -2,12 +2,26 @@
   // GET /api/admin/export?scope=posts&scope=pages&format=markdown
 
   import { apiGate, requireCap } from "@server/admin";
-  import { EXPORT_SCOPES, buildExportData, exportToMarkdown } from "@server/export";
+  import { EXPORT_SCOPES, buildExportData, exportToMarkdown, exportToWxr } from "@server/export";
 
   export async function GET(request) {
     return apiGate(async () => {
       const user = requireCap(getContext().user, "settings:manage");
       const url = new URL(request.url);
+      const stamp = new Date().toISOString().slice(0, 10);
+      // WXR is the WordPress interchange dialect: it carries posts, pages,
+      // their comments and the site header, so scope checkboxes do not apply
+      // and are ignored.
+      if (url.searchParams.get("format") === "wxr") {
+        const data = await buildExportData(user, ["posts", "pages", "comments", "settings"]);
+        return new Response(exportToWxr(data, { siteUrl: url.origin }), {
+          status: 200,
+          headers: {
+            "content-type": "application/xml; charset=utf-8",
+            "content-disposition": `attachment; filename="oboext-export-${stamp}.xml"`,
+          },
+        });
+      }
       const picked = url.searchParams.getAll("scope");
       const scopes = picked.length
         ? picked.filter((s) => EXPORT_SCOPES.indexOf(s) >= 0)
@@ -17,7 +31,6 @@
       }
       const markdown = url.searchParams.get("format") === "markdown";
       const data = await buildExportData(user, scopes);
-      const stamp = new Date().toISOString().slice(0, 10);
       if (markdown) {
         return new Response(exportToMarkdown(data), {
           status: 200,

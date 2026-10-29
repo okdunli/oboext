@@ -1,34 +1,69 @@
 <script>
-  // /api/search-suggest?q=KEYWORD
-  // Public, unauthenticated live search suggestions for the bluemix nav
-  // search popover. Returns { items: [{id,title,url,thumbnail}], total }.
-  import { listPosts } from "@server/queries";
+  // /api/search-suggest?q=KEYWORD Public, unauthenticated live search suggestions for the bluemix nav search popover.
+  import { listPosts, suggestDedupe, suggestHighlight } from "@server/queries";
+  import { memoQuery } from "@server/cache";
+
+  // R156: the popover fires on every keystroke (debounced), and the search
+  // itself is an ILIKE '%…%' scan - the most expensive public query in the app.
+  // Two guards:
+  //   1. MIN_Q: the client (pjax.js S=2) already waits for two characters, but
+  //      that is browser-side only - a bot hitting ?q=a triggers the WORST
+  //      pattern ('%a%' matches nearly everything). A one-character query
+  //      answers empty here, so the scan never runs.
+  //   2. MAX_Q: bounds the pattern length of a paste bomb (terms are already
+  //      capped at 8 by searchTerms; a 10KB single term was still 10KB of ILIKE).
+  const MIN_Q = 2;
+  const MAX_Q = 120;
+
+  // The answer is per-published-post and identical for every visitor (no user
+  // state), so the browser may keep it briefly: 30s is shorter than the 20s
+  // memo it sits on plus one keystroke round trip, which makes a re-typed
+  // prefix free without serving anything a publish would have changed.
+  const CACHE = "public, max-age=30";
 
   function json(data, status = 200) {
     return new Response(JSON.stringify(data), {
       status,
-      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      // A 500 is transient - caching it would blank the popover for 30s.
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": status >= 400 ? "no-store" : CACHE,
+      },
     });
   }
 
   export async function GET(request) {
-    const q = (new URL(request.url).searchParams.get("q") || "").trim();
-    if (!q) return json({ items: [], total: 0 });
+    const q = (new URL(request.url).searchParams.get("q") || "").trim().slice(0, MAX_Q);
+    if (q.length < MIN_Q) return json({ items: [], total: 0 });
     try {
-      const { items, total } = await listPosts({
-        status: "published",
-        search: q,
-        limit: 5,
+      // R156: memoized 20s per normalized query. Typing is a PREFIX walk -
+      // "ja", "jav", "java" are separate requests but the same few prefixes are
+      // re-typed by every visitor, so the minute's popular prefixes cost one
+      // scan each. ILIKE is case-insensitive, so the key lowercases.
+      // invalidateContentCaches drops the `sq:` prefix, so a publish shows up
+      // on the next keystroke, not after the TTL.
+      const payload = await memoQuery(`sq:suggest:${q.toLowerCase()}`, 20_000, async () => {
+        const { items, total } = await listPosts({
+          status: "published",
+          search: q,
+          // Two or three rows go out of five to one title: over-fetch so the
+          // de-dup still fills the popover instead of shortening it.
+          limit: 10,
+        });
+        const rows = suggestDedupe(items || []).slice(0, 5);
+        return {
+          items: rows.map((p) => ({
+            id: p.id,
+            title: p.title,
+            url: p.url,
+            thumbnail: p.featuredImage || null,
+            // \u0001/\u0002-marked snippet, never HTML: the client renders it.
+            hl: suggestHighlight(p.title ?? "", q),
+          })),
+          total: total || 0,
+        };
       });
-      return json({
-        items: (items || []).map((p) => ({
-          id: p.id,
-          title: p.title,
-          url: p.url,
-          thumbnail: p.featuredImage || null,
-        })),
-        total: total || 0,
-      });
+      return json(payload);
     } catch (e) {
       return json({ items: [], total: 0 }, 500);
     }

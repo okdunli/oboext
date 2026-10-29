@@ -1,0 +1,53 @@
+<script>
+  // POST /api/admin/webmention { id, action: "approve" | "reject" }
+  //
+  // The Webmention inbox's decision door. Reception (R255) already files an
+  // accepted mention as a PENDING comment, so "approve" is the same act as
+  // approving a comment — this endpoint just does both halves in one place so
+  // the two records can never disagree: the comment's state is what readers
+  // see, the mention's status is what the inbox shows.
+  //
+  // Auth: requireUser + content:update:any (an admin/editor action, not a read).
+  // Immediate return: one UPDATE pair, no outbound work — no hold, per the
+  // framework's api rule (_CHANGESET_R245 §一).
+  import { apiGate, readBody, requireUser, can, ServiceError } from "@server/admin";
+  import { db } from "@server/db";
+  import { comments, webmentions } from "@server/schema";
+  import { eq } from "drizzle-orm";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const user = requireUser(getContext().user);
+      if (!can(user.role, "content:update:any")) throw new ServiceError("权限不足", 403);
+      const body = await readBody(request);
+      const id = Math.trunc(Number(body?.id));
+      const action = String(body?.action || "");
+      if (!Number.isInteger(id) || id <= 0) throw new ServiceError("缺少记录标识", 422);
+      if (action !== "approve" && action !== "reject") throw new ServiceError("未知操作", 422);
+
+      const [row] = await db
+        .select({ id: webmentions.id, commentId: webmentions.commentId })
+        .from(webmentions)
+        .where(eq(webmentions.id, id))
+        .limit(1);
+      if (!row) throw new ServiceError("记录不存在", 404);
+
+      const nextStatus = action === "approve" ? "accepted" : "rejected";
+      // A rejected mention is spam, not a deleted comment: the row stays so a
+      // later re-submission hits the UNIQUE(source,target) ledger rather than
+      // silently reappearing, and the moderator can see what they refused.
+      const nextState = action === "approve" ? "published" : "spam";
+
+      await db.update(webmentions).set({ status: nextStatus }).where(eq(webmentions.id, id));
+      if (row.commentId != null) {
+        // R270: the column is `status` (commentStateEnum), not `state` — the
+        // old name made every approve/reject answer 500 (unknown column) and
+        // the mention row silently drifted from its comment. Also: the mention
+        // status must FOLLOW the comment when the moderator re-decides it in
+        // the comments queue, so the two records stay one decision.
+        await db.update(comments).set({ status: nextState }).where(eq(comments.id, row.commentId));
+      }
+      return { ok: true, id, status: nextStatus };
+    });
+  }
+</script>

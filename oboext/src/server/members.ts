@@ -148,7 +148,10 @@ export function isRegisterReferer(req: Request, member: MemberSettings): boolean
   return pathname === member.registerPath;
 }
 
-const NAME_RE = /^[^\s@]{2,32}$/u;
+// Shared nickname rule: registration AND self-service profile edits must apply
+// the same one (a profile edit used to accept any non-empty string).
+export const NAME_RE = /^[^\s@]{2,32}$/u;
+export const NAME_INVALID_MSG = "昵称需为 2~32 个字符，且不能包含空格或 @";
 
 const PHONE_LOCAL_RE = /^1[3-9]\d{9}$/;
 const PHONE_INTL_RE = /^\+\d{6,15}$/;
@@ -194,7 +197,7 @@ export async function registerMember(input: RegisterInput): Promise<SessionUser>
   let name = input.name?.trim() ?? "";
   if (name) {
     if (!NAME_RE.test(name)) {
-      throw new ServiceError("昵称需为 2~32 个字符，且不能包含空格或 @", 422, "api.name_invalid");
+      throw new ServiceError(NAME_INVALID_MSG, 422, "api.name_invalid");
     }
   } else if (member.nameRequired) {
     throw new ServiceError("请填写昵称", 422, "api.name_required");
@@ -228,26 +231,9 @@ export async function registerMember(input: RegisterInput): Promise<SessionUser>
     throw new ServiceError("手机号格式不正确", 422, "api.phone_invalid");
   }
 
-  const notify = await getNotifySettings();
-  if (notify.register.emailVerify && emailRaw) {
-    await verifyCode({
-      channel: "email",
-      target: emailRaw,
-      purpose: "register",
-      code: input.emailCode ?? "",
-    });
-  }
-  if (notify.register.phoneVerify && phoneRaw) {
-    await verifyCode({
-      channel: "sms",
-      target: phoneRaw,
-      purpose: "register",
-      code: input.phoneCode ?? "",
-    });
-  }
-  const emailVerifiedFlag = !!(emailRaw && notify.register.emailVerify);
-  const phoneVerifiedFlag = !!(phoneRaw && notify.register.phoneVerify);
-
+  // Uniqueness first, codes second: verifyCode consumes a one-time code, so
+  // checking duplicates AFTER it forced a re-request (and the 60s cooldown)
+  // whenever the nickname/email/phone was already taken.
   if (input.name?.trim()) {
     const [nameTaken] = await db
       .select({ id: users.id })
@@ -269,6 +255,26 @@ export async function registerMember(input: RegisterInput): Promise<SessionUser>
       .where(sql`${users.phone} = ${phoneRaw}`);
     if (phoneTaken) throw new ServiceError("手机号已被注册", 422, "api.phone_taken");
   }
+
+  const notify = await getNotifySettings();
+  if (notify.register.emailVerify && emailRaw) {
+    await verifyCode({
+      channel: "email",
+      target: emailRaw,
+      purpose: "register",
+      code: input.emailCode ?? "",
+    });
+  }
+  if (notify.register.phoneVerify && phoneRaw) {
+    await verifyCode({
+      channel: "sms",
+      target: phoneRaw,
+      purpose: "register",
+      code: input.phoneCode ?? "",
+    });
+  }
+  const emailVerifiedFlag = !!(emailRaw && notify.register.emailVerify);
+  const phoneVerifiedFlag = !!(phoneRaw && notify.register.phoneVerify);
 
   const [row] = await db
     .insert(users)

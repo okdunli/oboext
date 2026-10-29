@@ -1,8 +1,5 @@
 <script>
-  // Theme manager (port of components/ThemeManager.tsx). Every on-disk theme
-  // is a card: token strip, manifest meta, activate / settings / delete.
-  // State rides the embedded payload + data-th-* attributes; admin.js owns
-  // the fetch calls and re-renders server-side after each mutation.
+  // Theme manager (port of components/ThemeManager.tsx).
   let d = $data(() => __rvLoad("admin.themes", {}));
 
   function themes() {

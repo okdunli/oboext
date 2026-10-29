@@ -1,9 +1,6 @@
 import type { ThemeConfig } from "./schema.js";
 
 
-
-
-
 export type PaletteTokens = Pick<
   ThemeConfig,
   | "background"
@@ -216,7 +213,6 @@ export function getPalettePreset(key: string | null | undefined): PalettePreset 
   if (!key) return null;
   return BY_KEY.get(key) ?? null;
 }
-
 
 
 export function paletteLayeredConfig(

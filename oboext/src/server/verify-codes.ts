@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lt, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { verifyCodes } from "./schema.js";
 import { getSecret } from "./auth.js";
@@ -134,15 +134,33 @@ export async function verifyCode(input: VerifyCodeInput): Promise<true> {
   if (!row || row.expiresAt.getTime() < Date.now()) {
     throw new ServiceError("验证码错误或已过期", 400, "api.code_wrong");
   }
-  if (row.attempts >= MAX_ATTEMPTS) {
-    throw new ServiceError("验证码错误次数过多，请重新获取", 400, "api.code_attempts");
-  }
 
   if (row.codeHash !== hashCode(value)) {
-    await db
+    // Atomically spend one attempt AND enforce the cap in one statement: a
+    // read-then-increment lets N concurrent wrong guesses all pass the check
+    // (each reads attempts<MAX) and only then increment, so the cap is bypassed.
+    // A guarded UPDATE ... WHERE attempts < MAX RETURNING makes the check and
+    // the increment a single race-free step; a missing row means already locked.
+    const [bumped] = await db
       .update(verifyCodes)
       .set({ attempts: sql`${verifyCodes.attempts} + 1` })
-      .where(eq(verifyCodes.id, row.id));
+      .where(and(eq(verifyCodes.id, row.id), lt(verifyCodes.attempts, MAX_ATTEMPTS)))
+      .returning({ attempts: verifyCodes.attempts });
+    if (!bumped) {
+      // Already at the cap. Hard-invalidate the code so it is dead even for the
+      // correct value: without this the cap only COUNTED - every further wrong
+      // guess re-hit the same `attempts < MAX` guard and returned "attempts"
+      // while the live code was never killed, so a brute-forcer could keep
+      // guessing forever (bounded only by any separate IP limit) and the
+      // "please re-request" message was a lie. Consuming it here makes MAX a
+      // true lockout; issueCode's resend throttle keys off LIVE codes, so the
+      // user can immediately request a fresh one.
+      await db
+        .update(verifyCodes)
+        .set({ consumedAt: new Date() })
+        .where(eq(verifyCodes.id, row.id));
+      throw new ServiceError("验证码错误次数过多，请重新获取", 400, "api.code_attempts");
+    }
     throw new ServiceError("验证码错误或已过期", 400, "api.code_wrong");
   }
 

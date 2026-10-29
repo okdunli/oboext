@@ -4,13 +4,17 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
   boolean,
+  date,
   index,
+  unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 /** Structured editor content (mirror of lib/blocks.ts Block union). */
 export type Block =
@@ -54,6 +58,10 @@ export const users = pgTable(
     status: text("status").notNull().default("active"),
     emailVerified: boolean("email_verified").notNull().default(false),
     phoneVerified: boolean("phone_verified").notNull().default(false),
+    // True when the account has no password (OAuth/passwordless signup). A
+    // per-row column, not the old shared oauth.nopassword option array, so the
+    // mark is an atomic single-row UPDATE with no read-modify-write race.
+    passwordless: boolean("passwordless").notNull().default(false),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -61,6 +69,13 @@ export const users = pgTable(
   (t) => ({
     phoneIdx: uniqueIndex("users_phone_idx").on(t.phone),
     nameIdx: uniqueIndex("users_name_idx").on(t.name),
+    // Login folds both sides before comparing (auth.ts: lower(email) =
+    // lower($1)), which no plain index can serve, so the folded expression is
+    // what gets indexed. Mirrors migration 0029 verbatim. Deliberately not
+    // unique: legacy rows may hold both Alice@ and alice@, and a unique
+    // expression index would then fail to build.
+    emailLowerIdx: index("users_email_lower_idx").on(sql`lower(${t.email})`),
+    nameLowerIdx: index("users_name_lower_idx").on(sql`lower(${t.name})`),
   }),
 );
 
@@ -102,7 +117,11 @@ export const verifyCodes = pgTable(
     ip: text("ip"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => ({ targetIdx: index("verify_codes_target_idx").on(t.target, t.purpose) }),
+  (t) => ({
+    targetIdx: index("verify_codes_target_idx").on(t.target, t.purpose),
+    // Serves the per-IP hourly send cap (issueCode: COUNT by ip in a 1h window).
+    ipCreatedIdx: index("verify_codes_ip_created_idx").on(t.ip, t.createdAt),
+  }),
 );
 
 export const securityEvents = pgTable(
@@ -119,7 +138,13 @@ export const securityEvents = pgTable(
   },
   (t) => ({
     typeIdx: index("security_events_type_idx").on(t.eventType, t.createdAt),
-    accountIdx: index("security_events_account_idx").on(t.account, t.createdAt),
+    // Mirrors migration 0030. The throttle check folds the account (a
+    // case-sensitive counter would let "Alice"/"alice" each keep their own) and
+    // orders by id DESC, so the keys are the folded expression and the raw ip,
+    // each with id second. The (account, created_at) index these replace had no
+    // consumer: nothing in the codebase compares the raw account.
+    accountLowerIdx: index("security_events_account_lower_idx").on(sql`lower(${t.account})`, t.id),
+    ipIdx: index("security_events_ip_idx").on(t.ip, t.id),
   }),
 );
 
@@ -128,6 +153,10 @@ const contentColumns = {
   slug: text("slug").notNull(),
   excerpt: text("excerpt"),
   content: jsonb("content").$type<Block[]>().notNull().default([]),
+  // R200: a plain-text projection of `content` so full-text search can match
+  // words that live in the article BODY, not just the title/excerpt. The jsonb
+  // body is kept for rendering/export; this column is the searchable form.
+  bodyPlain: text("body_plain"),
   status: statusEnum("status").notNull().default("draft"),
   featuredImage: text("featured_image"),
   seoTitle: text("seo_title"),
@@ -150,6 +179,16 @@ export const posts = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     publishedAt: timestamp("published_at", { withTimezone: true }),
     format: postFormatEnum("format").notNull().default("standard"),
+    // R272: the post's content language (i18n.ts LOCALES). DATA ONLY for now —
+    // nothing in the render path reads it (R269's canonical merge stays) —
+    // so existing rows land at the default via NOT NULL DEFAULT 'zh-CN'
+    // (0042) and later rounds build pairing + admin UI on top without a
+    // second table rewrite.
+    locale: text("locale").notNull().default("zh-CN"),
+    // R273: the post this row translates (0043). NULL for default-locale
+    // originals; a non-default post without a pair is simply untranslated.
+    // ON DELETE SET NULL keeps the translation alive when its original dies.
+    translationOf: integer("translation_of").references((): any => posts.id, { onDelete: "set null" }),
     pinned: boolean("pinned").notNull().default(false),
     template: text("template"),
     formatMeta: jsonb("format_meta").$type<Record<string, string>>().notNull().default({}),
@@ -170,6 +209,11 @@ export const posts = pgTable(
     viewsIdx: index("posts_views_idx").on(t.views, t.publishedAt),
     likesIdx: index("posts_likes_idx").on(t.likes, t.publishedAt),
     commentsIdx: index("posts_comments_idx").on(t.commentsCount, t.publishedAt),
+    // Declared to match db/migrations/0028: an author's published list filters
+    // author_id and orders by published_at, and a status-only index makes the
+    // planner read every other author's rows first. ASC so a backward scan
+    // answers "published_at DESC".
+    authorIdx: index("posts_author_idx").on(t.authorId, t.publishedAt),
     pinyinIdx: uniqueIndex("posts_pinyin_slug_idx").on(t.pinyinSlug),
     initialIdx: uniqueIndex("posts_initial_slug_idx").on(t.initialSlug),
   }),
@@ -183,8 +227,37 @@ export const postVisitors = pgTable(
       .references(() => posts.id, { onDelete: "cascade" }),
     visitorKey: text("visitor_key").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // db/migrations/0041: provenance of the landing visit. Host only (a full
+    // URL can carry a search phrase), and nullable because rows written before
+    // the migration - and every caller that passes no referrer - have none.
+    referrerHost: text("referrer_host"),
+    referrerKind: text("referrer_kind"),
   },
-  (t) => ({ pk: uniqueIndex("post_visitors_pk").on(t.postId, t.visitorKey) }),
+  (t) => ({
+    pk: uniqueIndex("post_visitors_pk").on(t.postId, t.visitorKey),
+    // 0041: the daily rollup reads `created_at >= current_date - 1` on every
+    // minute tick; neither (post_id, visitor_key) nor the visit_daily PK can
+    // answer that predicate, so without this btree it is a whole-table scan of
+    // a ledger that nothing prunes.
+    createdIdx: index("post_visitors_created_idx").on(t.createdAt),
+  }),
+);
+
+/** Daily traffic by source (db/migrations/0041). Written ONLY by the sweeper's
+ *  rollup, never on the request path: the aggregation upserts the absolute
+ *  counts for a day, so a rerun (or a second instance) cannot double them. */
+export const visitDaily = pgTable(
+  "visit_daily",
+  {
+    day: date("day").notNull(),
+    postId: integer("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    referrerKind: text("referrer_kind").notNull(),
+    views: integer("views").notNull().default(0),
+    uniques: integer("uniques").notNull().default(0),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.day, t.postId, t.referrerKind] }) }),
 );
 
 export const pages = pgTable(
@@ -224,7 +297,12 @@ export const media = pgTable(
     }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => ({ mimeIdx: index("media_mime_idx").on(t.mimeType) }),
+  (t) => ({
+    mimeIdx: index("media_mime_idx").on(t.mimeType),
+    // Serves the media library's default ordering (listMedia: sortOrder ASC,
+    // createdAt DESC) so the admin grid is not a full sort over the table.
+    sortIdx: index("media_sort_idx").on(t.sortOrder, t.createdAt),
+  }),
 );
 
 export const categories = pgTable(
@@ -329,11 +407,96 @@ export const comments = pgTable(
   (t) => ({
     postIdx: index("comments_post_idx").on(t.postId, t.postType),
     statusIdx: index("comments_status_idx").on(t.status),
+    // Serves the guest-comment flood check (createPublicComment: COUNT by ip in
+    // a recent window) on the comment-write hot path.
+    ipCreatedIdx: index("comments_ip_created_idx").on(t.ip, t.createdAt),
   }),
 );
 
-export const menus = pgTable("menus", {
+export const commentLikes = pgTable(
+  "comment_likes",
+  {
+    id: serial("id").primaryKey(),
+    commentId: integer("comment_id")
+      .notNull()
+      .references(() => comments.id, { onDelete: "cascade" }),
+    visitorKey: text("visitor_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: uniqueIndex("comment_likes_comment_visitor_pk").on(t.commentId, t.visitorKey),
+    commentIdx: index("comment_likes_comment_idx").on(t.commentId),
+  }),
+);
+
+// Post likes (db/migrations/0040): same one-row-per-(post, visitor) shape as
+// comment_likes above. posts.likes stays the denormalized counter (the admin
+// lists and rankings order by it); this table is what makes the increment
+// idempotent - UNIQUE(post_id, visitor_key) lets post-likes.ts tie
+// `posts.likes + 1` to "this statement really inserted" in ONE statement.
+export const postLikes = pgTable(
+  "post_likes",
+  {
+    id: serial("id").primaryKey(),
+    postId: integer("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    visitorKey: text("visitor_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: uniqueIndex("post_likes_post_visitor_pk").on(t.postId, t.visitorKey),
+    postIdx: index("post_likes_post_idx").on(t.postId),
+    visitorIdx: index("post_likes_visitor_idx").on(t.visitorKey),
+  }),
+);
+
+// Newsletter (db/migrations/0035). state is the (confirmed_at,
+// unsubscribed_at) timestamp pair, not an enum: a re-subscribe after an
+// unsubscribe is an UPDATE on the surviving row and UNIQUE(email) holds across
+// confirm/unsubscribe cycles. token doubles as the double-opt-in credential
+// and the one-click unsubscribe credential.
+export const subscribers = pgTable("subscribers", {
   id: serial("id").primaryKey(),
+  email: text("email").notNull().unique(),
+  locale: text("locale").notNull().default("zh-CN"),
+  token: text("token").notNull().unique(),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  unsubscribedAt: timestamp("unsubscribed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Per-(post, subscriber) send ledger. enqueueSweep claims a pair with
+// INSERT ... ON CONFLICT DO NOTHING; only the insert that landed fires the
+// mail, so a concurrent pass (or a second instance) cannot double-send and a
+// re-run after a crash skips anything already claimed.
+//
+// failedAt (db/migrations/0036): the claim lands BEFORE the SMTP session, so
+// a claimed row is not evidence of a delivered mail. NULL = delivered (or
+// never attempted because SMTP is unconfigured); a timestamp = the delivery
+// failed and the row is eligible for the retry pass.
+export const newsletterSends = pgTable(
+  "newsletter_sends",
+  {
+    id: serial("id").primaryKey(),
+    postId: integer("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    subscriberId: integer("subscriber_id")
+      .notNull()
+      .references(() => subscribers.id, { onDelete: "cascade" }),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+  },
+  (t) => ({
+    pk: uniqueIndex("newsletter_sends_post_subscriber_pk").on(t.postId, t.subscriberId),
+    subscriberIdx: index("newsletter_sends_subscriber_idx").on(t.subscriberId),
+  }),
+);
+
+export type Subscriber = typeof subscribers.$inferSelect;
+
+export const menus = pgTable("menus", {  id: serial("id").primaryKey(),
   location: text("location").notNull().unique(),
   name: text("name").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -400,7 +563,7 @@ export type FooterLink = { text: string; url: string; image?: string };
 
 export const siteSettings = pgTable("site_settings", {
   id: integer("id").primaryKey(),
-  siteTitle: text("site_title").notNull().default("oboext"),
+  siteTitle: text("site_title").notNull().default("Oboext"),
   siteDescription: text("site_description")
     .notNull()
     .default("一个 Serverless 友好的内容管理系统"),
@@ -559,6 +722,79 @@ export const themes = pgTable(
   (t) => ({ slugIdx: uniqueIndex("themes_slug_idx").on(t.slug) }),
 );
 
+/**
+ * R193: custom redirects (db/migrations/0031). Declared with the folded unique
+ * index so the matcher's `lower(source) = lower(path)` predicate is an index
+ * descent; `auto` separates a rename the software guessed from a rule the
+ * operator typed.
+ */
+export const redirects = pgTable(
+  "redirects",
+  {
+    id: serial("id").primaryKey(),
+    source: text("source").notNull(),
+    target: text("target").notNull(),
+    permanent: boolean("permanent").notNull().default(true),
+    auto: boolean("auto").notNull().default(false),
+    hits: integer("hits").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    sourceLowerIdx: uniqueIndex("redirects_source_lower_idx").on(sql`lower(${t.source})`),
+  }),
+);
+
+/**
+ * Search-term telemetry (db/migrations/0038): one row per (term, locale), the
+ * upsert target of recordSearchTerm's ON CONFLICT. hits/last_at mirror the
+ * admin hot-terms ORDER BY (hits DESC, last_at DESC) so /admin/search-terms is
+ * an index walk, not a sort. Declared to match migration 0038 verbatim.
+ */
+export const searchTerms = pgTable(
+  "search_terms",
+  {
+    id: serial("id").primaryKey(),
+    term: text("term").notNull(),
+    locale: text("locale").notNull().default("zh-CN"),
+    hits: integer("hits").notNull().default(1),
+    lastAt: timestamp("last_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    termLocalePk: unique("search_terms_term_locale_pk").on(t.term, t.locale),
+    hitsLastIdx: index("search_terms_hits_last_idx").on(t.hits.desc(), t.lastAt.desc()),
+    lastAtIdx: index("search_terms_last_at_idx").on(t.lastAt.desc()),
+  }),
+);
+
+/**
+ * Webmention ledger (db/migrations/0039): one row per (source, target) pair the
+ * receiver was told about. The unique pair is the idempotency key - a re-sent
+ * mention claims nothing new - and `status` records the verdict of the
+ * background verification (pending -> accepted | rejected). comment_id is a
+ * deliberately bare integer: comments are hard-deleted from the admin, and an
+ * FK cascade would erase the evidence the mention arrived at all.
+ */
+export const webmentions = pgTable(
+  "webmentions",
+  {
+    id: serial("id").primaryKey(),
+    source: text("source").notNull(),
+    target: text("target").notNull(),
+    postId: integer("post_id").references(() => posts.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("pending"),
+    commentId: integer("comment_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    sourceTargetPk: unique("webmentions_source_target_pk").on(t.source, t.target),
+    postIdx: index("webmentions_post_idx").on(t.postId),
+  }),
+);
+
+export type SearchTerm = typeof searchTerms.$inferSelect;
+export type Webmention = typeof webmentions.$inferSelect;
+export type Redirect = typeof redirects.$inferSelect;
 export type SiteSettings = typeof siteSettings.$inferSelect;
 export type Theme = typeof themes.$inferSelect;
 export type Comment = typeof comments.$inferSelect;

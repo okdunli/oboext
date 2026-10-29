@@ -3,6 +3,7 @@
   import { apiGate, readBody, jsonFail, publicListComments, createPublicComment } from "@server/admin";
   import { HOOKS, applyAsyncFilters } from "@server/hooks";
   import { makeT, headerLocale } from "@server/i18n";
+  import { fireWebhook } from "@server/webhook";
 
   export async function GET(request) {
     return apiGate(async () => {
@@ -49,6 +50,14 @@
         user: ctx.user || null,
         ip: ctx.ip || null,
         siteHost: request.headers.get("host"),
+      });
+      // Fire-and-forget notify (no await: a webhook must not slow/derail the response).
+      fireWebhook("comment.created", {
+        id: out.comment.id,
+        postType: body.postType === "page" ? "page" : "post",
+        postId,
+        authorName: out.comment.authorName,
+        content: String(out.comment.content || "").slice(0, 200),
       });
       return new Response(
         JSON.stringify({ id: out.comment.id, isPublic: out.isPublic, status: out.comment.status }),

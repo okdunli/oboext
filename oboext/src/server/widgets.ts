@@ -14,6 +14,9 @@ import {
 } from "./schema.js";
 import type { SessionUser } from "./auth.js";
 import { requireCap, ServiceError } from "./admin.js";
+// scheduled: the same time gate queries.ts applies to every public read -
+// a future publishedAt must not surface in a sidebar widget either.
+import { publishedVisible } from "./queries.js";
 import {
   getPermalinkConfig,
   postUrlFor,
@@ -465,7 +468,7 @@ async function resolveWidgetDataRaw(
           .from(posts)
           .innerJoin(postCategories, eq(postCategories.postId, posts.id))
           .innerJoin(categories, eq(categories.id, postCategories.categoryId))
-          .where(and(eq(posts.status, "published"), eq(categories.slug, catSlug)))
+          .where(and(eq(posts.status, "published"), publishedVisible, eq(categories.slug, catSlug)))
           .orderBy(desc(posts.publishedAt))
           .limit(limit);
       }
@@ -478,7 +481,7 @@ async function resolveWidgetDataRaw(
           featuredImage: posts.featuredImage,
         })
         .from(posts)
-        .where(eq(posts.status, "published"))
+        .where(and(eq(posts.status, "published"), publishedVisible))
         .orderBy(desc(posts.publishedAt))
         .limit(limit);
     }
@@ -492,37 +495,63 @@ async function resolveWidgetDataRaw(
           views: posts.views,
         })
         .from(posts)
-        .where(eq(posts.status, "published"))
+        .where(and(eq(posts.status, "published"), publishedVisible))
         .orderBy(desc(posts.views))
         .limit(num("count", 5));
 
     case "categories": {
+      // R240: count only published posts that are already visible (the same
+      // gate every public read applies, and the same numbers
+      // categoryPostCounts() feeds the theme-side category lists). The filter
+      // lives in the posts join's ON clause, not a WHERE, so categories with
+      // no (published) posts keep their row and render count 0 — hideEmpty
+      // still has the 0 to look at instead of the category silently vanishing.
       const rows = await db
         .select({
           id: categories.id,
           name: categories.name,
           slug: categories.slug,
-          count: sql<number>`count(${postCategories.postId})`,
+          count: sql<number>`count(${posts.id})`,
         })
         .from(categories)
         .leftJoin(postCategories, eq(postCategories.categoryId, categories.id))
+        .leftJoin(
+          posts,
+          and(
+            eq(posts.id, postCategories.postId),
+            eq(posts.status, "published"),
+            publishedVisible,
+          ),
+        )
         .groupBy(categories.id, categories.name, categories.slug)
         .orderBy(asc(categories.name));
       return config.hideEmpty ? rows.filter((r) => Number(r.count) > 0) : rows;
     }
 
     case "tag-cloud":
+      // R240: same published-only gate as the categories widget — a draft or
+      // archived post must not surface its tag in the cloud, and its mapping
+      // row must not inflate the count. Unused tags keep rendering with
+      // count 0, exactly as the old leftJoin did.
       return db
         .select({
           id: tags.id,
           name: tags.name,
           slug: tags.slug,
-          count: sql<number>`count(${postTags.postId})`,
+          count: sql<number>`count(${posts.id})`,
         })
         .from(tags)
         .leftJoin(postTags, eq(postTags.tagId, tags.id))
+        .leftJoin(
+          posts,
+          and(
+            eq(posts.id, postTags.postId),
+            eq(posts.status, "published"),
+            publishedVisible,
+          ),
+        )
         .groupBy(tags.id, tags.name, tags.slug)
-        .orderBy(desc(sql`count(${postTags.postId})`))
+        .orderBy(desc(sql`count(${posts.id})`))
         .limit(num("count", 30));
 
     case "archive": {
@@ -534,7 +563,7 @@ async function resolveWidgetDataRaw(
           count: sql<number>`count(*)`,
         })
         .from(posts)
-        .where(eq(posts.status, "published"))
+        .where(and(eq(posts.status, "published"), publishedVisible))
         .groupBy(sql`to_char(${posts.publishedAt}, ${sql.raw(`'${fmt}'`)})`)
         .orderBy(desc(sql`to_char(${posts.publishedAt}, ${sql.raw(`'${fmt}'`)})`))
         .limit(num("limit", 12));
@@ -556,25 +585,30 @@ async function resolveWidgetDataRaw(
         .limit(num("count", 5));
 
     case "stats": {
-      const [p] = await db
-        .select({
-          posts: sql<number>`count(*)`,
-          views: sql<number>`coalesce(sum(${posts.views}),0)`,
-        })
-        .from(posts)
-        .where(eq(posts.status, "published"));
-      const [c] = await db
-        .select({ comments: sql<number>`count(*)` })
-        .from(comments)
-        .where(eq(comments.status, "published"));
-      const [t] = await db.select({ tags: sql<number>`count(*)` }).from(tags);
-      const [cat] = await db.select({ categories: sql<number>`count(*)` }).from(categories);
+      // Four independent counts (posts+views, comments, tags, categories) run
+      // in parallel instead of four sequential round trips - this widget is on
+      // the sidebar hot path, so the latency adds up on every render.
+      const [p, c, t, cat] = await Promise.all([
+        db
+          .select({
+            posts: sql<number>`count(*)`,
+            views: sql<number>`coalesce(sum(${posts.views}),0)`,
+          })
+          .from(posts)
+          .where(and(eq(posts.status, "published"), publishedVisible)),
+        db
+          .select({ comments: sql<number>`count(*)` })
+          .from(comments)
+          .where(eq(comments.status, "published")),
+        db.select({ tags: sql<number>`count(*)` }).from(tags),
+        db.select({ categories: sql<number>`count(*)` }).from(categories),
+      ]);
       return {
-        posts: Number(p?.posts ?? 0),
-        views: Number(p?.views ?? 0),
-        comments: Number(c?.comments ?? 0),
-        tags: Number(t?.tags ?? 0),
-        categories: Number(cat?.categories ?? 0),
+        posts: Number(p?.[0]?.posts ?? 0),
+        views: Number(p?.[0]?.views ?? 0),
+        comments: Number(c?.[0]?.comments ?? 0),
+        tags: Number(t?.[0]?.tags ?? 0),
+        categories: Number(cat?.[0]?.categories ?? 0),
       };
     }
 

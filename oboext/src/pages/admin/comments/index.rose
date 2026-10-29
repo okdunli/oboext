@@ -4,7 +4,7 @@
   let d = $data(() =>
     __rvLoad("admin.comments", {
       status: __rvQs().get("status") || "",
-      page: Number(__rvQs().get("page") || 1),
+      page: __rvQs().get("page"),
       after: __rvQs().get("after") || "",
     }),
   );
@@ -48,6 +48,82 @@
   function href(p) {
     return "/admin/comments?page=" + p + (statusQ() ? "&status=" + statusQ() : "");
   }
+  // 实时：应用侧长轮询 /api/admin-stream —— 三种运行形态（dev / preview /
+  // dist/prod.mjs）唯一都通的通道。框架的 store 广播在这里**故意不用**（prod
+  // 未挂载该端点 → 落到 SPA fallback 的 HTML → 无限重连风暴；且它的开关是
+  // 全应用级脚本原文匹配，连注释字样都算）。tests 里有全站守卫钉死。
+  // 节流：5s 窗口 leading+trailing；时间戳挂 window（脚本随重渲重跑）。
+
+  function adminEvtNudge() {
+    const now = Date.now();
+    const last = window.__rosezmAdminEvt || 0;
+    if (now - last >= 5000) {
+      window.__rosezmAdminEvt = now;
+      if (window.__rosezmAdminEvtT) {
+        clearTimeout(window.__rosezmAdminEvtT);
+        window.__rosezmAdminEvtT = 0;
+      }
+      refresh();
+    } else if (!window.__rosezmAdminEvtT) {
+      // 尾沿：窗口内被抑制的事件在窗口结束时补一次——纯前沿会把本集群最后
+      // 一条评论丢到下一个事件（B 自己的动作开窗 → A 随后的评论不可见）。
+      window.__rosezmAdminEvtT = setTimeout(function () {
+        window.__rosezmAdminEvtT = 0;
+        window.__rosezmAdminEvt = Date.now();
+        refresh();
+      }, 5000 - (now - last));
+    }
+  }
+
+  onMount(function () {
+    // 长轮询循环（生产形态唯一可用通道，见 /api/admin-stream 顶部说明）。
+    // 每次答复后立刻重发；401/网络错误退避 5s→10s→30s。
+    const POLL_MS = 4000;
+    let stopped = false;
+    let since = 0;
+    let backoff = 5000;
+    let timer = 0;
+    const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    function step(delay) {
+      if (stopped) return;
+      if (delay) {
+        timer = setTimeout(run, delay);
+        return;
+      }
+      run();
+    }
+    function run() {
+      if (stopped) return;
+      const url = "/api/admin-stream?since=" + since;
+      fetch(url, ctl ? { signal: ctl.signal, headers: { accept: "application/json" } } : undefined)
+        .then(function (r) {
+          if (!r.ok) throw new Error("stream " + r.status);
+          backoff = 5000;
+          return r.json();
+        })
+        .then(function (d) {
+          if (stopped) return;
+          if (d && typeof d.ver === "number") since = d.ver;
+          if (d && d.events > 0) {
+            adminEvtNudge();
+            step(); // 还有新事件就立刻再问，连点即收敛
+          } else {
+            step(POLL_MS); // 空闲：按间隔轮询
+          }
+        })
+        .catch(function () {
+          if (stopped) return;
+          step(backoff);
+          backoff = Math.min(backoff * 2, 30000);
+        });
+    }
+    step(0);
+    onCleanup(function () {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      if (ctl) ctl.abort();
+    });
+  });
 </script>
 
 <head>

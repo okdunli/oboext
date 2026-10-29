@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { db, rawQuery } from "./db.js";
 import { invalidateOptionCache } from "./options.js";
 import { invalidateSettings } from "./queries.js";
+import { invalidateContentCaches } from "./cache.js";
 import { reloadPlugins } from "./plugins.js";
 import { ServiceError } from "./errors.js";
 import { createLogger } from "./logger.js";
@@ -17,11 +18,20 @@ const AUTO_DIR = path.resolve(process.cwd(), ".data/backups");
 const AUTO_PREFIX = "auto-before-restore-";
 const AUTO_KEEP = 10;
 
+export interface BackupMeta {
+  version: number;
+  app: "oboext";
+  exportedAt: string;
+  counts: { posts: number; pages: number; comments: number; media: number };
+}
+
 export interface DatabaseBackup {
   tool: "oboext";
   kind: typeof BACKUP_KIND;
   version: number;
   createdAt: string;
+
+  meta?: BackupMeta;
 
   tables: Record<string, Record<string, unknown>[]>;
 }
@@ -90,13 +100,41 @@ export async function buildDatabaseBackup(): Promise<DatabaseBackup> {
     const rows = await rawQuery(`SELECT * FROM ${quoteIdent(t.name)}`);
     tables[t.name] = rows as Record<string, unknown>[];
   }
+  const c = (n: string) => tables[n]?.length ?? 0;
+  const meta: BackupMeta = {
+    version: 1,
+    app: "oboext",
+    exportedAt: new Date().toISOString(),
+    counts: {
+      posts: c("posts"),
+      pages: c("pages"),
+      comments: c("comments"),
+      media: c("media"),
+    },
+  };
   return {
     tool: "oboext",
     kind: BACKUP_KIND,
     version: BACKUP_VERSION,
     createdAt: new Date().toISOString(),
+    meta,
     tables,
   };
+}
+
+// meta 块校验：app 必须是 oboext，version 不能比当前程序新；缺 meta 视为旧包放行。
+export function validateBackupMeta(meta: unknown): void {
+  if (meta === undefined || meta === null) return;
+  if (typeof meta !== "object") {
+    throw new ServiceError("备份文件 meta 块格式非法", 400);
+  }
+  const m = meta as { app?: unknown; version?: unknown };
+  if (m.app !== "oboext") {
+    throw new ServiceError("备份文件不是 Oboext 导出包", 400);
+  }
+  if (typeof m.version === "number" && m.version > BACKUP_VERSION) {
+    throw new ServiceError("备份包版本过新，请升级程序", 400);
+  }
 }
 
 async function fkOrder(names: Set<string>): Promise<string[]> {
@@ -160,7 +198,7 @@ async function writeAutoSnapshot(): Promise<string | undefined> {
   }
 }
 
-function assertBackup(input: unknown): DatabaseBackup {
+export function assertBackup(input: unknown): DatabaseBackup {
   if (typeof input !== "object" || input === null) {
     throw new ServiceError("备份文件不是合法对象", 400);
   }
@@ -168,6 +206,7 @@ function assertBackup(input: unknown): DatabaseBackup {
   if (b.kind !== BACKUP_KIND) {
     throw new ServiceError("文件格式不是 Oboext 整库备份", 400);
   }
+  validateBackupMeta(b.meta);
   if (b.version !== 1 || typeof b.tables !== "object" || b.tables === null) {
     throw new ServiceError("备份文件缺少版本号或数据表", 400);
   }
@@ -265,6 +304,16 @@ export async function restoreDatabaseBackup(input: unknown): Promise<RestoreResu
   invalidateOptionCache();
   invalidateSettings();
   await reloadPlugins();
+  // R152: a restore REPLACES every table - posts, comments, taxonomies,
+  // users, settings. It was the only bulk content writer left that did not
+  // ride invalidateContentCaches() (the JSON/markdown import does), so the
+  // memos (lp:/tax:/counts/doc:/sess:), kv bundles, render and response hot
+  // caches kept serving the PRE-restore world for up to 60s - and the `sess:`
+  // memo kept a user identity the rollback had just removed authenticated for
+  // up to 30s (the row read used to be unconditional before R149). A restore
+  // is the most write-like event there is: invalidate everything at the
+  // commit point, after plugins reloaded.
+  invalidateContentCaches();
 
   const restored: Record<string, number> = {};
   for (const name of ordered) restored[name] = backup.tables[name].length;

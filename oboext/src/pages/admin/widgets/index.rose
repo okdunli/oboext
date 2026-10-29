@@ -1,11 +1,5 @@
 <script>
-  // Widget manager (port of components/WidgetManager.tsx). The theme declares
-  // areas, the registry declares types; instances live in the widgets table.
-  // rose's {#each} has no index binding and nested directives are unsupported
-  // by the compiler, so sections + rows + picker items are flattened into ONE
-  // stream of typed items; {#if} predicates stay IIFE thunks (a bare
-  // fn(item) inside an each compiles to fn(__s)() — a double call). The editor
-  // modal is built client-side by admin.js from the embedded payload.
+  // Widget manager (port of components/WidgetManager.tsx).
   let d = $data(() => __rvLoad("admin.widgets", {}));
 
   function themes() {

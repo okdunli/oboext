@@ -1,4 +1,4 @@
-// Plugin loader — port of oboext lib/plugins/loader.ts.
+// Plugin loader — port of Oboext lib/plugins/loader.ts.
 import { removeAllByOwner, withOwner } from "./hooks.js";
 import { createContext, type PluginDefinition } from "./plugin-api.js";
 import { invalidatePluginDiscovery, pluginHasEntry } from "./plugin-registry.js";
@@ -13,13 +13,15 @@ type LoadedState = {
   promise: Promise<void> | null;
   /** signature of the last enabled-set we applied */
   signature: string;
+  /** per-plugin settings signature of what is currently loaded */
+  sigBySlug: Map<string, string>;
 };
 
 const g = globalThis as unknown as { __oboePlugins?: LoadedState };
 
 function state(): LoadedState {
   if (!g.__oboePlugins) {
-    g.__oboePlugins = { loaded: new Map(), promise: null, signature: "" };
+    g.__oboePlugins = { loaded: new Map(), promise: null, signature: "", sigBySlug: new Map() };
   }
   return g.__oboePlugins;
 }
@@ -38,10 +40,17 @@ export async function loadPlugins(enabled: EnabledPlugin[]): Promise<void> {
 
   s.promise = (async () => {
     const wanted = new Set(enabled.map((p) => p.slug));
+    // Per-plugin settings signature: a plugin is only torn down / re-setup when
+    // ITS OWN settings changed (or it was disabled). Comparing the whole-set
+    // signature here is always false (line 36 already returned when equal), so
+    // every settings save used to tear down and re-setup EVERY plugin.
+    const perSlug = new Map(
+      enabled.map((p) => [p.slug, JSON.stringify(p.settings)] as const),
+    );
 
     // Unload plugins that are no longer enabled (or whose settings changed).
     for (const [slug, def] of s.loaded) {
-      if (wanted.has(slug) && s.signature === signature) continue;
+      if (wanted.has(slug) && s.sigBySlug.get(slug) === perSlug.get(slug)) continue;
       try {
         await def.teardown?.(createContext(slug, {}));
       } catch (err) {
@@ -64,6 +73,8 @@ export async function loadPlugins(enabled: EnabledPlugin[]): Promise<void> {
         );
         continue;
       }
+      // Already loaded with identical settings: skip the re-setup entirely.
+      if (s.loaded.has(slug) && s.sigBySlug.get(slug) === perSlug.get(slug)) continue;
       try {
         const mod = await entry();
         const def: PluginDefinition<any> | undefined = mod.default ?? mod.plugin;
@@ -81,6 +92,7 @@ export async function loadPlugins(enabled: EnabledPlugin[]): Promise<void> {
     }
 
     s.signature = signature;
+    s.sigBySlug = perSlug;
   })().finally(() => {
     s.promise = null;
   });

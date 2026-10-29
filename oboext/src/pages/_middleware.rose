@@ -4,8 +4,18 @@
   import { createLogger } from "@server/logger";
   import { splitLocalePath, localeFromCookieHeader, localeHref, headerLocale, makeT } from "@server/i18n";
   import { resolveOrigin } from "@server/site-origin";
-  import { warmReadWave } from "@server/loaders";
+  import { roleAllows } from "@server/admin-menu";
+  import { warmReadWave, xmlResponse } from "@server/loaders";
+  import { handleReceiveRequest as handleWebmentionRequest, registerWebmentionHooks } from "@server/webmention";
   const log = createLogger("middleware");
+
+  // /sitemap.xml plus its sharded children /sitemap-N.xml (emitted by
+  // sitemap.ts above SITEMAP_SLICE_MAX_URLS). Every gate below that exempts
+  // the sitemap must exempt the slices too: they are locale-independent
+  // machine documents, never a page. The whole /sitemap-<digits>.xml
+  // namespace is claimed so a bogus part answers a real 404, not a page.
+  const isSitemapPath = (p) =>
+    p === "/sitemap.xml" || /^\/sitemap-\d+\.xml$/.test(p);
 
   export async function handle(request) {
     const reg = globalThis.__oboeLoaders;
@@ -26,8 +36,29 @@
       await reg.plugins.ensureLoaded();
     }
 
+    // Webmention (receive endpoint + discovery <link> + outbound sender) is
+    // CORE, not a plugin, so its two hook registrations ride the same choke
+    // point the plugin registry uses: every request has them before any head
+    // renders or any post publishes. The guard inside makes it a no-op after
+    // the first call.
+    registerWebmentionHooks();
+
     const u = new URL(request.url);
     const p = u.pathname;
+
+    // --------------------------------------------- Webmention receive endpoint
+    // W3C puts the endpoint at an arbitrary path (the discovery <link> in the
+    // page head tells senders where). This app advertises /webmention, which
+    // the framework router cannot serve (only pages/api/* becomes an API
+    // route), so the middleware is the dispatcher. The conventional
+    // /api/webmention location is the same handler through
+    // pages/api/webmention.rose — a sender that guesses it gets the same
+    // answer. Both answer before any fetch happens (202 + empty body), and
+    // neither carries user state, so the session/CSRF gates below do not
+    // apply to them.
+    if (p === "/webmention") {
+      return handleWebmentionRequest(request);
+    }
 
     // ------------------------------------------------- CSRF (single choke point) Runs before every branch below, so no route.
     if (!isSafeMethod(request.method) && needsCsrf(request)) {
@@ -85,6 +116,17 @@
     ctx.ip =
       (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
       (request.headers.get("x-real-ip") || "").trim();
+    // R255 traffic sources: the landing request's Referer rides on ctx so the
+    // post loader can classify it into post_visitors.referrer_kind. Raw header,
+    // unvalidated here - referrer.ts parses it without throwing, and only the
+    // host ever reaches the database.
+    ctx.referer = request.headers.get("referer") || "";
+    // Post-likes backfill: the raw cookie header so the detail/list loaders can
+    // read visitor_key off it (post-likes.ts). Read-only here - minting the
+    // cookie is /api/posts/like's job. Safe for the render cache because the
+    // hot key already includes this header (pathname + query + cookie), so one
+    // visitor's `liked` flags can never be served to another.
+    ctx.cookie = request.headers.get("cookie") || "";
 
     // First-run installer language: no URL prefix and no cookie exist yet, so
     // Accept-Language is the only signal (i18n.acceptLanguageLocale).
@@ -148,7 +190,7 @@
     // follow hit warm memos. Non-Vercel boots warm at boot instead.
     if (process.env.VERCEL && !globalThis.__oboextWaveWarmed) {
       globalThis.__oboextWaveWarmed = true;
-      console.log("[oboext] cold-start read wave fired (vercel, background)");
+      console.log("[Oboext] cold-start read wave fired (vercel, background)");
       void warmReadWave().catch(() => {});
     }
 
@@ -185,7 +227,7 @@
       rp !== "/favicon.ico" &&
       rp !== "/manifest.webmanifest" &&
       rp !== "/robots.txt" &&
-      rp !== "/sitemap.xml" &&
+      !isSitemapPath(rp) &&
       rp !== "/feed.xml" &&
       rp !== "/rss.xml" &&
       rp !== "/feed"
@@ -223,7 +265,7 @@
         rp !== "/favicon.ico" &&
         rp !== "/manifest.webmanifest" &&
         rp !== "/robots.txt" &&
-        rp !== "/sitemap.xml" &&
+        !isSitemapPath(rp) &&
         rp !== "/feed.xml" &&
         rp !== "/rss.xml" &&
         rp !== "/feed";
@@ -255,6 +297,17 @@
           return Response.redirect(new URL(setupHref, real.origin), 302);
       } else if (!user) {
         return Response.redirect(new URL("/admin/login", real.origin), 302);
+      } else if (!roleAllows(user.role, { adminOnly: true })) {
+        // R262 fixed the HTML door (the wall only asked "is signed in"), but it
+        // wrote the rule out by hand. R265: the middleware CAN import server
+        // modules — it already imports csrf, i18n, loaders and webmention — so
+        // this now calls the same `roleAllows` the sidebar and every loader use.
+        // A hand-written copy cannot follow a new role; the shared predicate can.
+        // /admin/login and /admin/setup are handled above, and /admin/account
+        // stays reachable because a member must see their own profile.
+        if (rp !== "/admin/account") {
+          return Response.redirect(new URL("/", real.origin), 302);
+        }
       } else if (rp === "/admin" || rp === "/admin/dashboard") {
         // Admin home preference: /admin and the /admin/dashboard alias swap
         // places (mirrors app/admin/page.tsx + app/admin/dashboard/page.tsx).
@@ -288,7 +341,9 @@
         });
       }
       if (reg && reg.publicStatic) {
-        return reg.publicStatic.serve(rp, request.method);
+        // R267: the negotiable dimension travels with the request, or the
+        // handler cannot pick br/gzip and every asset goes out raw.
+        return reg.publicStatic.serve(rp, request.method, request.headers.get("accept-encoding"));
       }
     }
 
@@ -302,7 +357,7 @@
           headers: { "content-type": "text/plain; charset=utf-8" },
         });
       }
-      return reg.uploads.serve(rp, request.method);
+      return reg.uploads.serve(rp, request.method, request.headers.get("accept-encoding"));
     }
 
     // ------------------------------------------- theme static assets
@@ -367,14 +422,15 @@
     // The sitemap runs the plugin hooks (sitemap.urls + sitemap.document):
     // sitemap-plus can shard it into a sitemapindex or claim ?kind=news /
     // ?part=n. An unclaimed query answers a real 404, never the default map.
-    if (rp === "/sitemap.xml") {
+    // /sitemap-N.xml are the CORE shards (buildSitemapDocument owns them,
+    // above SITEMAP_SLICE_MAX_URLS); a slice the map does not have is a 404.
+    if (isSitemapPath(rp)) {
       const doc = await reg.sitemap.document(request);
       if (!doc) return new Response("Not found", { status: 404 });
-      return new Response(doc.xml, {
-        headers: {
-          "content-type": doc.contentType,
-          "cache-control": "public, max-age=300",
-        },
+      // R144: validators + 304 for the XML documents (see xmlResponse).
+      return xmlResponse(doc.xml, request, {
+        "content-type": doc.contentType,
+        "cache-control": "public, max-age=300",
       });
     }
     if (rp === "/feed.xml" || rp === "/rss.xml" || rp === "/feed") {
@@ -384,40 +440,142 @@
       // rp is locale-stripped by now (ctx.pathname was canonicalised), so the
       // FEED language comes from the prefix that was stripped: /en/feed.xml
       // serves the English feed. The default stays the zh-CN feed.
-      return new Response(await reg.documents.feed(ctx, loc.locale), {
-        headers: {
-          "content-type": "application/rss+xml; charset=utf-8",
-          "cache-control": "public, max-age=300",
-        },
+      // R144: the response now carries a content ETag and answers a matching
+      // If-None-Match with a bodiless 304 - a poll that arrives after the
+      // max-age window costs headers only, not the whole feed body.
+      return xmlResponse(await reg.documents.feed(ctx, loc.locale), request, {
+        "content-type": "application/rss+xml; charset=utf-8",
+        "cache-control": "public, max-age=300",
       });
+    }
+    if (rp === "/feed.json") {
+      // R145: JSON Feed 1.1 - same locale contract as /feed.xml (the prefix
+      // that was stripped decides the language), same validator + 304
+      // treatment via xmlResponse: a JSON reader's poll after the max-age
+      // window costs headers only.
+      return xmlResponse(await reg.documents.jsonFeed(ctx, loc.locale), request, {
+        "content-type": "application/feed+json; charset=utf-8",
+        "cache-control": "public, max-age=300",
+      });
+    }
+    if (rp === "/comments/feed.xml" || rp === "/comments/feed") {
+      // R147: the site-wide comments feed - same locale/validator contract as
+      // the posts feed; approved comments only (enforced in the query).
+      return xmlResponse(await reg.documents.commentsFeed(ctx, loc.locale), request, {
+        "content-type": "application/rss+xml; charset=utf-8",
+        "cache-control": "public, max-age=300",
+      });
+    }
+    if (rp === "/comments/feed.json") {
+      // R155: the JSON twin of the comments feed - same rows, same moderation,
+      // same validator/304 treatment.
+      return xmlResponse(await reg.documents.commentsJsonFeed(ctx, loc.locale), request, {
+        "content-type": "application/feed+json; charset=utf-8",
+        "cache-control": "public, max-age=300",
+      });
+    }
+    if (rp.endsWith("/feed.xml") && rp !== "/feed.xml") {
+      // R160: category/tag feeds. The loader resolves the path against the
+      // CONFIGURED bases and returns null for anything unknown - that null
+      // falls through to normal routing, so this branch claims no URL it does
+      // not own. Same validator contract as the site feeds.
+      const base = rp.slice(0, -"/feed.xml".length);
+      if (base) {
+        const doc = await reg.documents.taxonomyFeed(ctx, loc.locale, base);
+        if (doc) {
+          return xmlResponse(doc, request, {
+            "content-type": "application/rss+xml; charset=utf-8",
+            "cache-control": "public, max-age=300",
+          });
+        }
+      }
+    }
+    if (rp.endsWith("/feed.json") && rp !== "/feed.json") {
+      // R162: the JSON twin of a category/tag feed. Same resolver as the RSS
+      // branch above (configured bases, unknown -> null -> normal routing), so
+      // the pair can never disagree about which paths they own.
+      const base = rp.slice(0, -"/feed.json".length);
+      if (base) {
+        const doc = await reg.documents.taxonomyJsonFeed(ctx, loc.locale, base);
+        if (doc) {
+          return xmlResponse(doc, request, {
+            "content-type": "application/feed+json; charset=utf-8",
+            "cache-control": "public, max-age=300",
+          });
+        }
+      }
     }
     if (rp === "/robots.txt") {
       // Same 5-minute window as sitemap/feed: crawlers re-fetch robots.txt
       // aggressively, and the body is rebuilt from DB-backed settings on
       // every miss. Changes surface within that window, same as the others.
-      return new Response(await reg.documents.robots(ctx), {
-        headers: {
-          "content-type": "text/plain; charset=utf-8",
-          "cache-control": "public, max-age=300",
-        },
+      // R159: and the same VALIDATOR contract - robots.txt used to answer 200
+      // with no ETag, so a crawler re-fetching it every few minutes (which is
+      // exactly what crawlers do) paid the rebuild AND the full body each
+      // time. xmlResponse() is the generic conditional-GET wrapper despite the
+      // name: content-hash ETag + bodiless 304.
+      return xmlResponse(await reg.documents.robots(ctx), request, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "public, max-age=300",
       });
     }
     
     
     if (rp === "/manifest.webmanifest") {
-      return new Response(await reg.documents.manifest(ctx), {
-        headers: { "content-type": "application/manifest+json" },
+      // R159: same treatment (it had NO cache-control either - every PWA
+      // install/re-open refetched the full manifest).
+      return xmlResponse(await reg.documents.manifest(ctx), request, {
+        "content-type": "application/manifest+json",
+        "cache-control": "public, max-age=300",
       });
     }
 
-    if (request.method !== "GET" && request.method !== "HEAD") return;
+      if (request.method !== "GET" && request.method !== "HEAD") return;
+
+    // ------------------------------------- renamed-URL 301/302 (content-first)
+    // (Historical basis: Rosezm BUG.md AO — a catch-all page calling
+    // redirect() from $data was crashed by the prod edge handler, src/cli/
+    // edge.ts:269 ignored page.redirect and fed buildShell undefined state ->
+    // 500, so the middleware intercepted here and emitted the Response itself.)
+    // That basis is stale: upstream fixed AO in R209 (vendored edge.ts:269-273
+    // now honours page.redirect), so edge no longer 500s. The block is kept
+    // for the content-first semantics framework redirect() cannot express —
+    // resolve() runs before the rule is honoured, so a renamed-URL old link
+    // whose content (re)claims the slug answers 200 and renders the full page
+    // instead of bouncing 301; only a miss is redirected. Ordering is the
+    // design: content wins over a rule. redirectFor is memoized and short-
+    // circuits on an empty rule map, so this costs nothing when no rules exist.
+    if (!rp.startsWith("/admin") && !rp.startsWith("/api/") && !rp.startsWith("/public/") &&
+        !rp.startsWith("/uploads/") && !rp.startsWith("/theme-assets/") && !rp.startsWith("/plugin-assets/") &&
+        !rp.startsWith("/theme-style/") && rp !== "/" && rp !== "/search" && rp !== "/archives" &&
+        rp !== "/favicon.ico" && rp !== "/manifest.webmanifest" && rp !== "/robots.txt" &&
+        !isSitemapPath(rp) && rp !== "/feed.xml" && rp !== "/rss.xml" && rp !== "/feed" &&
+        rp !== "/feed.json" && !rp.endsWith("/feed.xml") && !rp.endsWith("/feed.json") &&
+        reg && reg.dispatch) {
+      const segs = rp === "/" ? [] : rp.replace(/^\/+/, "").split("/");
+      const r = await reg.dispatch("redirectFor", { segments: segs }, getContext());
+      if (r && (r.href || r.status)) {
+        const v = await reg.dispatch("resolve", { segments: segs }, getContext());
+        // Same rule as the search jump below: the rule is stored locale-stripped,
+        // so the answer is re-prefixed or the visitor is ejected to the Chinese
+        // URL. Off-site targets (an absolute URL) are passed through untouched.
+        if (!v) {
+          const offsite = /^[a-z][a-z0-9+.-]*:\/\//i.test(r.href || "");
+          const target = offsite ? r.href : localeHref(r.href, loc.locale);
+          return new Response(null, { status: r.status, headers: { location: target } });
+        }
+      }
+    }
 
     // ------------------------------------- unique-hit search jumps to the post
     if (rp === "/search") {
       const q = (real.searchParams.get("q") || "").trim();
       if (q && real.searchParams.get("all") !== "1") {
         const to = await reg.searchRedirect(q);
-        if (to) return Response.redirect(new URL(to, real.origin), 302);
+        // Keep the visitor on their locale: searchSingleHit returns a bare
+        // /blog/<slug>, so without the prefix an /en visitor is ejected to the
+        // Chinese URL by this 302.
+        if (to) return Response.redirect(new URL(localeHref(to, loc.locale), real.origin), 302);
       }
       return;
     }

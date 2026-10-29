@@ -1,6 +1,6 @@
 import { createLogger } from "./logger.js";
 const log = createLogger("cache");
-// In-process SWR memo for read queries — the data-layer half of oboext's caching story.
+// In-process SWR memo for read queries — the data-layer half of Oboext's caching story.
 const store = new Map<
   string,
   { at: number; value: unknown; refreshing?: Promise<unknown> }
@@ -57,6 +57,15 @@ async function memo<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<
         hit.refreshing = fn()
           .then((value) => {
             put(key, { at: Date.now(), value });
+            // Clear the in-flight marker on SUCCESS too. put() deliberately
+            // carries `refreshing` forward so a concurrent stale read does not
+            // start a second refresh mid-flight; but if it is never cleared, the
+            // marker survives as a RESOLVED promise, so every later stale read
+            // sees `refreshing` truthy and skips the background refresh - the
+            // entry then serves stale until the full SWR_WINDOW*ttl and only
+            // refreshes once per window instead of once per ttl.
+            const cur = store.get(key);
+            if (cur) cur.refreshing = undefined;
             return value;
           })
           .catch((e) => {
@@ -197,10 +206,53 @@ export function invalidateContentCaches(): void {
   invalidatePrefix("pgh:");
   invalidatePrefix("hydr:");
   invalidatePrefix("rp:");
+  // R149: verifyToken memoizes the identity row (`sess:<id>`). Every users-row
+  // write that matters rides this function - admin updateUser (ban / role /
+  // rename) and deleteUser both call it at their commit point - so dropping the
+  // prefix here is what keeps "a ban is instant" true while steady-state
+  // authenticated requests stop paying the per-request read. Content writes
+  // dropping it too is harmless (one re-read) and buys freshness for author
+  // renames visible through other memos.
+  invalidatePrefix("sess:");
+  // R150: memoized document bodies (feed/jsonFeed/commentsFeed keyed
+  // `doc:feed|json|comments:<origin>:<locale>`, the sitemap skeleton
+  // `doc:sitemap:<base>`) - content-derived strings/entries rebuilt from the
+  // same rows this function already invalidates, so they drop here too and a
+  // publish/approve shows up on the very next render instead of waiting the
+  // 30s TTL.
+  invalidatePrefix("doc:");
+  // R156: the public search surfaces memoize their answers (`sq:suggest:<q>`
+  // in /api/search-suggest, `sq:posts:<sig>` in the guest branch of
+  // /api/posts). Both derive from published rows, so a publish/approve must
+  // show up on the next keystroke rather than after the 20s TTL.
+  invalidatePrefix("sq:");
   // The loader KV entries (home bundle, sidebars, category lists, archives)
   // are content-derived too - drop them in the same breath.
   invalidateKvContent();
-  // BUG.md W: the response caches (rosezm prod-server hotCache + render
+  // R267: this function runs at the COMMIT POINT of every content write (that
+  // is what the comment below says), which makes it the one honest place to
+  // tell the database layer that the on-disk data moved. Without it the
+  // recovery snapshot was only ever written on a clean shutdown - measured 18
+  // minutes stale in this repo while the server ran - so a crash rolled the
+  // database back to the last clean close. Dynamic import: cache must not gain
+  // a static dependency on db (the layering runs the other way).
+  void import("./db.js").then((db) => db.markDataChanged()).catch(() => {});
+  // R274: the same commit point re-probes whether translation pairing exists.
+  // Creating/unlinking a pair must flip canonicalPath/hreflangLinks semantics
+  // on the very next render, not after a process restart. Dynamic import keeps
+  // cache free of a static db dependency (same layering as the line above);
+  // i18n stays dependency-free because the probe lands in loaders, which
+  // writes the flag through i18n's setPairingActive.
+  void import("./db.js")
+    .then(async (db) => {
+      const rows = await db.rawQuery<{ n: number }>(
+        `select count(*)::int as n from posts where translation_of is not null`,
+      );
+      const i18n = await import("./i18n.js");
+      i18n.setPairingActive(Number(rows[0]?.n ?? 0) > 0);
+    })
+    .catch(() => {});
+  // BUG.md W: the response caches (Rosezm prod-server hotCache + render
   // cache) invalidate at request boundaries, which leaves a window where an
   // in-flight warm render stores pre-mutation bytes. This function runs at
   // the COMMIT POINT of every content write, so it is the one place that can

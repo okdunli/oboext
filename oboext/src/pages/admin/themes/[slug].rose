@@ -1,9 +1,5 @@
 <script>
   // Per-theme settings panel (port of components/ThemeSettingsForm.tsx).
-  // Two schemas share one left nav: the universal appearance sections
-  // (design tokens) and the theme's own manifest sections. The full panel
-  // payload (resolved values included) is embedded; admin.js renders fields,
-  // live token preview, save/reset — no extra fetch on load.
   let slug = $state("");
   let p = $data(() => __rvLoad("admin.theme-panel", { slug: slug() }));
 

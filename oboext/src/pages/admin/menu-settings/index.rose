@@ -1,9 +1,6 @@
 <script>
 
-  // data source is server/admin-menu.ts; this screen persists hiddenHrefs +
-  // adminHomePath into the options KV. Groups/leaves flatten into ONE {#each}
-  // stream (nested directives are unsupported by the .rose compiler); all
-  // boolean state rides data-* attributes with CSS revealing the right badges.
+  // Data source is server/admin-menu.ts; this screen persists hiddenHrefs + adminHomePath into the options KV.
   let ms = $data(() => __rvLoad("admin.menu-settings", {}));
 
   function rows() {

@@ -1,9 +1,5 @@
 <script>
-  // Admin login. Public (middleware-whitelisted); POST /api/auth/login sets
-  // the HttpOnly cms_session cookie, then we hard-navigate into the shell.
-  // The card itself (four modes: password / code / reset / 2FA) is shared
-  // with the disguised secret entry — one pre-rendered string via the
-  // loginCard loader, all behaviour in admin.js's initLogin().
+  // Admin login.
   let card = $data(() => __rvLoad("loginCard", {}));
   let brand = $data(() => __rvLoad("loginBrand", {}));
   function cardHtml() {

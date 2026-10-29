@@ -1,25 +1,25 @@
+import { eq } from "drizzle-orm";
+import { db } from "./db.js";
+import { users } from "./schema.js";
 
+// The passwordless flag lives on the users row (see migration 0024), so marking
+// or clearing is an atomic single-row UPDATE - no shared option array to
+// read-modify-write and lose ids under concurrency (which locked users out).
+// Reads go straight to the row; a single indexed primary-key lookup.
 
-import { getOption, setOption } from "./options.js";
-
-const NOPASSWORD_KEY = "oauth.nopassword";
-
-export async function getPasswordlessSet(): Promise<Set<number>> {
-  const arr = await getOption<number[]>(NOPASSWORD_KEY, []);
-  return new Set(Array.isArray(arr) ? arr : []);
+export async function isPasswordlessUser(userId: number): Promise<boolean> {
+  const [row] = await db
+    .select({ passwordless: users.passwordless })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return !!row?.passwordless;
 }
 
 export async function addPasswordlessMark(userId: number): Promise<void> {
-  const set = await getPasswordlessSet();
-  set.add(userId);
-  await setOption(NOPASSWORD_KEY, [...set]);
+  await db.update(users).set({ passwordless: true }).where(eq(users.id, userId));
 }
 
 export async function clearPasswordlessMark(userId: number): Promise<void> {
-  const set = await getPasswordlessSet();
-  if (set.delete(userId)) await setOption(NOPASSWORD_KEY, [...set]);
-}
-
-export async function isPasswordlessUser(userId: number): Promise<boolean> {
-  return (await getPasswordlessSet()).has(userId);
+  await db.update(users).set({ passwordless: false }).where(eq(users.id, userId));
 }

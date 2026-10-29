@@ -57,6 +57,9 @@ const CORE_GROUPS: MenuGroup[] = [
       { href: "/admin/categories", label: "分类", glyph: "folder" },
       { href: "/admin/tags", label: "标签", glyph: "tags" },
       { href: "/admin/comments", label: "评论", glyph: "message-square", adminOnly: true },
+      { href: "/admin/webmentions", label: "Webmention", glyph: "message-square", adminOnly: true },
+      { href: "/admin/newsletter", label: "Newsletter", glyph: "mail", adminOnly: true },
+      { href: "/admin/search-terms", label: "搜索热词", glyph: "search", adminOnly: true },
       { href: "/admin/media", label: "媒体库", glyph: "image" },
     ],
   },
@@ -119,6 +122,7 @@ const CORE_GROUPS: MenuGroup[] = [
     superOnly: true,
     children: [
       { href: "/admin/permalinks", label: "固定链接", glyph: "link-2", superOnly: true },
+      { href: "/admin/redirects", label: "重定向", glyph: "arrow-right-left", superOnly: true },
       { href: "/admin/notfound", label: "404 页面", glyph: "file-question" },
       { href: "/admin/backup", label: "备份恢复", glyph: "database-backup", superOnly: true },
       { href: "/admin/export", label: "内容导出", glyph: "file-text", superOnly: true },
@@ -128,7 +132,11 @@ const CORE_GROUPS: MenuGroup[] = [
   },
 ];
 
-function roleAllows(role: Role, x: { adminOnly?: boolean; superOnly?: boolean }): boolean {
+/** Exported R259: the sidebar's adminOnly/superOnly meaning is ALSO the
+ *  backend's policy for the screens those entries open. Keeping one copy of
+ *  `adminOnly = admin || editor` means a future menu edit and the loader gate
+ *  cannot drift apart. */
+export function roleAllows(role: Role, x: { adminOnly?: boolean; superOnly?: boolean }): boolean {
   if (x.superOnly) return role === "admin";
   if (x.adminOnly) return role === "admin" || role === "editor";
   return true;

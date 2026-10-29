@@ -1,7 +1,5 @@
 <script>
-  // /api/media/usage
-  //   GET ?id=N  where this media is referenced (featured image or inline).
-  // A literal route, so it wins over [id].rose for this path.
+  // /api/media/usage GET ?id=N where this media is referenced (featured image or inline).
   import { apiGate, jsonFail } from "@server/admin";
   import { getMediaUsage } from "@server/media";
 

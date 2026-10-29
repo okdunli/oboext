@@ -1,0 +1,54 @@
+<script>
+  // GET /api/admin-stream?since=<ver> — admin realtime **immediate-return poll**.
+  //
+  // Why not SSE, and why not a long poll either:
+  //  - The vendored api dispatcher buffers every response (`prod-server.ts:736`
+  //    and `cli/index.ts:1206` do an unconditional `await response.arrayBuffer()`)
+  //    and never calls `flushHeaders`, so a streaming body only ever resolves
+  //    when the client gives up — SSE hangs.
+  //  - Worse, `cli/edge.ts:173` wraps the WHOLE request unit (api dispatch
+  //    included, :221-226) in `withEdgeQueue`, a global serial chain, and prod
+  //    runs through `createEdgeHandler`. Holding a request open — even for a
+  //    few seconds — parks every other request behind it: one idle admin tab
+  //    would throttle the public site to one request per hold window. Verified
+  //    experimentally (a 3s hold made a concurrent page request take 3.1s).
+  //
+  // So: answer IMMEDIATELY, always. The client re-asks on a timer instead of us
+  // holding the queue. Queue occupancy drops to milliseconds, all three runtime
+  // shapes (dev / preview / dist/prod.mjs) behave the same, and the only cost is
+  // up to one poll interval of latency — irrelevant for an admin badge.
+  //
+  // Contract: `since` is the client's last known version.
+  //   {ver: <current>, kind: "comment", events: 1}  -> something happened
+  //   {ver: since,     kind: null,      events: 0}  -> nothing new
+  //
+  // Payload discipline: {kind, ver} only. No comment body, author, email or
+  // count ever rides here — the client refreshes through its own authorized
+  // loaders after the nudge.
+  import { currentAdminVersion } from "@server/realtime";
+
+  function json(data: unknown, status = 200): Response {
+    return new Response(JSON.stringify(data), {
+      status,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        // Version- and time-dependent: a cached "nothing new" would freeze the
+        // tab until the cache expires.
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  export async function GET(request: Request) {
+    // Admin-only: the payload leaks nothing but a counter, but an anonymous
+    // caller must not be able to poll the endpoint either.
+    if (!getContext().user) return json({ error: "unauthorized" }, 401);
+
+    const sinceRaw = new URL(request.url).searchParams.get("since");
+    const since = Number.isFinite(Number(sinceRaw)) ? Number(sinceRaw) : 0;
+    const now = currentAdminVersion();
+    return now > since
+      ? json({ ver: now, kind: "comment", events: 1 })
+      : json({ ver: since, kind: null, events: 0 });
+  }
+</script>

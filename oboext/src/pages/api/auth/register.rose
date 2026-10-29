@@ -1,7 +1,14 @@
 <script>
 
   import { jsonFail, readBody, apiGate } from "@server/admin";
-  import { hasAnyUser } from "@server/auth";
+  import {
+    hasAnyUser,
+    assertLoginAllowed,
+    recordLoginEvent,
+    LOGIN_EVENTS,
+    clientIp,
+    LoginThrottledError,
+  } from "@server/auth";
   import { sessionCookiePair, withCookies } from "@server/csrf";
   import { getMemberSettings, registerMember } from "@server/members";
   import { getAdminSecurity } from "@server/security";
@@ -27,15 +34,33 @@
       );
       if (captchaError) return jsonFail(captchaError, 400);
 
-      const user = await registerMember({
-        name: body.name,
-        email: body.email,
-        phone: body.phone,
-        password: body.password,
-        emailCode: body.emailCode,
-        phoneCode: body.phoneCode,
-        inviteCode: body.inviteCode,
-      });
+      // Each registration burns a cost-10 bcrypt hash on the render event loop,
+      // so an open-register endpoint with no throttle is a CPU DoS. Bound failed
+      // attempts per IP with the same login throttle.
+      const ip = clientIp(request);
+      try {
+        await assertLoginAllowed("register", ip);
+      } catch (e) {
+        if (e instanceof LoginThrottledError)
+          return jsonFail(t("api.throttled", { n: e.minutes }), 429);
+        throw e;
+      }
+
+      let user;
+      try {
+        user = await registerMember({
+          name: body.name,
+          email: body.email,
+          phone: body.phone,
+          password: body.password,
+          emailCode: body.emailCode,
+          phoneCode: body.phoneCode,
+          inviteCode: body.inviteCode,
+        });
+      } catch (err) {
+        await recordLoginEvent({ eventType: LOGIN_EVENTS.FAIL, account: "register", ip });
+        throw err;
+      }
       return withCookies(
         new Response(JSON.stringify({ user }), {
           status: 200,

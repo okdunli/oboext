@@ -2,20 +2,27 @@
 
   import { apiGate, requireCap } from "@server/admin";
   import { listSecurityEvents } from "@server/security-events";
+  import { pageNum } from "@server/paging";
 
   export async function GET(request) {
     return apiGate(async () => {
       requireCap(getContext().user, "settings:manage");
       const url = new URL(request.url);
-      const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
+      const page = pageNum(url.searchParams.get("page"));
       const type = (url.searchParams.get("type") || "").trim();
+      const typePrefix = (url.searchParams.get("typePrefix") || "").trim();
+      const account = (url.searchParams.get("account") || "").trim();
+      const ip = (url.searchParams.get("ip") || "").trim();
       const limit = 30;
       const out = await listSecurityEvents({
         limit,
         offset: (page - 1) * limit,
         eventType: type || undefined,
+        typePrefix: typePrefix || undefined,
+        account: account || undefined,
+        ip: ip || undefined,
       });
-      return { ...out, page, pages: Math.max(1, Math.ceil(out.total / limit)) };
+      return { ...out, page, pages: Math.max(1, Math.ceil(out.total / limit)), type, typePrefix, account, ip };
     });
   }
 </script>

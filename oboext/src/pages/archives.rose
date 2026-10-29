@@ -1,12 +1,17 @@
 <script>
   // Archive timeline. Bare: year/month index. ?year=Y groups that year by
   // month; ?year=Y&month=M shows the month's posts as cards.
-  let result = $data(() =>
-    __rvLoad("archives", {
+  // R233: paginated - an out-of-range ?page= throws notFound() (the /search
+  // pattern) so a stale deep link answers a real 404, not an empty 200.
+  let result = $data(async () => {
+    const r = await __rvLoad("archives", {
       year: Number(__rvQs().get("year") || 0),
       month: Number(__rvQs().get("month") || 0),
-    })
-  );
+      page: __rvQs().get("page"),
+    });
+    if (r && r.notFound) notFound();
+    return r;
+  });
 </script>
 
 {#if result().head || result().headTitle}

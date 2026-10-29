@@ -6,8 +6,20 @@
   function page() { return d().page || 1; }
   function pages() { return d().pages || 1; }
   function curType() { return d().type || ""; }
+  function curTypePrefix() { return d().typePrefix || ""; }
+  function curAccount() { return d().account || ""; }
+  function curIp() { return d().ip || ""; }
+  function param(k, v) { return v ? "&" + k + "=" + encodeURIComponent(v) : ""; }
+  function anyFilter() { return !!(curType() || curTypePrefix() || curAccount() || curIp()); }
+  // One-click triage: the account/ip cells point straight at the indexed arm
+  // that filters the same value, so "who else came from this address" is a
+  // click instead of a copy-paste into the box.
+  function byAccount(v) { return "/admin/security-logs?account=" + encodeURIComponent(v); }
+  function byIp(v) { return "/admin/security-logs?ip=" + encodeURIComponent(v); }
   function href(p) {
-    return "/admin/security-logs?page=" + p + (curType() ? "&type=" + encodeURIComponent(curType()) : "");
+    return "/admin/security-logs?page=" + p + param("type", curType())
+      + param("typePrefix", curTypePrefix())
+      + param("account", curAccount()) + param("ip", curIp());
   }
   const EVENT_LABEL = {
     "login.success": "登录成功",
@@ -65,7 +77,18 @@
     <option value="password.reset.request">申请重置密码</option>
     <option value="password.reset.done">密码已重置</option>
   </select>
+  <select class="adm-select" name="typePrefix" data-val={curTypePrefix()} style="max-width:220px;" aria-label="按事件类型前缀筛选">
+    <option value="">任意类型前缀</option>
+    <option value="admin.">全部管理操作（admin.*）</option>
+  </select>
+  <input class="adm-input" name="account" value={curAccount()} maxlength="120"
+         placeholder="账号（完整邮箱）" aria-label="按账号筛选" style="max-width:220px;">
+  <input class="adm-input" name="ip" value={curIp()} maxlength="45"
+         placeholder="IP 地址" aria-label="按 IP 筛选" style="max-width:160px;">
   <button class="adm-btn adm-btn-ghost adm-btn-sm" type="submit">筛选</button>
+  {#if anyFilter()}
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/security-logs">清除筛选</a>
+  {/if}
 </form>
 
 <div class="adm-card adm-table-wrap">
@@ -84,8 +107,8 @@
       <tr>
         <td class="adm-hint">{fmt(e.createdAt)}</td>
         <td><span class="adm-tag" style="{eventStyle(e.eventType)}">{eventLabel(e.eventType)}</span></td>
-        <td>{e.account || (e.userId ? "用户 #" + e.userId : "—")}</td>
-        <td class="adm-hint">{e.ip || "—"}</td>
+        <td>{#if e.account}<a href={byAccount(e.account)} title="只看这个账号的事件">{e.account}</a>{/if}{#if !e.account}{e.userId ? "用户 #" + e.userId : "—"}{/if}</td>
+        <td class="adm-hint">{#if e.ip}<a href={byIp(e.ip)} title="只看这个 IP 的事件">{e.ip}</a>{/if}{#if !e.ip}—{/if}</td>
         <td class="adm-hint">{detailText(e)}</td>
       </tr>
       {/each}

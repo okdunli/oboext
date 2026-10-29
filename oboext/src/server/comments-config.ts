@@ -1,7 +1,4 @@
-/**
- * Resolve comment provider configuration from the site settings row into a
- * single client-safe object (parity with oboext lib/comments-config.ts).
- */
+// Resolve comment provider configuration from the site settings row into a single client-safe object (parity with Oboext lib/comments-config.ts).
 import type { SiteSettings } from "./schema.js";
 import type { AvatarSource } from "./avatar.js";
 

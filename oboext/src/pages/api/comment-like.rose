@@ -1,0 +1,82 @@
+<script>
+  // /api/comment-like POST {commentId} likes / DELETE ?commentId= unlikes.
+  // GET ?ids=1,2,3 returns {counts:{id:n}} for the client's initial count
+  // backfill - aggregate counts only, nothing visitor-specific, so it is
+  // public and uncacheable (fresh numbers every page view).
+  // Visitor identity: cookie visitor_key or header x-visitor-key; if neither
+  // exists, generate one once and set it back (same-site, not httpOnly so the
+  // client JS can also read it).
+  import { apiGate, readBody, jsonFail } from "@server/admin";
+  import { likeComment, unlikeComment, likesFor, parseLikeIds } from "@server/comment-likes";
+  import { makeT, headerLocale } from "@server/i18n";
+
+  const COOKIE = "visitor_key";
+
+  function getCookie(request: Request, name: string): string | null {
+    const header = request.headers.get("cookie") || "";
+    for (const part of header.split(";")) {
+      const [k, ...rest] = part.trim().split("=");
+      if (k === name) return decodeURIComponent(rest.join("="));
+    }
+    return null;
+  }
+
+  // Resolves the visitor key and, when it had to be generated, the Set-Cookie
+  // header to persist it.
+  function resolveVisitor(request: Request): { key: string; setCookie: string | null } {
+    const existing =
+      getCookie(request, COOKIE) || request.headers.get("x-visitor-key") || null;
+    if (existing && existing.trim()) return { key: existing.trim(), setCookie: null };
+    const key = crypto.randomUUID();
+    return {
+      key,
+      setCookie: `${COOKIE}=${encodeURIComponent(key)}; Path=/; Max-Age=31536000; SameSite=Lax`,
+    };
+  }
+
+  function respond(data: unknown, setCookie: string | null, status = 200): Response {
+    const headers: Record<string, string> = {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    };
+    if (setCookie) headers["set-cookie"] = setCookie;
+    return new Response(JSON.stringify(data), { status, headers });
+  }
+
+  export async function GET(request: Request): Promise<Response> {
+    const t = makeT(headerLocale(request));
+    return apiGate(async () => {
+      const ids = parseLikeIds(new URL(request.url).searchParams.get("ids"));
+      if (!ids.length) return jsonFail(t("api.bad_request"), 422);
+      const counts: Record<string, number> = {};
+      for (const [id, n] of await likesFor(ids)) counts[String(id)] = n;
+      return respond({ counts }, null);
+    }, t);
+  }
+
+  export async function POST(request: Request): Promise<Response> {
+    const t = makeT(headerLocale(request));
+    return apiGate(async () => {
+      const body = await readBody(request);
+      const commentId = Number(body?.commentId);
+      if (!Number.isInteger(commentId) || commentId <= 0)
+        return jsonFail(t("api.bad_request"), 422);
+      const { key, setCookie } = resolveVisitor(request);
+      const out = await likeComment(getContext().user || null, commentId, key);
+      return respond(out, setCookie);
+    }, t);
+  }
+
+  export async function DELETE(request: Request): Promise<Response> {
+    const t = makeT(headerLocale(request));
+    return apiGate(async () => {
+      const q = new URL(request.url).searchParams;
+      const commentId = Number(q.get("commentId"));
+      if (!Number.isInteger(commentId) || commentId <= 0)
+        return jsonFail(t("api.bad_request"), 422);
+      const { key, setCookie } = resolveVisitor(request);
+      const out = await unlikeComment(getContext().user || null, commentId, key);
+      return respond(out, setCookie);
+    }, t);
+  }
+</script>

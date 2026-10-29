@@ -1,0 +1,46 @@
+<script>
+  // POST /api/newsletter/retry
+  //
+  // Admin-driven retry of the ledger's failed rows (newsletter_sends.failed_at,
+  // db/migrations/0036). The sweeper already retries on a timer, but it does so
+  // through retryFailedSendsThrottled() — at most one pass per five minutes, and
+  // only if the operator happens to look at the site while a tick runs. When the
+  // admin sees the failed table and fixes the cause (a bounced address, a
+  // repaired SMTP host), they need the pass NOW and an answer for the click.
+  // So this route calls retryFailedSends() directly and never the throttle:
+  // 5 minutes is the sweeper's load brake against a dead server, not a rule
+  // about an explicit human action.
+  //
+  // Contract (the two framework hard rules, _CHANGESET_R245 §一):
+  //   - the endpoint does NOT fire-and-forget the pass itself: retryFailedSends
+  //     is awaited because {retried, succeeded} is the answer the operator
+  //     clicked for. What it never does is stream or hold a connection open
+  //     past that pass — the pass is bounded below and the SMTP sessions
+  //     inside it carry their own socket timeouts;
+  //   - the answer is final: { ok, retried, succeeded }. retried = rows this
+  //     pass picked up, succeeded = rows whose mail went out and whose failed_at
+  //     is now NULL again.
+  //
+  // The budget: retryFailedSends' maxAttempts is "how many pairs THIS pass may
+  // work through", and a click on "retry failed sends" should work through the
+  // failure set the operator was just shown — not the sweeper's 3-pair tick
+  // budget (a table of 20 would need seven clicks). It must not be unbounded
+  // either: n pairs is up to n SMTP sessions, and this endpoint answers only
+  // once the pass is done. ADMIN_RETRY_LIMIT is the same constant the loader's
+  // detail window uses, so one click clears what the table listed and the next
+  // read shows whatever is left.
+  //
+  // The row limit stays at the module's own default (200): it only bounds the
+  // SELECT, and retried is already capped at ADMIN_RETRY_LIMIT.
+  import { apiGate, requireUser, can, ServiceError } from "@server/admin";
+  import { retryFailedSends, ADMIN_RETRY_LIMIT } from "@server/newsletter";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const user = requireUser(getContext().user);
+      if (!can(user.role, "content:update:any")) throw new ServiceError("权限不足", 403);
+      const { retried, succeeded } = await retryFailedSends(ADMIN_RETRY_LIMIT, 200);
+      return { ok: true, retried, succeeded };
+    });
+  }
+</script>

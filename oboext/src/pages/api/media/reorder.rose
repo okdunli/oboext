@@ -1,7 +1,5 @@
 <script>
   // /api/media/reorder — POST {ids:[...]} persist the manual drag order.
-  // The ids are the full visible grid in its new order; the server renumbers
-  // the whole library around them. A literal route, so it wins over [id].rose.
   import { apiGate, readBody, jsonFail } from "@server/admin";
   import { reorderMedia } from "@server/media";
 
@@ -12,6 +10,7 @@
         ? body.ids.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0)
         : [];
       if (!ids.length) return jsonFail("缺少 ids", 400);
+      if (ids.length > 500) return jsonFail("批量操作一次最多 500 项", 422);
       return reorderMedia(getContext().user, ids);
     });
   }

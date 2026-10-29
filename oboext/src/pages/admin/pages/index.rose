@@ -3,8 +3,9 @@
   let data = $data(() =>
     __rvLoad("admin.pages", {
       status: __rvQs().get("status") || "",
-      page: Number(__rvQs().get("page") || 1),
+      page: __rvQs().get("page"),
       after: __rvQs().get("after") || "",
+      sort: __rvQs().get("sort") || "",
     }),
   );
   // NB: {#each} compiles its expression as a zero-arg call, so iteration
@@ -31,7 +32,21 @@
     return data().total > data().limit || data().page > 1;
   }
   function pagerHref(p) {
-    return "/admin/pages?page=" + p;
+    const status = __rvQs().get("status");
+    const parts = [];
+    if (status) parts.push("status=" + encodeURIComponent(status));
+    if (byOrder()) parts.push("sort=order");
+    parts.push("page=" + p);
+    return "/admin/pages?" + parts.join("&");
+  }
+  function byOrder() {
+    return __rvQs().get("sort") === "order";
+  }
+  function sortHref() {
+    const status = __rvQs().get("status");
+    return byOrder()
+      ? "/admin/pages" + (status ? "?status=" + encodeURIComponent(status) : "")
+      : "/admin/pages?sort=order" + (status ? "&status=" + encodeURIComponent(status) : "");
   }
   function emptyHint() {
     return rows().length ? [] : [1];
@@ -61,6 +76,9 @@
   <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="draft">转草稿</button>
   <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="archive">批量归档</button>
   <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="delete" data-confirm="确认删除选中的页面？此操作不可撤销。">批量删除</button>
+  <span style="flex:1"></span>
+  {#if byOrder()}<span class="adm-hint">排序值升序，0 最前</span>{/if}
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={sortHref()}>{byOrder() ? "按更新时间" : "按排序值"}</a>
 </div>
 
 <div class="adm-card adm-table-wrap">
@@ -70,6 +88,7 @@
         <th style="width:34px"><input type="checkbox" data-adm-act="check-all"></th>
         <th>标题</th>
         <th style="width:90px">状态</th>
+        <th style="width:72px">排序</th>
         <th style="width:120px">更新</th>
         <th style="width:130px"></th>
       </tr>
@@ -83,6 +102,7 @@
           <div class="sub">/{p.slug}</div>
         </td>
         <td><span class={"adm-tag " + p.status}>{statusLabel(p.status)}</span></td>
+        <td class="adm-hint">{p.order}</td>
         <td class="adm-hint">{fmtDate(p.updatedAt)}</td>
         <td>
           <div class="row-actions">

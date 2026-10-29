@@ -1,5 +1,3 @@
-
-
 import { applyAsyncFilters, HOOKS } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 

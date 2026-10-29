@@ -15,6 +15,7 @@ import { ServiceError } from "./errors.js";
 import { getAdminSecurity } from "./security.js";
 import { createLogger } from "./logger.js";
 import { passwordError } from "./password-policy.js";
+import { memoQuery } from "./cache.js";
 const log = createLogger("auth");
 
 export const COOKIE_NAME = "cms_session";
@@ -35,7 +36,7 @@ export function getSecret(): Uint8Array {
   if (secret && secret.length >= 16) return new TextEncoder().encode(secret);
   if (process.env.NODE_ENV === "production") {
     log.warn(
-      "[oboext] AUTH_SECRET is not set — deriving a stable secret from the database " +
+      "[Oboext] AUTH_SECRET is not set — deriving a stable secret from the database " +
         "connection string so sessions survive across serverless instances. Set AUTH_SECRET " +
         "in production for a non-derivable secret.",
     );
@@ -129,10 +130,24 @@ export async function verifyToken(token: string): Promise<SessionUser | null> {
     // Only session tokens carry the `id` claim; a 2FA challenge ticket
     // (sub = user id, twofa: true) must never authenticate a request.
     if (!Number.isInteger(id)) return null;
-    const [row] = await db
-      .select({ status: users.status, email: users.email, name: users.name, role: users.role })
-      .from(users)
-      .where(eq(users.id, id));
+    // R149: this row read used to run on EVERY authenticated request - a full
+    // round trip (on a remote Postgres: the entire request's latency) whose
+    // value can only change when a WRITE changes it. Memo it per user id; the
+    // freshness half of the old comment's guarantee moves to invalidation:
+    // updateUser/deleteUser already ride invalidateContentCaches() (which now
+    // drops `sess:`), the own-profile update drops it explicitly - so a ban,
+    // delete, demote or rename lands on the very next request, while steady
+    // authenticated traffic stops paying the read. Invalid JWTs and 2FA
+    // tickets never reach the memo (no DB round trip to save there either),
+    // and a failed read is never cached (runOnce propagates, next request
+    // retries).
+    const row = await memoQuery(`sess:${id}`, 30_000, async () => {
+      const [r] = await db
+        .select({ status: users.status, email: users.email, name: users.name, role: users.role })
+        .from(users)
+        .where(eq(users.id, id));
+      return r ?? null;
+    });
     if (!row || row.status !== "active") return null;
     return { id, email: row.email, name: row.name, role: row.role };
   } catch {
@@ -155,6 +170,11 @@ export async function verifyCredentials(
 ): Promise<SessionUser | null> {
   await ensureMigrations();
   const identifier = account.trim();
+  // Both sides are folded, so this is served by the expression indexes of
+  // migration 0029 (lower(email) / lower(name)), not by users_email_unique -
+  // a plain index cannot answer an expression, and without those two indexes
+  // every login attempt, including the failing ones a brute force repeats,
+  // reads the whole users table. Keep the fold and the index in step.
   const [row] = await db
     .select()
     .from(users)
@@ -194,7 +214,20 @@ export async function assertLoginAllowed(account: string, ip: string | null): Pr
         eq(securityEvents.eventType, LOGIN_EVENTS.FAIL),
         gt(securityEvents.createdAt, since),
         or(
-          account ? eq(securityEvents.account, account) : sql`false`,
+          // Case-insensitive on both sides: verifyCredentials resolves the user
+          // with lower(email)=lower(input), so matching the failure counter with a
+          // case-sensitive eq() would let "Alice"/"alice"/"ALICE" each keep their
+          // own counter and never trip the lockout.
+          //
+          // The fold and the ip are what migration 0030 indexes
+          // (lower(account), id) / (ip, id). Without them this ORDER BY id DESC
+          // LIMIT max is planned as a backward walk of the primary key, and an
+          // account with fewer than max failures never fills the LIMIT, so every
+          // ordinary sign-in reads security_events end to end. Do not "optimise"
+          // the OR into a UNION of the two arms: with the indexes in place the
+          // plain shape is already the fast plan, and UNION ALL double-counts a
+          // row matching both arms, which trips the lockout early.
+          account ? sql`lower(${securityEvents.account}) = lower(${account})` : sql`false`,
           ip ? eq(securityEvents.ip, ip) : sql`false`,
         )!,
       ),
@@ -226,8 +259,10 @@ export async function recordLoginEvent(input: {
       ip: input.ip ?? null,
       userAgent: input.userAgent ?? null,
     });
-    // retention: drop records past OBOEXT_SECURITY_LOG_DAYS (no-op unless the
-    // hourly throttle is due)
+    // Retention safety net, not the trigger: retention.ts now prunes on the
+    // process's own clock, so this call is the throttled no-op case (measured
+    // 0.581 ms / 585 buffers). It stays because a serverless cold start has no
+    // idle hour for a timer to fire in.
     await pruneSecurityEvents();
   } catch (e) {
     // audit failure must never block the login flow

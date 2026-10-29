@@ -1,0 +1,38 @@
+<script>
+  // POST /api/newsletter/send { postId }
+  //
+  // Admin manual fanout: one published post to every confirmed subscriber,
+  // through newsletter.ts's sendPostToSubscribers() — the same claim ledger
+  // (INSERT ... ON CONFLICT DO NOTHING RETURNING) enqueueSweep uses, so a
+  // second call for the same post claims zero rows and reports queued: 0.
+  // This is the admin door for the sweeper's window boundary: a post whose
+  // publishedAt lies outside the window (a backdated edit, the R249 edge)
+  // reaches the audience here, while a fresh publish keeps flowing through the
+  // sweeper untouched.
+  //
+  // Contract (the two framework hard rules, _CHANGESET_R245 §一):
+  //   - the endpoint NEVER holds: SMTP is fire-and-forget inside
+  //     sendPostToSubscribers (`void (async () => …)()` shape, deliverPost),
+  //     so this returns the instant the claim rows are written;
+  //   - the answer { ok, queued } is final: queued = newly claimed pairs,
+  //     0 = already sent (or no audience / unknown post).
+  //
+  // Auth: requireUser + content:update:any — the same bar as re-sending a
+  // confirmation code, an admin/editor management action, not a mere read.
+  import { apiGate, readBody, requireUser, can, ServiceError } from "@server/admin";
+  import { sendPostToSubscribers } from "@server/newsletter";
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      const user = requireUser(getContext().user);
+      if (!can(user.role, "content:update:any")) throw new ServiceError("权限不足", 403);
+      const body = await readBody(request);
+      const postId = Math.trunc(Number(body?.postId));
+      if (!Number.isInteger(postId) || postId <= 0) {
+        return { ok: false, error: "缺少有效的 postId" };
+      }
+      const queued = await sendPostToSubscribers(postId);
+      return { ok: true, queued };
+    });
+  }
+</script>

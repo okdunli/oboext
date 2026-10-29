@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { ensureMigrations, reconfigureDatabase, importDriver } from "./db.js";
 import { invalidateOptionCache } from "./options.js";
-import { invalidateAll } from "./cache.js";
+import { invalidateAll, invalidateContentCaches } from "./cache.js";
 import { invalidateSettings } from "./queries.js";
 import { reloadPlugins } from "./plugins.js";
 import { ServiceError } from "./admin.js";
@@ -99,6 +99,14 @@ export async function applyDbConfig(input: {
     invalidateOptionCache();
     invalidateAll();
     invalidateSettings();
+    // R153: invalidateAll() only sweeps the SWR memo store - the framework KV
+    // bundles (home window, sidebars, category lists: up to 60s) and the
+    // response/render hot caches (10s) live in SEPARATE stores that know
+    // nothing about which database produced them. After a driver switch the
+    // app could keep serving the OLD database's pages until those windows
+    // ran out. invalidateContentCaches() is the one call that sweeps kv +
+    // hot + every content memo on top of the invalidateAll above.
+    invalidateContentCaches();
     await reloadPlugins();
   }
 

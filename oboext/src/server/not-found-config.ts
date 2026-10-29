@@ -2,7 +2,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";
-import { invalidate, memoStrict } from "./cache.js";
+import { invalidate, memoStrict, peekMemo } from "./cache.js";
 
 export interface NotFoundSettings {
   title: string;
@@ -20,9 +20,19 @@ export const DEFAULT_NOT_FOUND: NotFoundSettings = {
   showRecent: true,
 };
 
+const NF_MEMO_KEY = "nf:settings";
+const NF_MEMO_TTL = 30_000;
+
+/** Warm-memo peek, or undefined when the entry is cold/expired. Lets a caller
+ *  that would otherwise read in parallel skip work this setting makes
+ *  pointless — see notFound() in loaders.ts. */
+export function peekNotFoundSettings(): NotFoundSettings | undefined {
+  return peekMemo<NotFoundSettings>(NF_MEMO_KEY, NF_MEMO_TTL);
+}
+
 export async function getNotFoundSettings(): Promise<NotFoundSettings> {
   // Hard-TTL memo: the 404 page renders on every unknown path, and bots probe constantly — an uncached options read here cost one round trip per miss.
-  return memoStrict("nf:settings", 30_000, async () => {
+  return memoStrict(NF_MEMO_KEY, NF_MEMO_TTL, async () => {
     const [row] = await db
       .select({ value: options.value })
       .from(options)

@@ -1,5 +1,5 @@
 // Generic key/value option store — port of lib/services/options.ts.
-import { inArray, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "./db.js";
 import { options } from "./schema.js";
 
@@ -28,14 +28,6 @@ export async function getOption<T = unknown>(key: string, fallback?: T): Promise
   const value = (row?.value ?? fallback) as T;
   cache.set(key, { at: Date.now(), value });
   return value;
-}
-
-export async function getOptions(keys: string[]): Promise<Record<string, unknown>> {
-  if (!keys.length) return {};
-  const rows = await db.select().from(options).where(inArray(options.key, keys));
-  const out: Record<string, unknown> = {};
-  for (const r of rows) out[r.key] = r.value;
-  return out;
 }
 
 export async function setOption(key: string, value: unknown): Promise<void> {

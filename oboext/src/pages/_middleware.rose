@@ -534,11 +534,11 @@
 
     // ------------------------------------- renamed-URL 301/302 (content-first)
     // (Historical basis: Rosezm BUG.md AO — a catch-all page calling
-    // redirect() from $data was crashed by the prod edge handler, src/cli/
-    // edge.ts:269 ignored page.redirect and fed buildShell undefined state ->
-    // 500, so the middleware intercepted here and emitted the Response itself.)
-    // That basis is stale: upstream fixed AO in R209 (vendored edge.ts:269-273
-    // now honours page.redirect), so edge no longer 500s. The block is kept
+    // redirect() from $data was crashed by the prod edge handler: the edge
+    // handler ignored page.redirect and fed buildShell undefined state -> 500,
+    // so the middleware intercepted here and emitted the Response itself.)
+    // That basis is stale: upstream fixed AO in R209 (the edge handler now
+    // honours page.redirect), so edge no longer 500s. The block is kept
     // for the content-first semantics framework redirect() cannot express —
     // resolve() runs before the rule is honoured, so a renamed-URL old link
     // whose content (re)claims the slug answers 200 and renders the full page

@@ -8,7 +8,7 @@
 // 从自己有权限的接口重取。
 //
 // R245：本模块的 $store 调用**不会**点亮客户端通道。compiler 的 usesStore 判定
-// （src/compiler/index.ts:1423/:1499）只扫 .rose 路由脚本原文，TS 模块不在其中；
+// （the compiler's usesStore scan）只扫 .rose 路由脚本原文，TS 模块不在其中；
 // 而管理页已按 R245 移除了 $store 字面（prod 下 /__rosezm_store 无挂载，留着就是
 // 无限重连风暴）。所以这里的 $store 只是进程内的 ver 计数盒 + dev/preview 的框架
 // 通道来源，两种用途都不依赖客户端订阅。

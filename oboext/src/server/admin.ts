@@ -1600,15 +1600,11 @@ export async function updateSettings(user: SessionUser, input: Record<string, un
   // below now does too).
   invalidateContentCaches();
   if (typeof input.activeThemeSlug === "string") {
-    // Clear the render memo so the next request re-renders with the new theme.
-    // invalidateContentCaches() is the app's cache-invalidation entry point
-    // (server/cache.ts) — the previously referenced invalidateRenderCache() was
-    // never defined or imported anywhere in this project, so saving any
-    // settings payload containing activeThemeSlug threw
-    // `ReferenceError: invalidateRenderCache is not defined` and 500'd the
-    // whole /api/settings route (i.e. every theme switch from the admin).
-    invalidateContentCaches();
-    // Lazy import: themes.js depends on this module (ServiceError).
+    // Lazy import: themes.js depends on this module (ServiceError). (The
+    // theme-switch branch used to call invalidateContentCaches() again here,
+    // and once also referenced invalidateRenderCache() — which was never
+    // defined anywhere and 500'd every theme switch. One invalidation pass
+    // above covers all of it.)
     const { invalidateActiveThemeCache } = await import("./themes.js");
     invalidateActiveThemeCache();
   }

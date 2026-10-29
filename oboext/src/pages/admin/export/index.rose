@@ -5,7 +5,7 @@
   // 内容导入面板的浏览器端绑定。
   //
   // 为什么必须待在这唯一一个 script 块里：编译器的 COMPONENT_RE
-  // （src/compiler/index.ts:32）不带 g，只匹配第一个 script 块，后面的块既
+  // （the framework compiler's COMPONENT_RE）不带 g，只匹配第一个 script 块，后面的块既
   // 不进 script 也不留在模板里，构建成功且零警告地被丢掉
   // （_FRAMEWORK_GOTCHAS.md §2.1）。
   //

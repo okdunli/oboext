@@ -49,7 +49,7 @@ import { themeToCss, resolveThemeConfig } from "./theme-tokens.js";
 import { skyscraperBridgeRoot, skyscraperBridgeDark, themeColorMetas } from "./theme-bridge.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
-import { getNotFoundSettings } from "./not-found-config.js";
+import { getNotFoundSettings, peekNotFoundSettings } from "./not-found-config.js";
 import { redirectFor as ruleFor } from "./redirects.js";
 import { memoQuery, peekMemo, kvGet, kvSet } from "./cache.js";
 import { getPublicRegisterConfig } from "./members.js";
@@ -2894,11 +2894,17 @@ async function notFound(_p: unknown, _ctx: Ctx) {
   // round trip on every 404.
   const locale = localeOf(_ctx);
   const t = makeT(locale);
+  // The recent-posts fetch normally rides the same parallel wave as the
+  // settings reads: awaiting it behind them cost one serial round trip on
+  // every 404. But when the memo already tells us showRecent is off, that
+  // query is pure waste — and bots probe unknown paths constantly, so this is
+  // the single most repeated read in the app. Peek first, then decide.
+  const wantRecent = peekNotFoundSettings()?.showRecent ?? true;
   const [settings, site, themeSlug, recentResult] = await Promise.all([
     getNotFoundSettings(),
     getSettings(),
     getActiveThemeSlug(),
-    listPosts({ status: "published", limit: 6 }),
+    wantRecent ? listPosts({ status: "published", limit: 6 }) : Promise.resolve(null),
   ]);
   // The 404 body is a THEME capability: a theme that ships a designed
   // not-found page mirrors it as chrome.notFoundPage. The program asks for the
@@ -2906,7 +2912,7 @@ async function notFound(_p: unknown, _ctx: Ctx) {
   const chromeForNotFound = getThemeChrome(themeSlug);
   const themed = typeof chromeForNotFound.notFoundPage === "function";
   let recent: Array<{ url: string; title: string }> = [];
-  if (settings.showRecent) {
+  if (settings.showRecent && recentResult) {
     recent = (recentResult.items || [])
       .slice(0, themed ? 5 : 6)
       .map((p: PostView) => ({ url: localeHref(p.url, locale), title: p.title }));

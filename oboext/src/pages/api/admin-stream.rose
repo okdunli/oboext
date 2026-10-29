@@ -2,16 +2,16 @@
   // GET /api/admin-stream?since=<ver> — admin realtime **immediate-return poll**.
   //
   // Why not SSE, and why not a long poll either:
-  //  - The vendored api dispatcher buffers every response (`prod-server.ts:736`
-  //    and `cli/index.ts:1206` do an unconditional `await response.arrayBuffer()`)
-  //    and never calls `flushHeaders`, so a streaming body only ever resolves
-  //    when the client gives up — SSE hangs.
-  //  - Worse, `cli/edge.ts:173` wraps the WHOLE request unit (api dispatch
-  //    included, :221-226) in `withEdgeQueue`, a global serial chain, and prod
-  //    runs through `createEdgeHandler`. Holding a request open — even for a
-  //    few seconds — parks every other request behind it: one idle admin tab
-  //    would throttle the public site to one request per hold window. Verified
-  //    experimentally (a 3s hold made a concurrent page request take 3.1s).
+  //  - The Rosezm api dispatcher (the installed package: the prod server and
+  //    the CLI server both) buffers every response with an unconditional
+  //    `await response.arrayBuffer()` and never calls `flushHeaders`, so a
+  //    streaming body only ever resolves when the client gives up — SSE hangs.
+  //  - Worse, the edge handler wraps the WHOLE request unit (api dispatch
+  //    included) in a global serial chain, and prod runs through it. Holding a
+  //    request open — even for a few seconds — parks every other request
+  //    behind it: one idle admin tab would throttle the public site to one
+  //    request per hold window. Verified experimentally (a 3s hold made a
+  //    concurrent page request take 3.1s).
   //
   // So: answer IMMEDIATELY, always. The client re-asks on a timer instead of us
   // holding the queue. Queue occupancy drops to milliseconds, all three runtime

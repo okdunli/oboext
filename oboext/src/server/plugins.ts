@@ -71,28 +71,33 @@ export async function installPluginZip(buf: Buffer): Promise<PluginView> {
   }
 }
 
+/** Build the admin view for one row. listPlugins() maps this over the table;
+ *  single-row callers (getPlugin and the two mutating services) select just
+ *  their own row instead of dragging the whole table through memory. */
+function toPluginView(row: Plugin): PluginView {
+  const manifest = getPluginManifest(row.slug);
+  return {
+    ...row,
+    manifest,
+    installed: !!manifest,
+    hasEntry: !!manifest && pluginHasEntry(row.slug),
+    hasAdmin: !!manifest && pluginHasAdmin(row.slug),
+    resolvedSettings: resolveSettings(manifest?.settings ?? [], row.settings),
+    runnable: Object.prototype.hasOwnProperty.call(PLUGIN_ENTRIES, row.slug),
+  };
+}
+
 export async function listPlugins(): Promise<PluginView[]> {
   await ensureMigrations();
   const rows = await db.select().from(plugins).orderBy(asc(plugins.slug));
-  return rows.map((row: Plugin) => {
-    const manifest = getPluginManifest(row.slug);
-    return {
-      ...row,
-      manifest,
-      installed: !!manifest,
-      hasEntry: !!manifest && pluginHasEntry(row.slug),
-      hasAdmin: !!manifest && pluginHasAdmin(row.slug),
-      resolvedSettings: resolveSettings(manifest?.settings ?? [], row.settings),
-      runnable: Object.prototype.hasOwnProperty.call(PLUGIN_ENTRIES, row.slug),
-    };
-  });
+  return rows.map(toPluginView);
 }
 
 export async function getPlugin(slug: string): Promise<PluginView> {
-  const all = await listPlugins();
-  const found = all.find((p) => p.slug === slug);
-  if (!found) throw new ServiceError("插件不存在", 404);
-  return found;
+  await ensureMigrations();
+  const [row] = await db.select().from(plugins).where(eq(plugins.slug, slug)).limit(1);
+  if (!row) throw new ServiceError("插件不存在", 404);
+  return toPluginView(row);
 }
 
 export async function setPluginEnabled(
@@ -106,10 +111,12 @@ export async function setPluginEnabled(
     .where(eq(plugins.slug, slug))
     .returning();
   if (!row) throw new ServiceError("插件不存在", 404);
-  invalidatePluginCache();
+  // Discovery memo stays: enabling a row touches the TABLE, not the plugins/
+  // directory — invalidatePluginDiscovery() here would just force the next
+  // read to re-walk the folder for identical manifests.
   pluginsReady = false;
   await ensurePluginsLoaded();
-  return getPlugin(slug);
+  return toPluginView(row);
 }
 
 export async function updatePluginSettings(
@@ -121,14 +128,17 @@ export async function updatePluginSettings(
   const clean = coerceSettings(manifest?.settings ?? [], payload);
   const [existing] = await db.select().from(plugins).where(eq(plugins.slug, slug));
   if (!existing) throw new ServiceError("插件不存在", 404);
-  await db
+  // .returning() hands back the merged row directly — the follow-up single-row
+  // read this used to do was a second round trip for data we already have.
+  const [row] = await db
     .update(plugins)
     .set({ settings: { ...existing.settings, ...clean } })
-    .where(eq(plugins.slug, slug));
+    .where(eq(plugins.slug, slug))
+    .returning();
   invalidatePluginCache();
   pluginsReady = false;
   await ensurePluginsLoaded();
-  return getPlugin(slug);
+  return toPluginView(row);
 }
 
 // Ensure every enabled plugin has been imported and had its hooks registered.

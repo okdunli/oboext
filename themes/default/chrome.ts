@@ -267,7 +267,7 @@ function defaultPostCard(p: PostView, idx: number, t?: Translate): string {
       : "";
   return `<article class="group flex flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] transition hover:-translate-y-0.5 hover:border-[var(--accent)]">` +
     (p.featuredImage
-      ? `<a href="${esc(p.url)}" class="block aspect-[16/9] overflow-hidden"><img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105"${R.imgPerfAttrs(p.featuredImage, { lazy: true, srcset: true })}></a>`
+      ? `<a href="${esc(p.url)}" class="block aspect-[16/9] overflow-hidden"><img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105"${R.imgPerfAttrs(p.featuredImage, { lazy: true, srcset: true, sizes: "(min-width: 640px) 484px, calc(100vw - 32px)" })}></a>`
       : "") +
     `<div class="flex flex-1 flex-col p-5">` +
     (cats ? `<div class="mb-2 flex flex-wrap gap-2 text-xs">${cats}</div>` : "") +
@@ -297,7 +297,7 @@ function defaultHome(parts: HomeParts): string {
     const cats = ((featured.categories || []).slice(0, 3).map(defaultCatPill)).join("");
     featuredHtml = `<article class="group overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--surface)]">` +
       (featured.featuredImage
-        ? `<a href="${esc(featured.url)}" class="block aspect-[21/9] overflow-hidden"><img src="${esc(featured.featuredImage)}" alt="${esc(featured.title)}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105"${R.imgPerfAttrs(featured.featuredImage, { lazy: true, srcset: true })}></a>`
+        ? `<a href="${esc(featured.url)}" class="block aspect-[21/9] overflow-hidden"><img src="${esc(featured.featuredImage)}" alt="${esc(featured.title)}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105"${R.imgPerfAttrs(featured.featuredImage, { lazy: true, srcset: true, sizes: R.IMG_SIZES_BODY })}></a>`
         : "") +
       `<div class="p-6">${cats ? `<div class="mb-2 flex flex-wrap gap-2 text-xs">${cats}</div>` : ""}` +
       `<h2 class="text-2xl font-bold leading-snug text-[var(--text)]"><a href="${esc(featured.url)}" class="transition group-hover:text-[var(--accent)]">${esc(featured.title)}</a></h2>` +
@@ -660,7 +660,7 @@ function defaultPostPage(parts: PostPageParts): string {
     `<span class="df-meta-item" data-views-post="${p.id}">${lucideSvg("eye", 14)}<span data-views-count>${p.views}</span>${T("post.reads")}</span>` +
     (p.commentsCount > 0 ? `<span class="df-meta-item">${lucideSvg("message-circle", 14)}${T("post.comments", { n: p.commentsCount })}</span>` : "") +
     `</div>${meta}</header>` +
-    (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="mb-6 w-full rounded-2xl border border-[var(--border)] object-cover"${R.imgPerfAttrs(p.featuredImage, { high: true, srcset: true })}>` : "") +
+    (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="mb-6 w-full rounded-2xl border border-[var(--border)] object-cover"${R.imgPerfAttrs(p.featuredImage, { high: true, srcset: true, sizes: R.IMG_SIZES_BODY })}>` : "") +
     tocHtml +
     `<div class="prose-cms">${parts.bodyHtml}</div>` +
     (tags || "") +

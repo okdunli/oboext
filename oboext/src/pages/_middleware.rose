@@ -99,6 +99,16 @@
       } catch (e) {}
     }
 
+    // A double slash anywhere but the root is not a second page: `//foo`
+    // used to answer 200 with the HOME document, which is an unbounded set of
+    // duplicate URLs every crawler can index. Collapse it and 308 to the
+    // single-slash path, the same contract the framework applies to a trailing
+    // slash. (`/foo//bar` already 404'd; this makes the whole class uniform.)
+    if (/\/\//.test(real.pathname)) {
+      const collapsed = real.pathname.replace(/\/{2,}/g, "/");
+      return Response.redirect(new URL(collapsed + real.search, real.origin), 308);
+    }
+
     const ctx = getContext();
     ctx.pathname = real.pathname;
     // Canonical, og:url, sitemap/feed URLs and friends are negotiated bytes:
@@ -226,7 +236,7 @@
       !rp.startsWith("/theme-style/") &&
       rp !== "/favicon.ico" &&
       rp !== "/manifest.webmanifest" &&
-      rp !== "/robots.txt" &&
+      rp !== "/robots.txt" && rp !== "/opensearch.xml" &&
       !isSitemapPath(rp) &&
       rp !== "/feed.xml" &&
       rp !== "/rss.xml" &&
@@ -264,7 +274,7 @@
         rp !== "/search" &&
         rp !== "/favicon.ico" &&
         rp !== "/manifest.webmanifest" &&
-        rp !== "/robots.txt" &&
+        rp !== "/robots.txt" && rp !== "/opensearch.xml" &&
         !isSitemapPath(rp) &&
         rp !== "/feed.xml" &&
         rp !== "/rss.xml" &&
@@ -505,6 +515,15 @@
         }
       }
     }
+    if (rp === "/opensearch.xml") {
+      // Browser search-provider discovery. A machine document like robots.txt:
+      // locale-independent, no canonical, same 5-minute window.
+      const { openSearchDocument, OPENSEARCH_CONTENT_TYPE } = await import("@server/opensearch");
+      return xmlResponse(await openSearchDocument(real.origin), request, {
+        "content-type": OPENSEARCH_CONTENT_TYPE,
+        "cache-control": "public, max-age=300",
+      });
+    }
     if (rp === "/robots.txt") {
       // Same 5-minute window as sitemap/feed: crawlers re-fetch robots.txt
       // aggressively, and the body is rebuilt from DB-backed settings on
@@ -549,6 +568,7 @@
         !rp.startsWith("/uploads/") && !rp.startsWith("/theme-assets/") && !rp.startsWith("/plugin-assets/") &&
         !rp.startsWith("/theme-style/") && rp !== "/" && rp !== "/search" && rp !== "/archives" &&
         rp !== "/favicon.ico" && rp !== "/manifest.webmanifest" && rp !== "/robots.txt" &&
+        rp !== "/opensearch.xml" &&
         !isSitemapPath(rp) && rp !== "/feed.xml" && rp !== "/rss.xml" && rp !== "/feed" &&
         rp !== "/feed.json" && !rp.endsWith("/feed.xml") && !rp.endsWith("/feed.json") &&
         reg && reg.dispatch) {

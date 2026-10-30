@@ -501,7 +501,7 @@ export const zhCatalog: Record<string, string> = {
   "newsletter.mail_confirm_lead": "您正在订阅「{site}」的文章更新，点击下面的链接完成确认：",
   "newsletter.mail_confirm_cta": "确认订阅",
   "newsletter.mail_post_subject": "【{site}】新文章：{title}",
-  "newsletter.mail_post_lead": "您订阅的站点发布了新文章：",
+  "newsletter.mail_unsub": "退订",
   "newsletter.mail_foot": "如不想再收到此类邮件，请回复本邮件或联系站长。",
   // ---- public subscribe page (/newsletter) ----
   "newsletter.title": "订阅 Newsletter",
@@ -1026,7 +1026,7 @@ export const enCatalog: Record<string, string> = {
   "newsletter.mail_confirm_lead": "You asked to follow new posts on “{site}”. Confirm with the link below:",
   "newsletter.mail_confirm_cta": "Confirm subscription",
   "newsletter.mail_post_subject": "[{site}] New post: {title}",
-  "newsletter.mail_post_lead": "A new post was published on the site you follow:",
+  "newsletter.mail_unsub": "Unsubscribe",
   "newsletter.mail_foot": "If you no longer wish to receive these emails, reply to this email or contact the site owner.",
   // ---- public subscribe page (/newsletter) ----
   "newsletter.title": "Subscribe to the newsletter",

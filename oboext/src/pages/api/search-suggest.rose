@@ -1,5 +1,12 @@
 <script>
-  // /api/search-suggest?q=KEYWORD Public, unauthenticated live search suggestions for the bluemix nav search popover.
+  // /api/search-suggest?q=KEYWORD  Public, unauthenticated live search suggestions
+  // for the nav search popover.
+  //
+  // ?format=opensearch answers the SAME rows in the OpenSearch Suggestions
+  // shape — ["query", ["term", …], ["", …], ["/blog/slug", …]] — so a browser
+  // that installed the site as a search engine (see /opensearch.xml) gets a
+  // suggest list while typing. Two shapes, one scan: the memoized payload is
+  // shared, the projection differs.
   import { listPosts, suggestDedupe, suggestHighlight } from "@server/queries";
   import { memoQuery } from "@server/cache";
 
@@ -21,20 +28,27 @@
   // prefix free without serving anything a publish would have changed.
   const CACHE = "public, max-age=30";
 
-  function json(data, status = 200) {
+  function json(data, status = 200, type = "application/json; charset=utf-8") {
     return new Response(JSON.stringify(data), {
       status,
       // A 500 is transient - caching it would blank the popover for 30s.
       headers: {
-        "content-type": "application/json; charset=utf-8",
+        "content-type": type,
         "cache-control": status >= 400 ? "no-store" : CACHE,
       },
     });
   }
 
   export async function GET(request) {
-    const q = (new URL(request.url).searchParams.get("q") || "").trim().slice(0, MAX_Q);
-    if (q.length < MIN_Q) return json({ items: [], total: 0 });
+    const url = new URL(request.url);
+    const format = url.searchParams.get("format") === "opensearch" ? "opensearch" : "ui";
+    const q = (url.searchParams.get("q") || "").trim().slice(0, MAX_Q);
+    // Too short to scan: each shape still answers in its own empty form.
+    if (q.length < MIN_Q) {
+      return format === "opensearch"
+        ? json([q, [], [], []], 200, "application/x-suggestions+json; charset=utf-8")
+        : json({ items: [], total: 0 });
+    }
     try {
       // R156: memoized 20s per normalized query. Typing is a PREFIX walk -
       // "ja", "jav", "java" are separate requests but the same few prefixes are
@@ -63,9 +77,22 @@
           total: total || 0,
         };
       });
+      if (format === "opensearch") {
+        // OpenSearch Suggestions: [query, [titles], [descriptions], [urls]].
+        // The title still carries the / highlight marks the DOM
+        // popover renders; a browser's suggest list shows them as-is, so strip
+        // them here and keep the plain title.
+        const plain = (t) => String(t).replace(/[]/g, "");
+        const rows = payload.items || [];
+        return json(
+          [q, rows.map((r) => plain(r.title)), rows.map(() => ""), rows.map((r) => r.url)],
+          200,
+          "application/x-suggestions+json; charset=utf-8",
+        );
+      }
       return json(payload);
     } catch (e) {
-      return json({ items: [], total: 0 }, 500);
+      return json(format === "opensearch" ? [q, [], [], []] : { items: [], total: 0 }, 500);
     }
   }
 </script>

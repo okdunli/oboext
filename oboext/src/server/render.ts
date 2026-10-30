@@ -9,7 +9,7 @@ import { ensurePluginsLoaded } from "./plugins.js";
 import { inArray } from "drizzle-orm";
 import { db } from "./db.js";
 import { media } from "./schema.js";
-import { listPosts } from "./queries.js";
+import { listPosts, getSettings } from "./queries.js";
 import { uploadsAbsPath } from "./storage.js";
 import { sanitizeHtml } from "./sanitize.js";
 import { authorUrlFor } from "./links.js";
@@ -70,6 +70,33 @@ export function extractSubtitle(title: string): string {
 // F2e (responsive variants for uploads): the sibling `.wNNN` files beside an uploaded image (generated at upload time by media.ts) become a srcset.
 const variantCache = new Map<string, string>();
 
+// Layout truth for a body image in the default theme's post page: the article
+// sits in the 1fr column of `max-w-5xl px-4` minus a 300px sidebar and a 32px
+// gap (chrome.ts `lg:grid-cols-[1fr_300px]`), so at lg the column is
+// min(100vw, 1024px) - 364px and below it the full padded container. Other
+// themes inherit the hint — always tighter than the 100vw default a bare
+// srcset implies, never looser.
+export const IMG_SIZES_BODY = "(min-width: 1024px) 660px, calc(100vw - 32px)";
+
+// Wide-column themes put the article over the 800px variant bucket, where the
+// default's 660px hint would upscale the 800w file to fill them (bluemix's
+// .main-content alone is 1216px). Variants ship at [400, 800, 1600], so the
+// hint only has to land in the right BUCKET - one wide value covers
+// skyscraper (~1130px) and codeman; pseudolinear keeps its own 920px column.
+export const IMG_SIZES_BODY_WIDE = "(min-width: 1024px) 1130px, calc(100vw - 40px)";
+
+const THEME_BODY_SIZES: Record<string, string> = {
+  bluemix: "(min-width: 1280px) 1216px, calc(100vw - 40px)",
+  pseudolinear: "(min-width: 960px) 920px, calc(100vw - 44px)",
+  skyscraper: IMG_SIZES_BODY_WIDE,
+  codeman: IMG_SIZES_BODY_WIDE,
+};
+
+/** Body-image sizes of the ACTIVE theme; unknown theme -> the default column. */
+export function bodySizesFor(activeThemeSlug?: string | null): string {
+  return (activeThemeSlug && THEME_BODY_SIZES[activeThemeSlug]) || IMG_SIZES_BODY;
+}
+
 // URL-keyed memo caches would otherwise grow one entry per distinct image for
 // the life of the process. Cap them FIFO (Map preserves insertion order, so the
 // first key is the oldest); an evicted entry is just recomputed on next use.
@@ -78,13 +105,37 @@ function memoSet<V>(m: Map<string, V>, key: string, val: V, cap = 2000): void {
   if (m.size > cap) m.delete(m.keys().next().value as string);
 }
 
-/** Drop the memoized srcset lookup for one uploads URL (after variants land). */
+// R400: this cache holds the PIXEL SIZE of an uploads file, keyed by URL — but
+// a media replacement keeps the URL and swaps the bytes. A stale entry would
+// publish width/height that no longer match the image (the CLS guard becomes
+// the layout shift) and wrong og:image dimensions. The cache therefore lives
+// beside the srcset cache and is dropped by the same invalidation call.
+const contentImgDimCache = new Map<string, [number, number] | null>();
+
+/** Drop the memoized srcset lookup for one uploads URL (after variants land).
+ *  R400: the pixel-size memo for the same URL goes with it — a replaced
+ *  image keeps its URL but not its dimensions. */
 export function invalidateVariantCache(url: string): void {
   variantCache.delete(url);
+  contentImgDimCache.delete(url);
 }
 
-export function imgVariantAttrs(url: string): string {
+/**
+ * srcset + matching sizes in one fragment. `sizes` rides ONLY when a srcset
+ * exists: a bare sizes hint is dead weight (and some browsers then assume
+ * 100vw anyway, exactly what the hint exists to correct). Callers pass the
+ * layout truth of the slot the image renders in — the same /uploads/ URL can
+ * be a 2-col card on one page and a full-width hero on another, so the value
+ * belongs to the call site, never to the URL-keyed variant cache.
+ */
+export function imgVariantAttrs(url: string, sizes?: string): string {
   if (!url || !url.startsWith("/uploads/")) return "";
+  const srcset = imgVariantSrcset(url);
+  if (!srcset) return "";
+  return sizes ? `${srcset} sizes="${esc(sizes)}"` : srcset;
+}
+
+function imgVariantSrcset(url: string): string {
   const hit = variantCache.get(url);
   if (hit !== undefined) return hit;
   let attrs = "";
@@ -493,7 +544,11 @@ function highlightCodeBlocks(html: string): string {
 // including raw <img> from the `html` block. The FIRST in-body image is the
 // usual LCP element, so it loads eagerly with high fetch-priority; every later
 // image is lazy. Hero/featured images render separately.
-const contentImgDimCache = new Map<string, [number, number] | null>();
+// R400: this cache holds the PIXEL SIZE of an uploads file, keyed by URL — but
+// a media replacement keeps the URL and swaps the bytes. A stale entry would
+// publish width/height that no longer match the image (the CLS guard becomes
+// the layout shift) and wrong og:image dimensions. The cache therefore lives
+// beside the srcset cache and is dropped by the same invalidation call.
 
 function readImageDims(abs: string): [number, number] | null {
   let fd: number;
@@ -589,7 +644,7 @@ export function addLazyImages(html: string): string {
   });
 }
 
-export function optimizeContentImages(html: string): string {
+export function optimizeContentImages(html: string, sizes: string = IMG_SIZES_BODY): string {
   if (!/<img/i.test(html)) return html;
   return addLazyImages(html).replace(/<img\b([^>]*)>/gi, (_full, attrsRaw: string) => {
     let attrs = attrsRaw.replace(/\s*\/\s*$/, "");
@@ -600,7 +655,7 @@ export function optimizeContentImages(html: string): string {
       const url = srcM?.[1];
       if (url && url.startsWith("/uploads/")) {
         if (!hasSrcset) {
-          const vs = imgVariantAttrs(url);
+          const vs = imgVariantAttrs(url, sizes);
           if (vs) attrs += vs;
         }
         if (!hasDims) {
@@ -623,7 +678,7 @@ export function optimizeContentImages(html: string): string {
 // intrinsic width/height (CLS guard) and a responsive srcset when variants exist.
 export function imgPerfAttrs(
   url: string,
-  opts: { lazy?: boolean; high?: boolean; srcset?: boolean } = {},
+  opts: { lazy?: boolean; high?: boolean; srcset?: boolean; sizes?: string } = {},
 ): string {
   if (!url) return "";
   let a = "";
@@ -632,7 +687,7 @@ export function imgPerfAttrs(
   if (opts.high) a += ` fetchpriority="high"`;
   if (url.startsWith("/uploads/")) {
     if (opts.srcset !== false) {
-      const vs = imgVariantAttrs(url);
+      const vs = imgVariantAttrs(url, opts.sizes);
       if (vs) a += vs;
     }
     let dim = contentImgDimCache.get(url);
@@ -666,7 +721,17 @@ export async function buildPostBody(
     HOOKS.contentHtml,
     { html, context: { kind, slug: p.slug, title: p.title ?? undefined } },
   );
-  return optimizeContentImages(filtered.html);
+  // Body HTML is one string shared by the page render and syndication, but it
+  // renders into the ACTIVE theme's column - a bluemix article is ~1216px
+  // wide, the default's 660px hint would upscale its 800w variants.
+  let themeSlug: string | null = null;
+  try {
+    const s = (await getSettings()) as { activeThemeSlug?: string | null };
+    themeSlug = s.activeThemeSlug ?? null;
+  } catch {
+    themeSlug = null; // a settings hiccup must not fail the body build
+  }
+  return optimizeContentImages(filtered.html, bodySizesFor(themeSlug));
 }
 
 /** DB-backed resolvers for the [gallery]/[posts] shortcodes (original
@@ -733,7 +798,7 @@ export function postCard(p: PostView, award = 0, t?: Translate, high = false): s
   // still come from imgPerfAttrs (CLS stays guarded either way).
   const imgAttrs = high ? { srcset: false } : { srcset: false, lazy: true };
   const img = p.featuredImage
-    ? `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"><img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)}${imgPerfAttrs(p.featuredImage, imgAttrs)}${high ? ' loading="eager" fetchpriority="high"' : ""} crossorigin="anonymous"></a>`
+    ? `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"><img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage, SKY_CARD_SIZES)}${imgPerfAttrs(p.featuredImage, imgAttrs)}${high ? ' loading="eager" fetchpriority="high"' : ""} crossorigin="anonymous"></a>`
     : `<a class="post-thumbnail-wrapper" href="${esc(p.url)}"></a>`;
   const subtitle = extractSubtitle(p.title);
   // Cards have no like BUTTON (the heart is a static count), so "I liked this"
@@ -785,6 +850,12 @@ export function nestedCard(p: PostView, t?: Translate, high = false): string {
     `</div><a class="read-more" href="${esc(p.url)}">${L("post.read_more")}</a></div></div></div>`
   );
 }
+
+// Card slots of the skyscraper grid (theme.css `.th-skyscraper`): 25% of the
+// 1480px container at >=1510, 25% of 1170px at >=1200, a third of 970px at
+// >=992, a third of 750px at >=768, half the viewport below.
+const SKY_CARD_SIZES =
+  "(min-width: 1510px) 370px, (min-width: 1200px) 292px, (min-width: 992px) 323px, (min-width: 768px) 250px, 50vw";
 
 export const section = (title: string, inner: string): string =>
   `<div class="clearfix"><div class="pf-modal-title"><span class="title-text">${title}</span></div>${inner}</div>`;

@@ -246,6 +246,8 @@ interface DuePost {
   pinyinSlug: string | null;
   initialSlug: string | null;
   format: string;
+  excerpt: string | null;
+  featuredImage: string | null;
 }
 
 /**
@@ -275,17 +277,19 @@ export async function sendPostToSubscribers(postId: number): Promise<number> {
       pinyinSlug: posts.pinyinSlug,
       initialSlug: posts.initialSlug,
       format: posts.format,
+      excerpt: posts.excerpt,
+      featuredImage: posts.featuredImage,
     })
     .from(posts)
     .where(eq(posts.id, id))
     .limit(1);
   if (!post) return 0;
 
-  const audience: { id: number; email: string; locale: Locale }[] = (await db
-    .select({ id: subscribers.id, email: subscribers.email, locale: subscribers.locale })
+  const audience: { id: number; email: string; locale: Locale; token: string }[] = (await db
+    .select({ id: subscribers.id, email: subscribers.email, locale: subscribers.locale, token: subscribers.token })
     .from(subscribers)
     .where(and(sql`${subscribers.confirmedAt} is not null`, isNull(subscribers.unsubscribedAt)))
-  ).map((r) => ({ id: r.id, email: r.email, locale: r.locale === "en" ? "en" : DEFAULT_LOCALE }));
+  ).map((r) => ({ id: r.id, email: r.email, locale: r.locale === "en" ? "en" : DEFAULT_LOCALE, token: r.token }));
   if (!audience.length) return 0;
 
   // The claim IS the durable record: only the rows this insert returns fire.
@@ -319,7 +323,7 @@ export async function sendPostToSubscribers(postId: number): Promise<number> {
  */
 async function deliverAndRecord(
   post: DuePost,
-  recipients: { id: number; email: string; locale: Locale }[],
+  recipients: { id: number; email: string; locale: Locale; token: string }[],
 ): Promise<void> {
   let failed: number[];
   try {
@@ -510,13 +514,15 @@ async function resendBatch(postId: number, subscriberIds: number[]): Promise<num
       pinyinSlug: posts.pinyinSlug,
       initialSlug: posts.initialSlug,
       format: posts.format,
+      excerpt: posts.excerpt,
+      featuredImage: posts.featuredImage,
     })
     .from(posts)
     .where(eq(posts.id, postId))
     .limit(1);
   if (!post) return [];
   const audience = await db
-    .select({ id: subscribers.id, email: subscribers.email, locale: subscribers.locale })
+    .select({ id: subscribers.id, email: subscribers.email, locale: subscribers.locale, token: subscribers.token })
     .from(subscribers)
     .where(
       and(
@@ -530,6 +536,7 @@ async function resendBatch(postId: number, subscriberIds: number[]): Promise<num
     id: r.id,
     email: r.email,
     locale: r.locale === "en" ? "en" : DEFAULT_LOCALE,
+    token: r.token,
   }));
   let okIds: number[];
   try {
@@ -598,7 +605,7 @@ export async function retryFailedSendsThrottled(now = Date.now(), maxAttempts = 
  */
 async function deliverPost(
   post: DuePost,
-  recipients: { id: number; email: string; locale: Locale }[],
+  recipients: { id: number; email: string; locale: Locale; token: string }[],
 ): Promise<{ failedSubscriberIds: number[] }> {
   if (!(await smtpReady())) {
     log.debug("[newsletter] smtp not configured, skip post fanout");
@@ -620,13 +627,22 @@ async function deliverPost(
     if (!set.length) continue;
     const t = makeT(locale);
     const subject = t("newsletter.mail_post_subject", { site: siteName, title: post.title });
-    try {
-      // sendTo's rejection propagates into `failed` here — it is NOT swallowed,
-      // or the batch would silently count as delivered.
-      await sendTo(notify, set.map((r) => r.email), subject, postUrl, t, siteName);
-    } catch (e) {
-      log.warn("[newsletter] post mail batch failed:", e instanceof Error ? e.message : String(e));
-      failed.push(...set.map((r) => r.id));
+    // One message per RECIPIENT: the unsubscribe link carries that
+    // subscriber's capability token, so a shared batch mail cannot carry it.
+    for (const r of set) {
+      const { html, text } = buildPostMail(
+        { title: post.title, postUrl, excerpt: post.excerpt, featuredImage: post.featuredImage },
+        { origin, token: r.token, siteName },
+        t,
+      );
+      try {
+        // sendTo's rejection propagates into `failed` here — it is NOT swallowed,
+        // or the batch would silently count as delivered.
+        await sendTo(notify, r.email, subject, html, text);
+      } catch (e) {
+        log.warn("[newsletter] post mail failed:", e instanceof Error ? e.message : String(e));
+        failed.push(r.id);
+      }
     }
   }
   return { failedSubscriberIds: failed };
@@ -638,22 +654,46 @@ function splitByLocale<T extends { locale: Locale }>(rows: T[]): [T[], T[]] {
   return [zh, en];
 }
 
+/**
+ * R343: the post mail used to be a bare link notification with a
+ * "reply to unsubscribe" footer. It now carries the featured image, the
+ * excerpt and a one-click unsubscribe link — per recipient, because the link
+ * holds that subscriber's capability token (the same discipline as the
+ * confirm mail). HTML stays the house fragment style (inline styles only),
+ * and every interpolated value escapes.
+ */
+export function buildPostMail(
+  post: { title: string; postUrl: string; excerpt: string | null; featuredImage: string | null },
+  ctx: { origin: string; token: string; siteName: string },
+  t: ReturnType<typeof makeT>,
+): { html: string; text: string } {
+  const unsubHref = `${ctx.origin}/api/newsletter/unsubscribe?token=${encodeURIComponent(ctx.token)}`;
+  const img = post.featuredImage
+    ? `<p><img src="${escapeHtml(post.featuredImage.startsWith("http") ? post.featuredImage : ctx.origin + post.featuredImage)}" alt="" style="max-width:100%;height:auto;border-radius:8px"></p>`
+    : "";
+  const lead = post.excerpt
+    ? `<p style="margin:0 0 16px;color:#444;line-height:1.7">${escapeHtml(post.excerpt)}</p>`
+    : "";
+  const html =
+    `<div style="padding:24px;font-family:system-ui,sans-serif;max-width:560px">` +
+    `<h2 style="margin:0 0 12px">${escapeHtml(ctx.siteName)}</h2>` +
+    `<p style="margin:0 0 16px;font-size:18px;font-weight:600">${escapeHtml(post.title)}</p>` +
+    img +
+    lead +
+    `<p style="margin:0 0 20px"><a href="${escapeHtml(post.postUrl)}" style="display:inline-block;padding:10px 18px;background:#2563eb;color:#fff;border-radius:8px;text-decoration:none">${escapeHtml(t("post.read_more"))}</a></p>` +
+    `<p style="color:#888;font-size:12px">${t("newsletter.mail_foot")} · <a href="${unsubHref}" style="color:#888">${t("newsletter.mail_unsub")}</a></p>` +
+    `</div>`;
+  const text = `${post.title}\n${post.postUrl}\n${post.excerpt ? post.excerpt + "\n" : ""}${t("newsletter.mail_foot")}\n${unsubHref}`;
+  return { html, text };
+}
+
 async function sendTo(
   notify: Awaited<ReturnType<typeof getNotifySettings>>,
-  to: string[],
+  to: string,
   subject: string,
-  postUrl: string,
-  t: ReturnType<typeof makeT>,
-  siteName: string,
+  html: string,
+  text: string,
 ): Promise<void> {
-  const html =
-    `<div style="padding:24px;font-family:system-ui,sans-serif">` +
-    `<h2 style="margin:0 0 12px">${escapeHtml(siteName)}</h2>` +
-    `<p>${t("newsletter.mail_post_lead")}</p>` +
-    `<p><a href="${postUrl}">${escapeHtml(subject)}</a></p>` +
-    `<p style="color:#888;font-size:12px">${t("newsletter.mail_foot")}</p>` +
-    `</div>`;
-  const text = `${subject}\n${postUrl}\n${t("newsletter.mail_foot")}`;
   await sendSmtpMail(
     {
       host: notify.smtp.host,
@@ -663,7 +703,7 @@ async function sendTo(
       pass: notify.smtp.pass,
       from: notify.smtp.from || notify.smtp.user,
     },
-    { to: to.join(","), subject, text, html },
+    { to, subject, text, html },
   );
 }
 

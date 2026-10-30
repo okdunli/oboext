@@ -72,6 +72,10 @@
   <link name="rss-en" rel="alternate" type="application/rss+xml" title="RSS (English)" href="/en/feed.xml">
   <!-- R145: the JSON Feed 1.1 counterparts, same one-per-locale pair and the
        same distinct name= keys so the head dedupe keeps both. -->
+  <!-- Browser search-provider discovery: Chrome/Edge/Firefox read this and
+       offer "add <site> to your search engines". One document, no locale twin
+       (the query itself picks the language). -->
+  <link name="opensearch" rel="search" type="application/opensearchdescription+xml" title={chrome().siteTitle} href="/opensearch.xml">
   <link name="json-default" rel="alternate" type="application/feed+json" title="JSON Feed" href="/feed.json">
   <link name="json-en" rel="alternate" type="application/feed+json" title="JSON Feed (English)" href="/en/feed.json">
   <!-- R147: the comments feed pair - readers discover the conversation feed

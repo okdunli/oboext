@@ -2425,7 +2425,20 @@ async function buildFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
   // and the visible one could not turn on the description branch. Folded.)
   const full = settings.feedContent === "full";
   const [{ items }, { items: pageItems }] = await Promise.all([
-    listPosts({ status: "published", limit: feedItems, pinned: false, full }),
+    // R304: the feed is a language tree too. /en/feed.xml used to ship the
+    // WHOLE catalogue with only the links prefixed — an English subscriber
+    // got a feed whose every item was the Chinese body, and the two feeds
+    // had identical item sets (only <language> and the URLs differed). The
+    // blog list already splits by locale (R284); the feed now follows:
+    // the en feed carries the en articles, the zh feed the zh ones.
+    // Pages are not translated (no locale column), so they stay in both.
+    listPosts({
+      status: "published",
+      limit: feedItems,
+      pinned: false,
+      full,
+      locale: en ? "en" : DEFAULT_LOCALE,
+    }),
     listPublishedPages({ limit: feedItems }),
   ]);
   // R144: a validator-backed document must be BYTE-STABLE. The old pubDate
@@ -2523,7 +2536,15 @@ async function buildJsonFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string
   const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
   const full = settings.feedContent === "full";
   const [{ items }, { items: pageItems }] = await Promise.all([
-    listPosts({ status: "published", limit: feedItems, pinned: false, full }),
+    // Same language-tree split as feed() (R304): the en JSON feed carries the
+    // en articles only.
+    listPosts({
+      status: "published",
+      limit: feedItems,
+      pinned: false,
+      full,
+      locale: en ? "en" : DEFAULT_LOCALE,
+    }),
     listPublishedPages({ limit: feedItems }),
   ]);
   const abs = (u: string) => (u.startsWith("/") ? `${ctx.origin}${u}` : u);
@@ -3281,14 +3302,15 @@ async function redirectFor(payload: { segments?: string[] }, ctx: Ctx) {
  * /newsletter points at. The twin therefore gets form markup inside `main`
  * plus its own inline binder (it ships none of this page's client bundle).
  */
-function newsletterFormHtml(t: Translate): string {
+function newsletterFormHtml(t: Translate, locale: string): string {
   // `novalidate` on purpose: the endpoint already owns the one definition of
   // "a valid address" (api.email_invalid), and the page's contract is to
   // surface THAT answer. Native validation would intercept the typo first and
   // the 422 branch would never be reachable in a real browser. type="email" +
   // required stay for the mobile keyboard and for assistive tech.
   return (
-    `<form data-nl-form novalidate>` +
+    `<form data-nl-form method="POST" action="/newsletter" novalidate>` +
+    `<input type="hidden" name="l" value="${R.esc(locale)}">` +
     `<label class="text-sm mt-4 block" for="nl-email">${R.esc(t("newsletter.email_label"))}</label>` +
     `<div class="df-search-box df-search-box-block mt-2">` +
     `<input class="df-search-input" id="nl-email" data-nl-email name="email" ` +
@@ -3350,7 +3372,7 @@ export async function newsletterPage(payload: { twin?: boolean } | undefined, ct
   // template instead; both post to the same endpoint with the same three
   // outcomes and read nothing but the status code (the endpoint's answer is
   // deliberately uniform, so it cannot be used to probe the list).
-  const form = newsletterFormHtml(t);
+  const form = newsletterFormHtml(t, locale);
   const heading =
     `<h1 class="text-3xl font-bold text-zinc-100">${R.esc(t("newsletter.title"))}</h1>` +
     `<p class="mt-2 text-sm text-zinc-400">${R.esc(lead)}</p>`;

@@ -5,17 +5,15 @@ import { media as mediaTable, posts, pages, type Media } from "./schema.js";
 import type { SessionUser } from "./auth.js";
 import { can, requireCap, requireUser, ServiceError } from "./admin.js";
 import { uploadFile, deleteFile, uploadsAbsPath, sniffMime, mimeFor } from "./storage.js";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import fs from "node:fs";
 import path from "node:path";
 import { invalidateVariantCache } from "./render.js";
+import { variantEngine, generateVariants, type VariantJob } from "./variant-engines.js";
 import { createLogger } from "./logger.js";
 import { normalizeWindow, ilikeEscape } from "./queries.js";
 import { recordAdminAction } from "./security-events.js";
 const log = createLogger("media");
 
-const execFileP = promisify(execFile);
 
 // Media-library uploads are served straight from the app origin, so an
 // executable / active-document type (.js, .mjs, .html, .svg, ...) is a stored-XSS
@@ -53,16 +51,9 @@ export const MEDIA_MAX_BYTES = Math.max(
   Number(process.env.OBOEXT_MEDIA_MAX_BYTES) || 25 * 1024 * 1024,
 );
 
-// Image variants are produced through PowerShell's System.Drawing (GDI+).
-const variantsSupported = process.platform === "win32";
 
 /** Widths generated for every image upload (F2e responsive variants). */
 export const VARIANT_WIDTHS = [400, 800, 1600];
-
-/** Whether this host can derive image variants at all. */
-export function canGenerateVariants(): boolean {
-  return variantsSupported;
-}
 
 /** /uploads/media/foo.jpg -> /uploads/media/foo.w400.jpg */
 function variantUrl(url: string, w: number): string {
@@ -105,9 +96,9 @@ export async function getMediaVariants(
     variants,
     missing: variants.filter((v) => !v.exists).map((v) => v.width),
     // `available` means "this host could have produced them", not "every
-    // requested width exists". Reporting true on a host with no GDI+ would
+    // requested width exists". Reporting true on an engineless host would
     // tell the admin to retry a regeneration that can never succeed.
-    available: variantsSupported,
+    available: (await variantEngine()) !== null,
   };
 }
 
@@ -122,7 +113,7 @@ export async function getMediaVariants(
  *
  * Both call sites (upload, replace) used `.then(invalidate).catch(invalidate)` -
  * identical handlers, so the cache was dropped either way and a total failure
- * (no GDI+ on this host, a locked file, an out-of-memory resize) left exactly
+ * (no engine on this host, a locked file, an out-of-memory resize) left exactly
  * the same trace as success. It is also why the platform bug survived: the
  * upload returned 200 and the only symptom was a srcset that never appeared.
  *
@@ -177,9 +168,10 @@ export async function regenerateMediaVariants(userIn: SessionUser | null, id: nu
   canManage(user, existing);
   if (!/\.(jpe?g|png)$/i.test(existing.url)) throw new ServiceError("仅图片支持变体", 400);
   // A clear refusal beats a silent no-op: this endpoint is the manual retry
-  // button, and on a host without GDI+ it could only ever "succeed" while
+  // button, and on an engineless host it could only ever "succeed" while
   // producing nothing.
-  if (!variantsSupported) throw new ServiceError("当前部署环境不支持生成图片变体（需要 Windows/GDI+）", 501);
+  const engine = await variantEngine();
+  if (!engine) throw new ServiceError("当前部署环境无法生成图片变体（需要 Windows/GDI+、ImageMagick 或 ffmpeg）", 501);
   const abs = uploadsAbsPath(existing.url);
   if (!abs) throw new ServiceError("无法定位文件", 400);
   await generateImageVariants(abs);
@@ -202,42 +194,17 @@ export async function regenerateMediaVariants(userIn: SessionUser | null, id: nu
  */
 async function generateImageVariants(abs: string): Promise<boolean> {
   if (!/\.(jpe?g|png)$/i.test(abs)) return true;
-  if (!variantsSupported) {
-    log.warn(`[media] variant generation skipped (no GDI+ on ${process.platform}): ${abs}`);
+  const ext = path.extname(abs);
+  const base = abs.slice(0, -ext.length);
+  const jobs: VariantJob[] = VARIANT_WIDTHS.filter(
+    (w) => !fs.existsSync(`${base}.w${w}${ext}`),
+  ).map((w) => ({ s: abs, d: `${base}.w${w}${ext}`, w, jpeg: /\.jpe?g$/i.test(abs) }));
+  if (!jobs.length) return true;
+  const engine = await generateVariants(jobs);
+  if (!engine) {
+    log.warn(`[media] variant generation skipped (no engine on ${process.platform}): ${abs}`);
     return false;
   }
-  const ext = path.extname(abs);
-  const jpeg = /\.jpe?g$/i.test(abs);
-  const jobs = VARIANT_WIDTHS.filter((w) => !fs.existsSync(abs.slice(0, -ext.length) + `.w${w}` + ext))
-    .map((w) => ({ s: abs, d: abs.slice(0, -ext.length) + `.w${w}` + ext, w, jpeg }));
-  if (!jobs.length) return true;
-  const ps = `
-$jobs = ${JSON.stringify(JSON.stringify(jobs))} | ConvertFrom-Json
-Add-Type -AssemblyName System.Drawing
-foreach ($j in $jobs) {
-  $src = [System.Drawing.Image]::FromFile($j.s)
-  try {
-    if ($src.Width -le $j.w) { continue }
-    $h = [int][Math]::Round($src.Height * $j.w / $src.Width)
-    $bmp = New-Object System.Drawing.Bitmap($j.w, $h)
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-    $g.DrawImage($src, 0, 0, $j.w, $h)
-    $g.Dispose()
-    if ($j.jpeg) {
-      $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" }
-      $ep = New-Object System.Drawing.Imaging.EncoderParameters(1)
-      $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]82)
-      $bmp.Save($j.d, $codec, $ep)
-    } else {
-      $bmp.Save($j.d, [System.Drawing.Imaging.ImageFormat]::Png)
-    }
-    $bmp.Dispose()
-  } finally { $src.Dispose() }
-}`;
-  await execFileP("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps], { timeout: 120_000 });
   return true;
 }
 

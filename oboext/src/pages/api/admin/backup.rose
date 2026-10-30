@@ -2,6 +2,7 @@
 
   import { apiGate, jsonFail, requireCap } from "@server/admin";
   import { buildDatabaseBackup, restoreDatabaseBackup } from "@server/backup";
+  import { buildFullBackupZip, restoreFullBackupZip } from "@server/backup-zip";
   import { recordAdminAction } from "@server/security-events";
 
   function compactStamp() {
@@ -9,9 +10,22 @@
     return new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14).replace(/^(\d{8})(\d{6})$/, "$1-$2");
   }
 
-  export async function GET() {
+  export async function GET(request) {
     return apiGate(async () => {
       requireCap(getContext().user, "settings:manage");
+      // R353: ?full=1 downloads the FULL backup - database.json PLUS every
+      // file under content/uploads. The plain GET stays the DB-only JSON so
+      // existing restores keep working byte for byte.
+      if (new URL(request.url).searchParams.get("full") === "1") {
+        const zip = await buildFullBackupZip();
+        return new Response(zip, {
+          status: 200,
+          headers: {
+            "content-type": "application/zip",
+            "content-disposition": `attachment; filename="oboext-full-backup-${compactStamp()}.zip"`,
+          },
+        });
+      }
       const backup = await buildDatabaseBackup();
       return new Response(JSON.stringify(backup), {
         status: 200,
@@ -39,9 +53,25 @@
       if (!(file instanceof File) || file.size === 0) {
         return jsonFail("请选择有效的备份文件", 400);
       }
+      const bytes = Buffer.from(await file.arrayBuffer());
+      // Zip backups (full) are told apart by magic bytes, not by filename.
+      if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b) {
+        let full;
+        try {
+          full = await restoreFullBackupZip(bytes);
+        } catch (e) {
+          return jsonFail("全量备份恢复失败：" + (e instanceof Error ? e.message : String(e)), 400);
+        }
+        await recordAdminAction(getContext().user, "backup.restore", {
+          tables: Object.keys(full.restored ?? {}),
+          files: full.files,
+          full: true,
+        });
+        return full;
+      }
       let parsed;
       try {
-        parsed = JSON.parse(await file.text());
+        parsed = JSON.parse(bytes.toString("utf8"));
       } catch {
         return jsonFail("备份文件不是合法 JSON", 400);
       }

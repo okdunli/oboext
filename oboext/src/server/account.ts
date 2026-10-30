@@ -10,7 +10,7 @@ import { passwordError } from "./password-policy.js";
 import { HOOKS, applyAsyncFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { getPublicRegisterConfig, NAME_RE, NAME_INVALID_MSG } from "./members.js";
-import { invalidateContentCaches } from "./cache.js";
+import { invalidateContentCaches, invalidatePrefix } from "./cache.js";
 import type { VirtualSiteRoute } from "./virtual-routes.js";
 
 // --------------------------------------------------------- self-service CRUD
@@ -93,6 +93,11 @@ export async function changeOwnPassword(
     .update(users)
     .set({ passwordHash: await hashPassword(newPassword), updatedAt: new Date() })
     .where(eq(users.id, actor.id));
+
+  // R358: the pwv marker compares against the hash inside the sess:<id>
+  // memo — without dropping it, the OLD hash serves for the memo's remaining
+  // window and the surviving old session outlives the change.
+  invalidatePrefix("sess:");
 
   await clearPasswordlessMark(actor.id);
   return { id: actor.id };

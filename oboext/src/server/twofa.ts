@@ -27,6 +27,10 @@ export type TwoFaState = {
   enabled: boolean;
   recovery: RecoveryRecord[];
   createdAt: string;
+  /** ISO timestamp of the last ACCEPTED TOTP code. A code verified within
+   *  its ±1-window lifetime must not be replayed — without this, one valid
+   *  code captured in transit works for the whole window (R360). */
+  lastTotpAt?: string;
 };
 
 const storeKey = (userId: number) => `twofa:user:${userId}`;
@@ -128,7 +132,16 @@ export async function verifyTwoFaCode(
   const code = String(rawCode ?? "").trim();
 
   if (/^\d{6}$/.test(code)) {
-    return verifyTotp(state.secret, code);
+    if (!verifyTotp(state.secret, code)) return false;
+    // R360 replay guard: a code accepted inside its ±1-period lifetime must
+    // not pass twice. The marker is the last accepted timestamp; anything
+    // within one PERIOD of it is the same window's code (an adjacent-window
+    // code is a different counter, so 30s is exact for the matched one).
+    const now = Date.now();
+    const last = state.lastTotpAt ? Date.parse(state.lastTotpAt) : 0;
+    if (Number.isFinite(last) && now - last < 30_000) return false;
+    await setOption(storeKey(userId), { ...state, lastTotpAt: new Date(now).toISOString() });
+    return true;
   }
 
   const h = hashRecoveryCode(code);

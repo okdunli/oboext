@@ -1013,8 +1013,9 @@ function toSessionUser(row: {
   email: string | null;
   name: string;
   role: SessionUser["role"];
+  passwordHash?: string | null;
 }): SessionUser {
-  return { id: row.id, email: row.email, name: row.name, role: row.role };
+  return { id: row.id, email: row.email, name: row.name, role: row.role, passwordHash: row.passwordHash };
 }
 
 function sanitizeName(raw: string): string {
@@ -1276,6 +1277,7 @@ async function loadUser(id: number) {
       name: users.name,
       role: users.role,
       status: users.status,
+      passwordHash: users.passwordHash,
     })
     .from(users)
     .where(eq(users.id, id));

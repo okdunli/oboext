@@ -9,6 +9,9 @@ import {
   clearSessionCookieValue,
   type SessionUser,
 } from "./auth.js";
+import { db } from "./db.js";
+import { users } from "./schema.js";
+import { eq } from "drizzle-orm";
 
 // Cookie holding the token.
 export const CSRF_COOKIE_NAME = "cms_csrf";
@@ -29,7 +32,14 @@ export function csrfTokenFor(sessionToken: string): string {
 
 // Every Set-Cookie value a fresh login must send: the session, and the CSRF token derived from that SAME session token.
 export async function sessionCookiePair(user: SessionUser): Promise<string[]> {
-  const token = await signSession(user);
+  // R358: the pwv marker needs the CURRENT hash, and the hash must NOT ride
+  // the SessionUser that login routes serialize into the response body. Read
+  // it here, from the same row the credentials were verified against.
+  const [row] = await db
+    .select({ passwordHash: users.passwordHash })
+    .from(users)
+    .where(eq(users.id, user.id));
+  const token = await signSession({ ...user, passwordHash: row?.passwordHash ?? null });
   return [sessionCookieValueFor(token), csrfCookieValue(token)];
 }
 

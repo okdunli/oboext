@@ -29,6 +29,10 @@ export type SessionUser = {
   email: string | null;
   name: string;
   role: Role;
+  /** Current password hash tail; the session token carries it as a version
+   *  marker so a password change invalidates every existing token. Absent
+   *  for passwordless users (marker always matches). */
+  passwordHash?: string | null;
 };
 
 export function getSecret(): Uint8Array {
@@ -71,7 +75,17 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 export async function signSession(user: SessionUser): Promise<string> {
-  return new SignJWT({ id: user.id, email: user.email, name: user.name, role: user.role })
+  return new SignJWT({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    // Password-version marker: the first 8 hex of the CURRENT hash. A password
+    // change rewrites the hash, so every token carrying the old marker fails
+    // verification - "change password to log out everywhere", zero storage.
+    // Passwordless users (no hash) carry an empty marker, which always matches.
+    pwv: (user.passwordHash ?? "").slice(-8),
+  })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DAYS}d`)
@@ -143,13 +157,51 @@ export async function verifyToken(token: string): Promise<SessionUser | null> {
     // retries).
     const row = await memoQuery(`sess:${id}`, 30_000, async () => {
       const [r] = await db
-        .select({ status: users.status, email: users.email, name: users.name, role: users.role })
+        .select({ status: users.status, email: users.email, name: users.name, role: users.role, passwordHash: users.passwordHash })
         .from(users)
         .where(eq(users.id, id));
       return r ?? null;
     });
     if (!row || row.status !== "active") return null;
-    return { id, email: row.email, name: row.name, role: row.role };
+    // R358: a token minted before the last password change carries an older
+    // pwv marker and is rejected here - change password = log out everywhere.
+    // Tokens without the claim (pre-R358 sessions) fail the comparison too:
+    // one clean cutover, no compatibility branch.
+    if ((payload.pwv as string | undefined) !== (row.passwordHash ?? "").slice(-8)) return null;
+    // The hash must NOT ride the returned identity: getContext().user lands
+    // in /api/auth/me and any  payload verbatim.
+    const user = { id, email: row.email, name: row.name, role: row.role };
+    // R386 sliding renewal: expose the token's age so a cookie-bearing route
+    // can re-issue past half-life. Exposed via a side channel on the request
+    // object would be untyped; instead the renewal helper re-verifies on its
+    // own (verifyToken memo makes that cheap). Nothing stored here.
+    void payload;
+    return user;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * R386 sliding session renewal. Returns a fresh Set-Cookie VALUE when the
+ * presented token is older than half its life (SESSION_DAYS/2) AND still
+ * valid — otherwise null. Callers attach it to their own responses (the
+ * admin /api/data poller is the primary surface; public zero-JS pages carry
+ * no session concept). pwv semantics unchanged: a token that fails
+ * verification gets no renewal, and a password change still kills it.
+ */
+export async function sessionRenewalCookie(req: Request): Promise<string | null> {
+  const token = readCookieToken(req);
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, getSecret());
+    const iat = payload.iat as number | undefined;
+    if (!iat) return null;
+    const halfLife = (SESSION_DAYS * 24 * 60 * 60) / 2;
+    if (Date.now() / 1000 - iat < halfLife) return null;
+    const user = await verifyToken(token);
+    if (!user) return null;
+    return sessionCookieValueFor(await signSession(user));
   } catch {
     return null;
   }

@@ -12,14 +12,18 @@ import {
   MACHINE_WINDOW_CAP,
 } from "./queries.js";
 import { listPublishedPages } from "./pages.js";
-import { getPermalinkConfig, blogIndexUrlFor, pageIndexUrlFor, authorUrlFor } from "./links.js";
+import { getPermalinkConfig, blogIndexUrlFor, pageIndexUrlFor, authorUrlFor, postUrlFor } from "./links.js";
 import { ensurePluginsLoaded } from "./plugins.js";
+import { rawQuery } from "./db.js";
 import { splitLocalePath } from "./i18n.js";
 import { resolveOrigin } from "./site-origin.js";
 import { getActiveThemeSlug } from "./themes.js";
 import { themeLayout } from "./theme-chrome.js";
 import { blogListSize, categoryListSize, tagListSize } from "./dialects.js";
 import { memoQuery } from "./cache.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("sitemap");
 
 export type SitemapChangefreq =
   | "always"
@@ -143,16 +147,18 @@ async function buildEntries(base: string): Promise<SitemapPayload> {
 }
 
 async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
+  // R456: rows arrive in slices so a site past the 10k visitor window still
+  // lists the WHOLE site (the 45k sharding only makes sense if the entries
+  // reach it). Default 10k keeps today's single-query shape for normal sites;
+  // the suite lowers it to prove the loop.
+  const slice = Math.max(1, Number(process.env.OBOEXT_SITEMAP_SLICE) || 10_000);
   const [posts, pages, categories, tags, cfg, settings, themeSlug, totals, catCounts, tagCounts, authorRows, authorCounts] =
     await Promise.all([
       // R247: windowCap - the sitemap lists the WHOLE site. limit:10000 used
       // to be silently clamped to 100 (the visitor's ceiling), so a blog past
       // 100 posts shipped a truncated map and the 45k sharding never fired.
-      // R247: windowCap - the sitemap lists the WHOLE site. limit:10000 used
-      // to be silently clamped to 100 (the visitor's ceiling), so a blog past
-      // 100 posts shipped a truncated map and the 45k sharding never fired.
-      listPosts({ status: "published", limit: 10000, windowCap: MACHINE_WINDOW_CAP, pinned: false }),
-      listPublishedPages({ limit: 10000, windowCap: MACHINE_WINDOW_CAP }),
+      listPosts({ status: "published", limit: slice, windowCap: MACHINE_WINDOW_CAP, pinned: false }),
+      listPublishedPages({ limit: slice, windowCap: MACHINE_WINDOW_CAP }),
       listCategories(),
       listTags(),
       getPermalinkConfig(),
@@ -167,6 +173,44 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
       listAuthorRows(),
       authorPostCounts(),
     ]);
+
+  // R456: page the remainder instead of shipping a truncation warning. The
+  // extra rows are entry-only (slug/date/cover): they never enter `posts.items`
+  // or `pages.items`, so the plugin payloads and every downstream consumer keep
+  // the window shape they have always had - only the URL set grows.
+  const entryCap = SITEMAP_SLICE_MAX_URLS;
+  const restPosts: typeof posts.items = [];
+  const restPages: typeof pages.items = [];
+  // Stop fetching once the URL set would exceed one sitemap file; the sharding
+  // above would rather cut a map than build a 100k-entry in-memory payload.
+  const atCap = () =>
+    posts.items.length + restPosts.length + pages.items.length + restPages.length + 2 >= entryCap;
+  const postSlugs = new Set(posts.items.map((p) => p.slug));
+  for (let offset = posts.items.length; offset < Number(totals.posts ?? 0) && !atCap(); offset += slice) {
+    const rest = await listPosts({
+      status: "published",
+      limit: slice,
+      offset,
+      windowCap: MACHINE_WINDOW_CAP,
+      pinned: false,
+    });
+    if (!rest.items.length) break;
+    for (const p of rest.items) {
+      if (postSlugs.has(p.slug)) continue;
+      postSlugs.add(p.slug);
+      restPosts.push(p);
+    }
+  }
+  const pageSlugs = new Set(pages.items.map((p) => p.slug));
+  for (let offset = pages.items.length; offset < Number(pages.total ?? pages.items.length) && !atCap(); offset += slice) {
+    const rest = await listPublishedPages({ limit: slice, offset, windowCap: MACHINE_WINDOW_CAP });
+    if (!rest.items.length) break;
+    for (const p of rest.items) {
+      if (pageSlugs.has(p.slug)) continue;
+      pageSlugs.add(p.slug);
+      restPages.push(p);
+    }
+  }
 
   // R148: paginated list pages self-canonicalise now (R146), so they belong
   // in the sitemap - page 2+ used to be discoverable only by walking every
@@ -232,7 +276,7 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
       priority: "0.6",
     });
   }
-  for (const p of posts.items) {
+  for (const p of [...posts.items, ...restPosts]) {
     const images = p.featuredImage
       ? [p.featuredImage.startsWith("http") ? p.featuredImage : `${base}${p.featuredImage}`]
       : undefined;
@@ -279,12 +323,49 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
       if (zhEntry) zhEntry.alternates = cluster;
     }
   }
-  for (const p of pages.items) {
+  // R462: rows that arrived by paging get the same alternates treatment. The
+  // main block above can only pair rows it can see in the window; one extra
+  // read resolves the ids the tail points at, and the cluster is attached to
+  // the entries the merged loop already emitted (never a duplicate URL).
+  const tailEn = restPosts.filter((p) => p.locale === "en" && p.translationOf != null);
+  if (tailEn.length) {
+    const ids = [...new Set(tailEn.map((p) => Number(p.translationOf)))];
+    const rows = await rawQuery<{ id: number; slug: string }>(
+      `select id, slug from posts where id = any(string_to_array($1, ',')::int[])`,
+      [ids.join(",")],
+    );
+    const urlById = new Map(
+      rows.map((r) => [Number(r.id), `${base}${postUrlFor(cfg, { slug: r.slug })}`]),
+    );
+    for (const p of tailEn) {
+      const enLoc = `${base}${p.url}`;
+      const zhLoc = urlById.get(Number(p.translationOf));
+      if (!zhLoc || zhLoc === enLoc) continue;
+      const cluster = [
+        { hreflang: "en", href: enLoc },
+        { hreflang: "zh-CN", href: zhLoc },
+        { hreflang: "x-default", href: zhLoc },
+      ];
+      const enEntry = entries.find((e) => e.loc === enLoc);
+      if (enEntry) enEntry.alternates = cluster;
+      const zhEntry = entries.find((e) => e.loc === zhLoc);
+      if (zhEntry) zhEntry.alternates = cluster;
+    }
+  }
+
+  for (const p of [...pages.items, ...restPages]) {
+    // R446: a page's cover belongs in the image sitemap too - posts have
+    // carried theirs for rounds, so a page-only landing page was invisible to
+    // Google Images while an article with the same picture was indexable.
+    const images = p.featuredImage
+      ? [p.featuredImage.startsWith("http") ? p.featuredImage : `${base}${p.featuredImage}`]
+      : undefined;
     entries.push({
       loc: `${base}${p.url}`,
       lastmod: day(p.updatedAt ?? p.publishedAt),
       changefreq: "monthly",
       priority: "0.7",
+      ...(images ? { images } : {}),
     });
   }
   for (const c of categories) {
@@ -426,10 +507,15 @@ export function renderSitemapSharded(
     return renderSitemapUrlset(entries);
   }
   const count = Math.ceil(entries.length / SITEMAP_SLICE_MAX_URLS);
+  // R467: a sitemap index may carry <lastmod> per child, and crawlers use it to
+  // skip unchanged slices. day() emits YYYY-MM-DD, so a lexical max over the
+  // slice is the same answer as a date max.
   return renderSitemapIndex(
-    Array.from({ length: count }, (_, i) => ({
-      loc: `${base}/sitemap-${i + 1}.xml`,
-    })),
+    Array.from({ length: count }, (_, i) => {
+      const slice = entries.slice(i * SITEMAP_SLICE_MAX_URLS, (i + 1) * SITEMAP_SLICE_MAX_URLS);
+      const lastmod = slice.reduce<string>((m, e) => (e.lastmod && e.lastmod > m ? e.lastmod : m), "");
+      return { loc: `${base}/sitemap-${i + 1}.xml`, ...(lastmod ? { lastmod } : {}) };
+    }),
   );
 }
 

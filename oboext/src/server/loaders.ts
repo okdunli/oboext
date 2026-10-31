@@ -1065,7 +1065,9 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
   const catPerPage = categoryListSize(layout, settings.postsPerPage);
   // Category listing: memoize the page's post window for 2 minutes (a new
   // post surfaces on refresh or an admin write invalidates by TTL).
-  const catKey = `cat:${payload.slug}:${page}:${themeSlug}`;
+  // The locale is part of the key: the window is now per language tree (R305),
+  // so the zh and en windows must not share one KV entry.
+  const catKey = `cat:${payload.slug}:${page}:${themeSlug}:${locale}`;
   const cachedCat = kvGet<{ items: any[]; total: number }>(catKey);
   // R146: every layout windows for real. Non-skyscraper layouts used to pass
   // `offset: 0` plus a `page` option that PostQuery has never had (a silently
@@ -1077,6 +1079,10 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     categorySlug: payload.slug,
     limit: catPerPage,
     offset: (page - 1) * catPerPage,
+    // R305: the category page is a language tree like the blog list (R284) and
+    // the feeds (R304) - /en/cat/<slug> lists the English articles of that
+    // category, not the Chinese ones.
+    locale: locale === "en" ? "en" : DEFAULT_LOCALE,
   });
   if (!cachedCat) kvSet(catKey, { items, total }, 120);
   const totalPages = Math.max(1, Math.ceil(total / catPerPage));
@@ -1212,6 +1218,8 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
     tagSlug: payload.slug,
     limit: tagPerPage,
     offset: (page - 1) * tagPerPage,
+    // R305: the tag page is a language tree too.
+    locale: locale === "en" ? "en" : DEFAULT_LOCALE,
   });
   const totalPages = Math.max(1, Math.ceil(total / tagPerPage));
   // R146: out-of-range page = real 404, not a 200 with an empty window.
@@ -1333,7 +1341,8 @@ async function authorList(payload: { authorId: number; page?: number }, ctx: Ctx
   const layout = themeLayout(themeSlug);
   const isSk = layout === "skyscraper";
   const perPage = blogListSize(layout, settings.postsPerPage);
-  const aKey = `author:${payload.authorId}:${page}:${themeSlug}`;
+  // The locale is part of the key (R305): the window is per language tree.
+  const aKey = `author:${payload.authorId}:${page}:${themeSlug}:${locale}`;
   const cachedA = kvGet<{ items: any[]; total: number }>(aKey);
   const { items, total } = cachedA ?? (await listPosts({
     status: "published",
@@ -2169,7 +2178,8 @@ async function archives(payload: { year?: number; month?: number; page?: number 
   // for 5 minutes (archives change rarely, and a new post shows up on the
   // next refresh or an admin write). R233: the page is part of the key now -
   // every page is its own window, not one 1000-row slice for all of them.
-  const archKey = `archives:${year}:${month}:${page}`;
+  // The locale is part of the key (R305): the archive window is per language tree.
+  const archKey = `archives:${year}:${month}:${page}:${archLocale}`;
   const cached = kvGet<{ settings: any; index: any; total: number; items: any[] }>(archKey);
   let settings: any;
   let index: { year: number; months: { month: number; count: number }[]; total: number }[];
@@ -2194,6 +2204,9 @@ async function archives(payload: { year?: number; month?: number; page?: number 
         month: month && month >= 1 && month <= 12 ? month : undefined,
         limit: ARCH_PER_PAGE,
         offset: (page - 1) * ARCH_PER_PAGE,
+        // R305: the archive is a language tree (the en tree lists the English
+        // articles).
+        locale: archLocale === "en" ? "en" : DEFAULT_LOCALE,
       }),
     ]);
     kvSet(archKey, { settings, index, total, items }, 300);
@@ -2526,11 +2539,31 @@ ${xmlItems}
  */
 // R150: same memo contract as feed() (see buildFeed): origin+locale keyed,
 // dropped by invalidateContentCaches at every content write.
+// R337: full-content pages carry the page number in the memo key - two pages
+// of the same feed are two byte-stable documents.
 async function jsonFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
-  return memoQuery(`doc:jsonFeed:${ctx.origin}:${locale}`, 30_000, () => buildJsonFeed(ctx, locale));
+  const page = feedPageOf(ctx);
+  return memoQuery(`doc:jsonFeed:${ctx.origin}:${locale}:p${page}`, 30_000, () =>
+    buildJsonFeed(ctx, locale, page),
+  );
 }
 
-async function buildJsonFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string> {
+/**
+ * R337: a full-content JSON feed used to ship the whole pool in one response -
+ * 100 built bodies ≈ 1 MB per reader poll. JSON Feed 1.1 has a standard paging
+ * field (`next_url`), so full mode now serves the pool in pages of 20 and
+ * points at the next one; summary mode is untouched (excerpts are cheap, no
+ * reader needs a second request). Paging stays inside the settings-capped pool
+ * (feedItems): the admin's cap is the feed's scope, pages never grow it.
+ */
+const FULL_FEED_PAGE = 20;
+
+function feedPageOf(ctx: Ctx): number {
+  const n = Number(ctx.query.get("page"));
+  return Number.isInteger(n) && n >= 1 && n <= 50 ? n : 1;
+}
+
+async function buildJsonFeed(ctx: Ctx, locale: Locale = "zh-CN", page = 1): Promise<string> {
   const en = locale === "en";
   const settings = await getSettings();
   const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
@@ -2548,8 +2581,17 @@ async function buildJsonFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string
     listPublishedPages({ limit: feedItems }),
   ]);
   const abs = (u: string) => (u.startsWith("/") ? `${ctx.origin}${u}` : u);
+  const merged = [...items, ...pageItems];
+  // Full mode serves page N of the pool; excerpt mode is one document and
+  // ignores ?page= (its memo key carries the page, but every key renders the
+  // same bytes - a stray ?page=9 costs one memo slot, nothing else).
+  const visible = full ? merged.slice((page - 1) * FULL_FEED_PAGE, page * FULL_FEED_PAGE) : merged;
+  const nextUrl =
+    full && page * FULL_FEED_PAGE < merged.length
+      ? `${ctx.origin}${localeHref("/feed.json", locale)}?page=${page + 1}`
+      : undefined;
   const feedEntries = await Promise.all(
-    [...items, ...pageItems].map(async (p) => {
+    visible.map(async (p) => {
       const kind = "author" in p ? "post" : "page";
       const url = `${ctx.origin}${localeHref(p.url, locale)}`;
       const entry: Record<string, unknown> = { id: url, url, title: p.title };
@@ -2574,6 +2616,7 @@ async function buildJsonFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promise<string
       feed_url: `${ctx.origin}${localeHref("/feed.json", locale)}`,
       description: settings.siteDescription ?? "",
       language: en ? "en" : "zh-CN",
+      next_url: nextUrl,
       items: feedEntries,
     },
     null,
@@ -2719,7 +2762,7 @@ async function buildCommentsJsonFeed(ctx: Ctx, locale: Locale = "zh-CN"): Promis
  */
 const AUTHOR_FEED_PATH = new RegExp(`^/${AUTHOR_BASE_SEGMENT}/(\\d{1,9})$`);
 
-async function resolveTaxonomyDoc(basePath: string) {
+async function resolveTaxonomyDoc(basePath: string, locale: Locale) {
   const want = basePath.replace(/\/+$/, "");
   const settings = await getSettings();
   const feedItems = Math.min(Math.max(Number(settings.feedItems) || 20, 1), 100);
@@ -2734,8 +2777,10 @@ async function resolveTaxonomyDoc(basePath: string) {
       limit: feedItems,
       pinned: false,
       full,
+      // R305: the taxonomy feeds are language trees like the site feed (R304) -
+      // an /en/... feed must not list the Chinese articles.
+      locale: locale === "en" ? "en" : DEFAULT_LOCALE,
     });
-    if (!items.length) return null;
     return {
       cat: undefined, tag: undefined, want, settings, items, full,
       name: author.name,
@@ -2756,6 +2801,8 @@ async function resolveTaxonomyDoc(basePath: string) {
     limit: feedItems,
     pinned: false,
     full,
+    // Same language-tree split as the site feed (R304/R305).
+    locale: locale === "en" ? "en" : DEFAULT_LOCALE,
   });
   return {
     cat, tag, want, settings, items, full,
@@ -2775,7 +2822,7 @@ async function buildTaxonomyFeed(
   locale: Locale,
   basePath: string,
 ): Promise<string | null> {
-  const doc = await resolveTaxonomyDoc(basePath);
+  const doc = await resolveTaxonomyDoc(basePath, locale);
   if (!doc) return null;
   const en = locale === "en";
   const t = makeT(locale);
@@ -2824,7 +2871,7 @@ async function buildTaxonomyJsonFeed(
   locale: Locale,
   basePath: string,
 ): Promise<string | null> {
-  const doc = await resolveTaxonomyDoc(basePath);
+  const doc = await resolveTaxonomyDoc(basePath, locale);
   if (!doc) return null;
   const en = locale === "en";
   const t = makeT(locale);

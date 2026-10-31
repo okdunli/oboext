@@ -90,7 +90,7 @@
     <form data-adm-form="edit-tag">
       <div class="adm-modal-hd">
         <h2>编辑标签</h2>
-        <button type="button" class="adm-modal-x" data-tax-cancel>{@html ic("x")}</button>
+        <button type="button" class="adm-modal-x" data-tax-cancel aria-label="关闭">{@html ic("x")}</button>
       </div>
       <div class="adm-modal-bd">
         <input type="hidden" name="id">

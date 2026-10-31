@@ -1,0 +1,11 @@
+<script>
+  // POST /api/admin/demo-content — seed a brand-new site with example posts,
+  // pages, categories and tags. Only an empty site may call it (the service
+  // answers 409 otherwise), so a second click cannot duplicate anything.
+  import { apiGate } from "@server/admin";
+  import { seedDemoContent } from "@server/demo-content";
+
+  export async function POST() {
+    return apiGate(async () => seedDemoContent(getContext().user));
+  }
+</script>

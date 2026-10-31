@@ -116,6 +116,12 @@
   function plainCards() {
     return pluginCards().filter(function (c) { return !c.href; });
   }
+  // R481: the seed card is gated on the SAME rule the service enforces (no
+  // posts and no pages), so the button is never shown where it would 409.
+  function isEmptySite() {
+    const c = counts() || {};
+    return !Number(c.posts) && !Number(c.pages);
+  }
   function fmtDate(iso) {
     if (!iso) return "—";
     const d = new Date(iso);
@@ -147,6 +153,24 @@
   onMount(function () {
     window.startAdminLive(function () { refresh(); });
   });
+
+  // R479: first-run demo seed. Guarded: the compiler also evaluates this
+  // module on the server (no document there).
+  if (typeof document !== "undefined") document.addEventListener("click", async (e) => {
+    const btn = e.target instanceof Element ? e.target.closest("[data-adm-demo-seed]") : null;
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/admin/demo-content", { method: "POST", credentials: "same-origin" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || "载入失败");
+      if (typeof window.admToast === "function") window.admToast("示例内容已载入，正在刷新", "ok");
+      setTimeout(() => location.reload(), 600);
+    } catch (err) {
+      btn.disabled = false;
+      if (typeof window.admToast === "function") window.admToast(err instanceof Error ? err.message : "载入失败", "err");
+    }
+  });
 </script>
 
 <head>
@@ -176,6 +200,16 @@
   {#each plainCards() as c}
   <div class="adm-card adm-stat"><div class="k">{c.label}</div><div class="v">{c.value}</div>{#if c.sub}<div class="sub">{c.sub}</div>{/if}</div>
   {/each}
+</div>
+{/if}
+
+{#if isEmptySite()}
+<div class="adm-card" style="margin-top:16px;">
+  <div class="adm-card-hd">第一次使用</div>
+  <div class="adm-card-bd">
+    <p class="adm-hint" style="margin:0 0 10px">这个站点还没有内容。一键载入示例文章、页面、分类与标签，并把导航指向它们；示例内容可以随时删除。</p>
+    <button class="adm-btn adm-btn-sm" type="button" data-adm-demo-seed>载入示例内容</button>
+  </div>
 </div>
 {/if}
 

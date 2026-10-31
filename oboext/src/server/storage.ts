@@ -12,10 +12,16 @@ export type UploadResult = {
 export const CONTENT_DIR = path.join(process.cwd(), "content");
 export const UPLOADS_DIR = path.join(CONTENT_DIR, "uploads");
 
-// Absolute path of the static asset directory, resolved once. So probe the candidates once and cache the winner.
+// Absolute path of the static asset directory, resolved once. So probe the
+// candidates once and cache the winner.
+// R459: dist/public joins the list. The framework's static layer already serves
+// from there, but this handler is the FALLBACK for a flattened deploy whose
+// cwd has neither oboext/public nor a root public mirror - without it the
+// admin's /public/* requests 404 into the login redirect (unstyled admin).
 export const PUBLIC_DIR: string = (() => {
   const candidates = [
     path.join(process.cwd(), "oboext", "public"),
+    path.join(process.cwd(), "dist", "public"),
     path.join(process.cwd(), "public"),
   ];
   for (const dir of candidates) {

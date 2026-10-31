@@ -342,7 +342,7 @@ export function themeCssHref(slug: string): string {
  * constant across deploys — we stamp a content hash instead. Cache keyed by
  * byte size so the file is only re-read when its length changes.
  */
-export const assetVersionCache = new Map<string, { size: number; v: string }>();
+export const assetVersionCache = new Map<string, { size: number; mtimeMs: number; v: string }>();
 export function fnv1a32(buf: Buffer): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < buf.length; i++) {
@@ -356,9 +356,15 @@ export function publicAssetHref(file: string): string {
     const fp = path.join(PUBLIC_DIR, file);
     const st = fs.statSync(fp);
     const cached = assetVersionCache.get(file);
-    if (cached && cached.size === st.size) return `/public/${file}?v=${cached.v}`;
+    // R471: the version is derived from the CONTENT, but the cache only
+    // compared the SIZE. A deploy that swaps a script for another of the same
+    // length kept the old ?v= - and with an immutable cache header the
+    // browser kept the old file until the URL changed. Hash the bytes.
+    if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) {
+      return `/public/${file}?v=${cached.v}`;
+    }
     const v = fnv1a32(fs.readFileSync(fp));
-    assetVersionCache.set(file, { size: st.size, v });
+    assetVersionCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, v });
     return `/public/${file}?v=${v}`;
   } catch {
     return `/public/${file}`;
@@ -391,7 +397,7 @@ export function readThemeDecl(slug: string): ThemeAssetDecl {
   }
 }
 
-export const themeAssetVersionCache = new Map<string, { size: number; v: string }>();
+export const themeAssetVersionCache = new Map<string, { size: number; mtimeMs: number; v: string }>();
 /** Versioned href for a theme asset: /theme-assets/<slug>/<rel>?v=<hash>. */
 export function themeAssetHref(slug: string, file: string): string {
   const rel = String(file).replace(/^assets\//, "").replace(/^\/+/, "");
@@ -400,11 +406,13 @@ export function themeAssetHref(slug: string, file: string): string {
     const fp = path.join(THEMES_DIR, slug, "assets", rel);
     const st = fs.statSync(fp);
     const cached = themeAssetVersionCache.get(key);
-    if (cached && cached.size === st.size) {
+    // R473: same rule as publicAssetHref - a same-size swap must move ?v=, or
+    // an immutable theme asset stays stale in every browser that has it.
+    if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) {
       return `/theme-assets/${slug}/${rel}?v=${cached.v}`;
     }
     const v = fnv1a32(fs.readFileSync(fp));
-    themeAssetVersionCache.set(key, { size: st.size, v });
+    themeAssetVersionCache.set(key, { size: st.size, mtimeMs: st.mtimeMs, v });
     return `/theme-assets/${slug}/${rel}?v=${v}`;
   } catch {
     return `/theme-assets/${slug}/${rel}`;

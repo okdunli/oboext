@@ -7,7 +7,12 @@
   import { roleAllows } from "@server/admin-menu";
   import { warmReadWave, xmlResponse } from "@server/loaders";
   import { handleReceiveRequest as handleWebmentionRequest, registerWebmentionHooks } from "@server/webmention";
+  import { existsSync, readFileSync } from "node:fs";
+  import * as nodePath from "node:path";
   const log = createLogger("middleware");
+  // dist/prod.mjs and the dev server both run with cwd = the app root, so
+  // process.cwd() is the anchor for reading bundled public assets at the root.
+  const ROOT = process.cwd();
 
   // /sitemap.xml plus its sharded children /sitemap-N.xml (emitted by
   // sitemap.ts above SITEMAP_SLICE_MAX_URLS). Every gate below that exempts
@@ -193,6 +198,21 @@
     // route the loaders see, so /en/admin/login redirects to /admin/login
     // instead of falling through to page routing.
     const rp = ctx.pathname || real.pathname;
+
+    // Bot-probed machine-document paths that this site does not implement:
+    // a full 183 KB HTML 404 page (render + chrome + recent posts query) is
+    // pure waste for a security scanner that just wants to know the answer is
+    // "no". A 9-byte plain-text 404 is correct and costs nothing. Sits BEFORE
+    // the first-run wall so a fresh install answers 404, not 302 to setup.
+    if (/^\/(\.well-known\/|humans\.txt$|crossdomain\.xml$)/.test(rp)) {
+      return new Response("Not found", {
+        status: 404,
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "public, max-age=86400",
+        },
+      });
+    }
 
     // Lambda cold start: there is no boot warm on serverless, so the FIRST
     // visitor pays the whole read wave. Fire it once in the background
@@ -514,6 +534,41 @@
           });
         }
       }
+    }
+    // /favicon.ico: the framework's static handler serves oboext/public/ under
+    // /public/* only — the root-level /favicon.ico that every browser and bot
+    // probes fell through to the SPA fallback (2.1 MB of HTML with a 404
+    // status) on preview/dev. Serve the generated icon here so every runtime
+    // shape answers with real bytes (prod's static handler also finds it, so
+    // this branch is the dev/preview twin of that).
+    if (rp === "/favicon.ico") {
+      const ico = nodePath.join(ROOT, "oboext", "public", "favicon.ico");
+      if (!existsSync(ico)) return new Response("Not found", { status: 404 });
+      return new Response(readFileSync(ico), {
+        status: 200,
+        headers: {
+          "content-type": "image/x-icon",
+          "cache-control": "public, max-age=31536000, immutable",
+        },
+      });
+    }
+    // /apple-touch-icon.png: iOS add-to-home-screen asks for this exact root
+    // path, and no file by that name ships in public/ — serve the site's
+    // identity image (the avatar, the same one og:image uses) with the
+    // immutable window every other root asset gets. (/favicon.ico needs no
+    // branch: the framework's static handler serves oboext/public/ at the
+    // site root, so the generated favicon.ico is picked up the moment it
+    // exists — R308.)
+    if (rp === "/apple-touch-icon.png") {
+      const png = nodePath.join(ROOT, "oboext", "public", "avatar.png");
+      if (!existsSync(png)) return new Response("Not found", { status: 404 });
+      return new Response(readFileSync(png), {
+        status: 200,
+        headers: {
+          "content-type": "image/png",
+          "cache-control": "public, max-age=31536000, immutable",
+        },
+      });
     }
     if (rp === "/opensearch.xml") {
       // Browser search-provider discovery. A machine document like robots.txt:

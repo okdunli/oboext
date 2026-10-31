@@ -144,7 +144,11 @@
   {@html chrome().themeScripts}
   {#if publicPath()}{@html chrome().siteHead}{/if}
   {#if publicPath()}{@html chrome().pluginHead}{/if}
-  <link rel="icon" href="data:,">
+  <!-- Real favicon: browsers that honour the data:, trick skip /favicon.ico,
+       but probes that don't (bots, older Safari) paid a 2 MB SPA fallback.
+       The middleware serves the real icon at the root, immutable. -->
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
   <html lang={docLocale()}>
   {#if publicPath()}

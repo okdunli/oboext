@@ -8,7 +8,9 @@
   // suggest list while typing. Two shapes, one scan: the memoized payload is
   // shared, the projection differs.
   import { listPosts, suggestDedupe, suggestHighlight } from "@server/queries";
+  import { searchPublishedPages } from "@server/pages";
   import { memoQuery } from "@server/cache";
+  import { headerLocale, localeHref } from "@server/i18n";
 
   // R156: the popover fires on every keystroke (debounced), and the search
   // itself is an ILIKE '%…%' scan - the most expensive public query in the app.
@@ -40,6 +42,9 @@
   }
 
   export async function GET(request) {
+    // R477: the popover on the /en tree offered zh URLs for both kinds - the
+    // request locale has to ride every link, exactly like the loaders do.
+    const locale = headerLocale(request);
     const url = new URL(request.url);
     const format = url.searchParams.get("format") === "opensearch" ? "opensearch" : "ui";
     const q = (url.searchParams.get("q") || "").trim().slice(0, MAX_Q);
@@ -56,24 +61,48 @@
       // scan each. ILIKE is case-insensitive, so the key lowercases.
       // invalidateContentCaches drops the `sq:` prefix, so a publish shows up
       // on the next keystroke, not after the TTL.
-      const payload = await memoQuery(`sq:suggest:${q.toLowerCase()}`, 20_000, async () => {
-        const { items, total } = await listPosts({
-          status: "published",
-          search: q,
-          // Two or three rows go out of five to one title: over-fetch so the
-          // de-dup still fills the popover instead of shortening it.
-          limit: 10,
-        });
+      // Locale is part of the key: the items now carry locale-prefixed URLs
+      // (R477), so a shared key would hand zh links to the en tree and back.
+      const payload = await memoQuery(`sq:suggest:${locale}:${q.toLowerCase()}`, 20_000, async () => {
+        const [{ items, total }, pageHits] = await Promise.all([
+          listPosts({
+            status: "published",
+            search: q,
+            // Two or three rows go out of five to one title: over-fetch so the
+            // de-dup still fills the popover instead of shortening it.
+            limit: 10,
+          }),
+          // R414: a reader searching "about"/"pricing" wants the PAGE, not a
+          // post that mentions it. Pages follow the posts and share the five
+          // slots; `total` stays the post count so the search page (posts only)
+          // never claims results it cannot show.
+          searchPublishedPages(q, 5),
+        ]);
         const rows = suggestDedupe(items || []).slice(0, 5);
-        return {
-          items: rows.map((p) => ({
+        const seen = new Set(rows.map((r) => r.url));
+        const pageRows = pageHits
+          .filter((p) => !seen.has(p.url))
+          .map((p) => ({
             id: p.id,
             title: p.title,
-            url: p.url,
+            url: localeHref(p.url, locale),
+            // A page with a cover gets the same thumbnail slot a post does.
             thumbnail: p.featuredImage || null,
-            // \u0001/\u0002-marked snippet, never HTML: the client renders it.
             hl: suggestHighlight(p.title ?? "", q),
-          })),
+            kind: "page",
+          }));
+        return {
+          items: [
+            ...rows.map((p) => ({
+              id: p.id,
+              title: p.title,
+              url: localeHref(p.url, locale),
+              thumbnail: p.featuredImage || null,
+              hl: suggestHighlight(p.title ?? "", q),
+              kind: "post",
+            })),
+            ...pageRows,
+          ].slice(0, 5),
           total: total || 0,
         };
       });

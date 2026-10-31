@@ -1498,6 +1498,38 @@ async function search(payload: { q?: string; page?: unknown; all?: boolean }, ct
   if (cleaned && !payload.all && total === 1 && page === 1 && items[0]?.url) {
     return { redirect: items[0].url };
   }
+  // R416: the popover now finds PAGES (R414), but pressing Enter went to
+  // /search, which lists posts only - a reader whose only match was a page got
+  // an empty result list. A sole page hit redirects like a sole post hit does;
+  // two or more stay on the list (pages are not in the post pager).
+  const pageHits = cleaned ? await searchPublishedPages(cleaned, 5) : [];
+  if (cleaned && !payload.all && page === 1 && total === 0) {
+    if (pageHits.length === 1) return { redirect: pageHits[0]!.url };
+  }
+  // R460: the popover finds pages (R414) and a sole page hit redirects (R416),
+  // but two-or-more page matches still landed on an empty POST list. The theme
+  // owns the post cards, so the loader renders a small page list of its own in
+  // front of them - one block, every theme.
+  // Inline styles, not theme classes: this block has to look deliberate under
+  // every theme, and no theme knows the sk-page-hits name. Neutral greys only.
+  // First page only: the post list paginates, the page hits do not, and
+  // repeating the same page links on ?page=2 reads like a bug.
+  const pagesSection = page === 1 && pageHits.length
+    ? `<section class="sk-page-hits" aria-label="${R.esc(t("search.pages_heading"))}" style="margin:0 0 24px;padding:14px 18px;border:1px solid rgba(128,128,128,.35);border-radius:12px">` +
+      `<h2 style="margin:0 0 8px;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;opacity:.65">${R.esc(t("search.pages_heading"))}</h2>` +
+      `<ul style="margin:0;padding:0;list-style:none">` +
+      pageHits
+        .map(
+          (p) =>
+            `<li style="padding:6px 0"><a href="${R.esc(localeHref(p.url, locale))}">${R.esc(p.title)}</a>` +
+            (p.excerpt
+              ? `<span style="display:block;font-size:13px;opacity:.6">${R.esc(p.excerpt)}</span>`
+              : "") +
+            `</li>`,
+        )
+        .join("") +
+      `</ul></section>`
+    : "";
   const hrefFor = (n: number) =>
     `/search?q=${encodeURIComponent(cleaned)}&page=${n}${payload.all ? "&all=1" : ""}`;
   const extra =
@@ -1515,7 +1547,15 @@ async function search(payload: { q?: string; page?: unknown; all?: boolean }, ct
       ? t("search.title_bm", { q: cleaned, n: total })
       : t("search.title_q", { q: cleaned })
     : t("search.title");
-  const searchDesc = cleaned ? t("search.sub_found", { n: total }) : (settings.siteDescription ?? "");
+  // R465: with only page hits the old line said "0 posts" right above the page
+  // list; name the pages instead when there are no post results.
+  const searchDesc = !cleaned
+    ? (settings.siteDescription ?? "")
+    : pageHits.length > 0
+      ? total === 0
+        ? t("search.pages_found", { n: pageHits.length })
+        : t("search.sub_found_pages", { n: total, m: pageHits.length })
+      : t("search.sub_found", { n: total });
   // F4: search-term highlight.
   const searchHighlight =
     `<script>(function(){var done=false;function run(){if(done)return;done=true;` +
@@ -1563,7 +1603,7 @@ async function search(payload: { q?: string; page?: unknown; all?: boolean }, ct
   return {
     likedIds: [...(await likedP)].sort((a, b) => a - b),
     head: searchHead,
-    main: getThemeChrome(themeSlug || "skyscraper").listPage({
+    main: pagesSection + getThemeChrome(themeSlug || "skyscraper").listPage({
 
       title: searchTitle,
 
@@ -3546,6 +3586,10 @@ async function loginBrand() {
  * into the background and its instance-mates hit warm memos.
  */
 export async function warmReadWave(): Promise<void> {
+  // R417: legacy pages carry no body_plain (the save path started writing it
+  // in R415). Drain them in the background at boot so body search reaches old
+  // documents too; never blocks the first request, never fails it.
+  void backfillPageBodiesOnce().catch(() => {});
   // R274: the pairing flag starts false every process. Probe it here (the
   // boot read wave) so a site that already has translation pairs comes up
   // with self-canonical /en and a live hreflang cluster — without waiting for

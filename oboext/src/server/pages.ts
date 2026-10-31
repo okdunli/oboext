@@ -23,7 +23,7 @@ import { captureRename } from "./redirects.js";
 import { invalidateContentCaches, memoQuery, SIDEBAR_TTL } from "./cache.js";
 import { snapshotRevision } from "./revisions.js";
 import { decodeCursor, encodeCursor } from "./cursor.js";
-import { normalizeWindow } from "./queries.js";
+import { normalizeWindow, searchTerms } from "./queries.js";
 import { recordAdminAction } from "./security-events.js";
 
 export type PageView = Page & {
@@ -219,6 +219,90 @@ export async function getPageRowForPreview(slug: string): Promise<Page | null> {
   return row ?? null;
 }
 
+/** R417: pages saved before R415 carry `body_plain = NULL`, so body search
+ *  keeps missing them until their next save. One pass per process fills them
+ *  from the stored JSON blocks (same projection the save path now writes);
+ *  empty bodies get "" so they are not rescanned on every boot. Bounded per
+ *  call: a huge site drains over several starts instead of stalling one. */
+export async function backfillPageBodies(limit = 500): Promise<number> {
+  const rows = await db
+    .select({ id: pagesTable.id, content: pagesTable.content })
+    .from(pagesTable)
+    .where(isNull(pagesTable.bodyPlain))
+    .limit(limit);
+  let fixed = 0;
+  for (const row of rows) {
+    await db
+      .update(pagesTable)
+      .set({ bodyPlain: blocksToPlainText((row.content ?? []) as Block[]) })
+      .where(eq(pagesTable.id, row.id));
+    fixed++;
+  }
+  return fixed;
+}
+
+/** R418: the warm wave can run more than once per process (serverless cold
+ *  start, the admin warmUrls call), and each run would rescan pages for NULL
+ *  bodies. One pass per process is the contract; the direct function stays
+ *  exported for the tests and for a future manual trigger. */
+let bodyBackfillStarted = false;
+export function backfillPageBodiesOnce(): Promise<number> {
+  if (bodyBackfillStarted) return Promise.resolve(0);
+  bodyBackfillStarted = true;
+  return backfillPageBodies();
+}
+
+/** R414: published pages for the nav search popover. Same ILIKE terms the
+ *  post search uses, matched on title + slug + body_plain; the popover showed only
+ *  posts, so "about"/"pricing" pages were unfindable from the search box even
+ *  though they are the pages a reader most often looks for. Draft and
+ *  scheduled pages stay out (published + visible, exactly the guest rule). */
+export async function searchPublishedPages(
+  q: string,
+  limit = 5,
+): Promise<{ id: number; title: string; url: string; excerpt: string | null; featuredImage?: string | null }[]> {
+  // Same ceiling the post window uses: a caller-supplied number must never
+  // turn into an unbounded scan (the popover asks for 5, the redirect asks 2).
+  limit = Math.min(Math.max(Math.trunc(limit) || 5, 1), 20);
+  const terms = searchTerms(q);
+  if (!terms.length) return [];
+  const cfg = await getPermalinkConfig();
+  const rows = await db
+    .select({
+      id: pagesTable.id,
+      title: pagesTable.title,
+      slug: pagesTable.slug,
+      parentId: pagesTable.parentId,
+      excerpt: pagesTable.excerpt,
+      featuredImage: pagesTable.featuredImage,
+    })
+    .from(pagesTable)
+    .where(
+      and(
+        eq(pagesTable.status, "published"),
+        publishedPageVisible,
+        or(
+          ...terms.map(
+            (t) =>
+              sql`(${pagesTable.title} ILIKE ${"%" + t + "%"} OR ${pagesTable.slug} ILIKE ${"%" + t + "%"} OR coalesce(${pagesTable.bodyPlain}, '') ILIKE ${"%" + t + "%"})`,
+          ),
+        ),
+      ),
+    )
+    // id breaks the tie: two pages can share order + updatedAt (a restored
+    // backup, a bulk import), and without a last key the popover order flips
+    // between identical queries.
+    .orderBy(asc(pagesTable.order), desc(pagesTable.updatedAt), desc(pagesTable.id))
+    .limit(limit);
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    url: pageUrlFor(cfg, r),
+    excerpt: r.excerpt,
+    featuredImage: r.featuredImage,
+  }));
+}
+
 /** Published page by stored slug (null when missing/unpublished), fully
  *  hydrated (metas + url). The detail loader uses getPublishedPageRow +
  *  hydrate directly so the metas read rides its wave. */
@@ -376,6 +460,10 @@ export async function createPage(user: SessionUser | null, raw: Partial<PageInpu
       slug,
       excerpt,
       content,
+      // R415: pages never wrote body_plain, so a phrase living only in a page
+      // body was unsearchable (the popover matched title only). Same projection
+      // the post save writes.
+      bodyPlain: blocksToPlainText(content),
       status,
       featuredImage: input.featuredImage !== undefined ? input.featuredImage : null,
       seoTitle: input.seoTitle !== undefined ? clean(input.seoTitle) : null,
@@ -443,6 +531,7 @@ export async function updatePage(user: SessionUser | null, id: number, raw: Part
           ? input.excerpt || excerptFrom(blocksToPlainText(content))
           : existing.excerpt,
       content,
+      bodyPlain: blocksToPlainText(content),
       status: input.status ?? existing.status,
       featuredImage:
         input.featuredImage !== undefined ? input.featuredImage : existing.featuredImage,

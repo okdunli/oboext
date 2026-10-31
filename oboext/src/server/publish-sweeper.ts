@@ -29,8 +29,9 @@ const log = createLogger("publish");
 // pages_status_idx and filter published_at in the index: 2.3 ms at 5 000 pages.
 // A real site has orders of magnitude fewer pages than that, so this stays a
 // rounding error against a 60 s tick.
-// shortcut: pages pay a status-index scan instead of a range scan; add
-// pages_status_published_idx if the pages table ever reaches the thousands.
+// 0044 added pages_status_published_idx, so pages now ride the same
+// (status, published_at) range scan as posts; the 2.3 ms figure above is the
+// pre-index measurement, kept as the reason the index exists.
 
 const SWEEP_INTERVAL = 60_000;
 

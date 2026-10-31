@@ -273,6 +273,8 @@ export const pages = pgTable(
   (t) => ({
     slugIdx: uniqueIndex("pages_slug_idx").on(t.slug),
     statusIdx: index("pages_status_idx").on(t.status),
+    // 0044: the publish sweeper filters pages on (status, published_at).
+    statusPublishedIdx: index("pages_status_published_idx").on(t.status, t.publishedAt),
     // Declared to match db/migrations/0020: the admin pages listing sorts by
     // (updated_at DESC, id DESC) after filtering on status.
     statusUpdatedIdx: index("pages_status_updated_idx").on(t.status, t.updatedAt, t.id),

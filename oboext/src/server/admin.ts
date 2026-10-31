@@ -98,14 +98,20 @@ function canModifyContent(role: Role, ownerId: number, currentUserId: number): b
 export function jsonOk(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    // R437: admin JSON can carry signed URLs (preview links) and user data.
+    // An authenticated GET is still a GET - a shared proxy must not keep it.
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 }
 
 export function jsonFail(message: string, status = 400, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify({ error: message }), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8", ...(headers ?? {}) },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      ...(headers ?? {}),
+    },
   });
 }
 
@@ -1016,6 +1022,35 @@ export function moderationFlags(haystack: string, wordsRaw: string | undefined |
   return words.some((w) => lower.includes(w));
 }
 
+/** URLs in a comment: full http(s) links plus bare `www.` starts. A bare
+ *  `www.` inside an http(s) URL is not counted twice. */
+function countLinks(text: string): number {
+  const full = text.match(/https?:\/\/[^\s<>"']+/gi) ?? [];
+  const rest = text.replace(/https?:\/\/[^\s<>"']+/gi, " ");
+  const bare = rest.match(/(?:^|[\s(\[])(www\.[^\s<>"')]+)/gi) ?? [];
+  return full.length + bare.length;
+}
+
+/**
+ * R412: link-flood protection that needs no configuration. A fresh install has
+ * an empty moderation word list, so the classic "buy now" comment carrying five
+ * links was published instantly. Counting only (never HTML parsing): five or
+ * more links is spam, three or four holds the comment for review. The author's
+ * own site URL counts as one link - a spammer always fills it in too.
+ * Staff and webmentions are exempt: the first is trusted, the second is scraped
+ * content with a source URL by construction.
+ */
+export function linkFloodStatus(
+  content: string,
+  authorUrl: string | null | undefined,
+  current: "published" | "pending" | "spam",
+): "published" | "pending" | "spam" {
+  const links = countLinks(content) + (authorUrl?.trim() ? 1 : 0);
+  if (links >= 5) return "spam";
+  if (links >= 3 && current === "published") return "pending";
+  return current;
+}
+
 export async function createPublicComment(input: PublicCommentInput) {
   const postType = input.postType ?? "post";
   const t = postType === "page" ? pages : posts;
@@ -1154,6 +1189,7 @@ export async function createPublicComment(input: PublicCommentInput) {
   if (input.viaWebmention) status = "pending";
   if (settings.commentModeration) status = "pending";
   if (moderationFlags(haystack, settings.commentModerationWords)) status = "pending";
+  if (!isStaff && !input.viaWebmention) status = linkFloodStatus(content, authorUrl, status);
 
   // Comment-moderation plugins (e.g. comment-guard) may downgrade approval.
   const reviewed = await applyAsyncFilters<{

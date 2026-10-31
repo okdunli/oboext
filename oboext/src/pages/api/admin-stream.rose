@@ -41,8 +41,12 @@
 
   export async function GET(request: Request) {
     // Admin-only: the payload leaks nothing but a counter, but an anonymous
-    // caller must not be able to poll the endpoint either.
-    if (!getContext().user) return json({ error: "unauthorized" }, 401);
+    // caller must not be able to poll the endpoint either - and an authenticated
+    // MEMBER (subscriber) is not staff: the admin wall refuses it, so this
+    // endpoint answers the same 403 rather than becoming a member-side probe.
+    const user = getContext().user;
+    if (!user) return json({ error: "unauthorized" }, 401);
+    if ((user as { role?: string }).role === "subscriber") return json({ error: "forbidden" }, 403);
 
     const sinceRaw = new URL(request.url).searchParams.get("since");
     const since = Number.isFinite(Number(sinceRaw)) ? Number(sinceRaw) : 0;

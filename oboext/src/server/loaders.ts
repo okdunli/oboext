@@ -30,13 +30,14 @@ import {
   MACHINE_WINDOW_CAP,
 } from "./queries.js";
 import { likedPostsFor, visitorKeyFromCookieHeader } from "./post-likes.js";
+import { previewPageRowForToken, previewRowForToken } from "./preview-link.js";
 import { buildRobotsTxt } from "./sitemap.js";
 import { dbStats, rawQuery } from "./db.js";
 import { getPermalinkConfig, blogIndexUrlFor, pageIndexUrlFor, categoryUrlFor, tagUrlFor, authorUrlFor, AUTHOR_BASE_SEGMENT, resolveSitePath, paginate, postUrlFor, type PermalinkConfig } from "./links.js";
 import { resolveVirtualRoute, type VirtualSiteRoute } from "./virtual-routes.js";
 import { resolveCommentConfig } from "./comments-config.js";
 import { registerView } from "./register-view.js";
-import { getPublishedPageRow, hydrate as hydratePage, listPublishedPages } from "./pages.js";
+import { backfillPageBodiesOnce, getPageRowForPreview, getPublishedPageRow, hydrate as hydratePage, listPublishedPages, searchPublishedPages } from "./pages.js";
 import type { Page } from "./schema.js";
 import * as R from "./render.js";
 import { adjacentHtml, adjacentKeyOf, adjacentRelLinks } from "./adjacent.js";
@@ -1663,6 +1664,16 @@ async function postDetail(
       previewing = true;
     }
   }
+  // R408: a shared preview link (?preview=<token>) unlocks the same view for a
+  // reader with no account. The token names one post id, so it cannot open any
+  // other draft; the preview head below carries noindex.
+  if (!row) {
+    const viaToken = await previewRowForToken(payload.slug, ctx?.query?.get("preview"));
+    if (viaToken) {
+      row = viaToken;
+      previewing = true;
+    }
+  }
   if (!row) return { notFound: true };
   const locale = localeOf(ctx);
   const t = makeT(locale);
@@ -1698,7 +1709,10 @@ async function postDetail(
   // columns stay null, while a real request with NO Referer header yields ""
   // and is classified 'direct' - which is exactly what that traffic is.
   const viewsWrite = (async () => {
-    if (ctx.ip || ctx.ua) {
+    // R411: a preview is not a reader - a manager checking a draft, or anyone
+    // holding a preview link, must not move the view counters that feed
+    // "popular posts" and the dashboard.
+    if (!previewing && (ctx.ip || ctx.ua)) {
       try {
         await incrementViews(postId, ctx.ip, ctx.ua, ctx.referer);
       } catch {
@@ -1868,7 +1882,7 @@ async function postDetail(
   // unpublished posts only - a fixed bar over the theme's own chrome.
   const previewBanner = previewing
     ? `<div style="position:fixed;top:0;left:0;right:0;z-index:2147483000;background:#d97706;color:#fff;padding:6px 16px;text-align:center;font:600 14px/1.5 system-ui,sans-serif">` +
-      `Preview mode: this content is not yet published (status: ${R.esc(post.status)}${post.publishedAt && new Date(post.publishedAt) > new Date() ? `, scheduled for ${new Date(post.publishedAt).toLocaleString("zh-CN")}` : ""}) — visible to administrators and the author only` +
+      `Preview mode: this content is not yet published (status: ${R.esc(post.status)}${post.publishedAt && new Date(post.publishedAt) > new Date() ? `, scheduled for ${new Date(post.publishedAt).toISOString()}` : ""}) — not visible to the public` +
       `</div>`
     : "";
   return {
@@ -1913,7 +1927,7 @@ async function postDetail(
       // R216: publisher.logo is what makes a page eligible for Google's article
       // rich result. postHead falls back to the bundled brand mark when the
       // admin set no logo, so the field is never dropped.
-      R.postHead(post, settings.siteTitle ?? "", defaultDescription(settings), ctx.origin, settings.logoUrl || R.BRAND_LOGO, { wordCount: readWordCount, minutes: readMinutes, canonical: `${ctx.origin}${canonicalPath(post.url, locale)}`, inLanguage: locale }, settings.ogImageUrl, settings.twitterCard, settings.seoRobots) +
+      R.postHead(post, settings.siteTitle ?? "", defaultDescription(settings), ctx.origin, settings.logoUrl || R.BRAND_LOGO, { wordCount: readWordCount, minutes: readMinutes, canonical: `${ctx.origin}${canonicalPath(post.url, locale)}`, inLanguage: locale }, settings.ogImageUrl, settings.twitterCard, previewing ? "noindex,nofollow" : settings.seoRobots) +
       // rel=prev/next for the reading order (chronological neighbours). Only
       // present directions are emitted, so edge posts keep the head untouched.
       adjacentRelLinks(adjacent) +
@@ -1934,7 +1948,30 @@ async function pageDetail(
   // through the promise chain instead of a serial await.
   const themeSlugP = safe(getActiveThemeSlug());
   const settingsP = safe(getSettings());
-  const row = payload.preloaded ?? (await getPublishedPageRow(payload.slug));
+  let row = payload.preloaded ?? (await getPublishedPageRow(payload.slug));
+  // R410: the same signed preview link unlocks an unpublished page. The token
+  // carries the kind, so a post token can never open a page with the same id.
+  let previewing = false;
+  // R451: symmetry with postDetail's F7 - an editor or admin can open a draft
+  // PAGE at its public URL. Pages are manager-only content, so the author rule
+  // that applies to posts (authorId match) has no counterpart here.
+  if (!row && ctx?.user) {
+    const u = ctx.user as { role: import("./schema.js").Role };
+    if (can(u.role, "content:update:any")) {
+      const candidate = await getPageRowForPreview(payload.slug);
+      if (candidate) {
+        row = candidate;
+        previewing = true;
+      }
+    }
+  }
+  if (!row) {
+    const viaToken = await previewPageRowForToken(payload.slug, ctx?.query?.get("preview"));
+    if (viaToken) {
+      row = viaToken;
+      previewing = true;
+    }
+  }
   if (!row) return { notFound: true };
   const locale = localeOf(ctx);
   const t = makeT(locale);
@@ -2006,8 +2043,13 @@ async function pageDetail(
   const pgMinutes = Math.max(1, Math.round(pgCjk / 400 + pgWords / 200));
   const pgWordCount = pgCjk + pgWords;
 
+  const previewBanner = previewing
+    ? `<div style="position:fixed;top:0;left:0;right:0;z-index:2147483000;background:#d97706;color:#fff;padding:6px 16px;text-align:center;font:600 14px/1.5 system-ui,sans-serif">` +
+      `Preview mode: this page is not published (status: ${R.esc(page.status)}) — not visible to the public` +
+      `</div>`
+    : "";
   return {
-    main: tc.pagePage({
+    main: previewBanner + tc.pagePage({
       page,
       bodyHtml,
       recent: recent.items,
@@ -2017,7 +2059,7 @@ async function pageDetail(
       settings: { ...settings, t },
     }),
     head:
-      R.pageHead(page, settings.siteTitle ?? "", defaultDescription(settings), ctx.origin, settings.logoUrl || R.BRAND_LOGO, { wordCount: pgWordCount, minutes: pgMinutes, canonical: `${ctx.origin}${canonicalPath(page.url, locale)}`, inLanguage: locale }, settings.ogImageUrl, settings.twitterCard, settings.seoRobots) +
+      R.pageHead(page, settings.siteTitle ?? "", defaultDescription(settings), ctx.origin, settings.logoUrl || R.BRAND_LOGO, { wordCount: pgWordCount, minutes: pgMinutes, canonical: `${ctx.origin}${canonicalPath(page.url, locale)}`, inLanguage: locale }, settings.ogImageUrl, settings.twitterCard, previewing ? "noindex,nofollow" : settings.seoRobots) +
       pluginHead,
   };
 }

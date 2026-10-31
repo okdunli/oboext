@@ -210,6 +210,15 @@ export async function getPublishedPageRow(slug: string): Promise<Page | null> {
   });
 }
 
+/** Any page by slug, regardless of status or schedule — ONLY for the signed
+ *  preview link; the loader gates it on a token bound to this row's id.
+ *  Deliberately not memoized: previews are rare and must never leak into the
+ *  published cache (`pg:`). */
+export async function getPageRowForPreview(slug: string): Promise<Page | null> {
+  const [row] = await db.select().from(pagesTable).where(eq(pagesTable.slug, slug)).limit(1);
+  return row ?? null;
+}
+
 /** Published page by stored slug (null when missing/unpublished), fully
  *  hydrated (metas + url). The detail loader uses getPublishedPageRow +
  *  hydrate directly so the metas read rides its wave. */

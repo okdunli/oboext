@@ -331,6 +331,31 @@
       adBoot(0);
     }
   }
+
+  // R408: copy a shareable preview link for this (possibly unpublished) post.
+  // The server mints the token; the button only carries the id.
+  // Guarded: the compiler also evaluates this module on the server to
+  // collect state, where `document` does not exist.
+  if (typeof document !== "undefined") document.addEventListener("click", async (e) => {
+    const btn = e.target instanceof Element ? e.target.closest("[data-adm-preview-link]") : null;
+    if (!btn) return;
+    const pid = btn.getAttribute("data-adm-preview-link");
+    if (!pid) return;
+    try {
+      const kind = btn.getAttribute("data-adm-preview-kind") || "post";
+      const r = await fetch("/api/preview-link?kind=" + kind + "&id=" + encodeURIComponent(pid), { credentials: "same-origin" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.url) throw new Error(data.error || "生成失败");
+      const abs = new URL(data.url, location.origin).href;
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(abs);
+      else window.prompt("复制预览链接", abs);
+      const exp = Date.parse(data.expiresAt);
+      const days = Number.isFinite(exp) ? Math.max(1, Math.round((exp - Date.now()) / 86400000)) : 7;
+      if (typeof window.admToast === "function") window.admToast("预览链接已复制（" + days + " 天内有效）", "ok");
+    } catch (err) {
+      if (typeof window.admToast === "function") window.admToast(err instanceof Error ? err.message : "生成失败", "err");
+    }
+  });
 </script>
 
 <head>
@@ -345,6 +370,7 @@
     <a class="adm-btn adm-btn-ghost adm-btn-sm" href={postUrl()} target="_blank">查看文章<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/external-link.svg)"></span></a>
     {/if}
     {#if !isNew()}
+    <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-preview-link={p().id} data-adm-preview-kind="post">预览链接</button>
     <button
       type="button"
       class="adm-btn adm-btn-danger adm-btn-sm"

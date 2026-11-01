@@ -86,7 +86,16 @@ function run(args, cwd) {
   return r;
 }
 
+// Regenerate the generated tables at the VAULT first, not only in the stage:
+// the staged node_modules is a symlink, so the CLI resolves the project through
+// its own real path and can compile the VAULT's tables instead of the stage's.
+// A fresh clone ships only hello-oboext, so a stale table (18 entries) failed
+// the build on unresolvable plugin imports before anything could regenerate it.
 console.log('[build] staging in', STAGE);
+{
+  const rr = run([join(ROOT, 'tools', 'gen.mjs')], ROOT);
+  if (rr.status !== 0) process.exit(rr.status ?? 1);
+}
 // The junctions below link into the REAL project. rimraf semantics for a
 // junction differ across Node versions and one run followed the link and
 // emptied src/ in the vault, so each junction is unlinked FIRST - rmSync

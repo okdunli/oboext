@@ -16,7 +16,7 @@
 
   // Build-time constant, kept in sync with the root package.json (a JSON
   // import is not reliable under the esbuild rose bundler).
-  const VERSION = "0.2.9";
+  const VERSION = "0.3.0";
 
   export async function GET() {
     let db = "ok";

@@ -59,7 +59,7 @@ export type PostView = Post & {
   author: { id: number; name: string; email: string } | null;
   categories: TaxRef[];
   tags: TaxRef[];
-/** Custom fields (post_metas); themes consume e.g. bluemix_card_theme. */
+/** Custom fields (post_metas); themes consume them under their own keys. */
   metas: Record<string, string>;
   /** Whether THIS request's visitor already liked the post. Absent where the
    *  loader has no visitor to ask about (related, recent, feeds) - the renderers

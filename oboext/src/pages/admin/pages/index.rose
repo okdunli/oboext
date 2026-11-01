@@ -13,14 +13,31 @@
   function rows() {
     return data().items;
   }
+  // Every visible string comes from the loader in the request's language
+  // (R489, same contract as the dashboard / posts / comments).
+  function copy() {
+    return data().s || {};
+  }
+  function hint(key, vars) {
+    let out = String(copy()[key] || "");
+    for (const k of Object.keys(vars)) out = out.split("{" + k + "}").join(String(vars[k]));
+    return out;
+  }
+  function pagerSummary() {
+    return hint("pagerSummary", { total: data().total, page: data().page });
+  }
+  function confirmDeleteOne(title) {
+    return hint("confirmDeleteOne", { title: title });
+  }
   function fmtDate(iso) {
     if (!iso) return "—";
     const d = new Date(iso);
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
       "-" + String(d.getDate()).padStart(2, "0");
   }
-  function statusLabel(s) {
-    return s === "published" ? "已发布" : s === "draft" ? "草稿" : "已归档";
+  function statusLabel(v) {
+    const c = copy();
+    return v === "published" ? c.published : v === "draft" ? c.draft : c.archived;
   }
   function hasNext() {
     return data().page * data().limit < data().total;
@@ -57,28 +74,28 @@
 </script>
 
 <head>
-  <title>页面 - 管理后台</title>
+  <title>{copy().docTitle}</title>
 </head>
 
 <div class="adm-toolbar">
   <div class="adm-tabs">
-    <a class={(__rvQs().get("status") || "") === "" ? "is-active" : ""} href="/admin/pages">全部</a>
-    <a class={__rvQs().get("status") === "published" ? "is-active" : ""} href="/admin/pages?status=published">已发布</a>
-    <a class={__rvQs().get("status") === "draft" ? "is-active" : ""} href="/admin/pages?status=draft">草稿</a>
-    <a class={__rvQs().get("status") === "archived" ? "is-active" : ""} href="/admin/pages?status=archived">已归档</a>
+    <a class={(__rvQs().get("status") || "") === "" ? "is-active" : ""} href="/admin/pages">{copy().filterAll}</a>
+    <a class={__rvQs().get("status") === "published" ? "is-active" : ""} href="/admin/pages?status=published">{copy().published}</a>
+    <a class={__rvQs().get("status") === "draft" ? "is-active" : ""} href="/admin/pages?status=draft">{copy().draft}</a>
+    <a class={__rvQs().get("status") === "archived" ? "is-active" : ""} href="/admin/pages?status=archived">{copy().archived}</a>
   </div>
   <span style="flex:1"></span>
-  <a class="adm-btn" href="/admin/pages/new"><span class="adm-ic" style="--i:url(/public/icons/plus.svg)"></span>新建页面</a>
+  <a class="adm-btn" href="/admin/pages/new"><span class="adm-ic" style="--i:url(/public/icons/plus.svg)"></span>{copy().write}</a>
 </div>
 
 <div class="adm-toolbar" style="gap:8px;">
-  <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="publish">批量发布</button>
-  <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="draft">转草稿</button>
-  <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="archive">批量归档</button>
-  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="delete" data-confirm="确认删除选中的页面？此操作不可撤销。">批量删除</button>
+  <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="publish">{copy().bulkPublish}</button>
+  <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="draft">{copy().bulkDraft}</button>
+  <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="archive">{copy().bulkArchive}</button>
+  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-url="/api/pages" data-op="delete" data-confirm={copy().confirmBulkDelete}>{copy().bulkDelete}</button>
   <span style="flex:1"></span>
-  {#if byOrder()}<span class="adm-hint">排序值升序，0 最前</span>{/if}
-  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={sortHref()}>{byOrder() ? "按更新时间" : "按排序值"}</a>
+  {#if byOrder()}<span class="adm-hint">{copy().sortHint}</span>{/if}
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={sortHref()}>{byOrder() ? copy().sortByUpdated : copy().sortByOrder}</a>
 </div>
 
 <div class="adm-card adm-table-wrap">
@@ -86,10 +103,10 @@
     <thead>
       <tr>
         <th style="width:34px"><input type="checkbox" data-adm-act="check-all"></th>
-        <th>标题</th>
-        <th style="width:90px">状态</th>
-        <th style="width:72px">排序</th>
-        <th style="width:120px">更新</th>
+        <th>{copy().colTitle}</th>
+        <th style="width:90px">{copy().colStatus}</th>
+        <th style="width:72px">{copy().colOrder}</th>
+        <th style="width:120px">{copy().colUpdated}</th>
         <th style="width:130px"></th>
       </tr>
     </thead>
@@ -106,9 +123,9 @@
         <td class="adm-hint">{fmtDate(p.updatedAt)}</td>
         <td>
           <div class="row-actions">
-            <a class="adm-iconbtn" href={p.url} target="_blank" rel="noopener"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/eye.svg)"></span>查看</a>
-            <a class="adm-iconbtn" href={"/admin/pages/" + p.id}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pencil.svg)"></span>编辑</a>
-            <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/pages/" + p.id} data-confirm={"确认删除页面「" + p.title + "」？"}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span>删除</button>
+            <a class="adm-iconbtn" href={p.url} target="_blank" rel="noopener"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/eye.svg)"></span>{copy().actView}</a>
+            <a class="adm-iconbtn" href={"/admin/pages/" + p.id}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pencil.svg)"></span>{copy().actEdit}</a>
+            <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/pages/" + p.id} data-confirm={confirmDeleteOne(p.title)}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span>{copy().actDelete}</button>
           </div>
         </td>
       </tr>
@@ -116,15 +133,15 @@
     </tbody>
   </table>
   {#each emptyHint() as _}
-  <div class="adm-empty">还没有页面。</div>
+  <div class="adm-empty">{copy().empty}</div>
   {/each}
 </div>
 
 {#each pager() as _}
 <div class="adm-pager">
-  共 {data().total} 个页面 · 第 {data().page} 页
+  {pagerSummary()}
   <span style="flex:1"></span>
-  {#if hasPrev()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(data().page - 1)}>上一页</a>{/if}
-  {#if hasNext()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(data().page + 1)}>下一页</a>{/if}
+  {#if hasPrev()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(data().page - 1)}>{copy().pagerPrev}</a>{/if}
+  {#if hasNext()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(data().page + 1)}>{copy().pagerNext}</a>{/if}
 </div>
 {/each}

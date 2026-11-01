@@ -7,21 +7,24 @@
   function payload() {
     return JSON.stringify({ settings: p().settings, schema: p().schema });
   }
+  function copy() {
+    return p().s || {};
+  }
 </script>
 
 <head>
-  <title>站点设置 - 管理后台</title>
+  <title>{copy().docTitle}</title>
 </head>
 
 <div class="adm-thp" data-set-panel data-set-panel-data={payload()}>
   <div class="adm-thp-head">
     <div>
-      <h1 class="adm-h1">站点设置</h1>
-      <p class="adm-thp-desc">站点身份、阅读、SEO、评论与代码注入。保存后立即生效。</p>
+      <h1 class="adm-h1">{copy().title}</h1>
+      <p class="adm-thp-desc">{copy().lead}</p>
     </div>
     <div class="adm-thp-headbtns">
       <button type="button" class="adm-btn" data-set-save>
-        <span data-set-save-label>保存设置</span>
+        <span data-set-save-label>{copy().save}</span>
       </button>
     </div>
   </div>

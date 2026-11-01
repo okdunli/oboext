@@ -4,6 +4,9 @@
   function menus() {
     return d().menus || [];
   }
+  function copy() {
+    return d().s || {};
+  }
   function activeMenu() {
     var ms = menus();
     return ms.length ? ms[0] : null;
@@ -49,7 +52,7 @@
     return r.depth > 0;
   }
   function refState(r) {
-    return r.referenceSlug ? (r.url || "已选择") : "未选择";
+    return r.referenceSlug ? r.url || "" : "";
   }
   function indentStyle(r) {
     return "margin-left:" + r.depth * 20 + "px";
@@ -64,7 +67,7 @@
 </script>
 
 <head>
-  <title>菜单 - 管理后台</title>
+  <title>{copy().docTitle}</title>
 </head>
 
 <div class="adm-menu" data-menu-manager data-menus={payload()}>
@@ -74,7 +77,7 @@
       <button type="button" class="adm-menu-tab" data-menu-tab data-id={m.id}>{m.name} <span class="adm-menu-loc">({m.location})</span></button>
       {/each}
     </div>
-    <span class="adm-menu-auto">改动自动保存</span>
+    <span class="adm-menu-auto">{copy().autosave}</span>
   </div>
 
   <p class="adm-menu-msg" data-menu-msg></p>
@@ -84,33 +87,33 @@
     <div class="adm-menu-row" data-menu-row style={indentStyle(r)}>
       <span class="adm-menu-depth">{depthLabel(r)}</span>
       <select class="adm-select adm-menu-type" data-f="type">
-        <option value="custom">自定义链接</option>
-        <option value="post">文章</option>
-        <option value="page">页面</option>
-        <option value="category">分类</option>
-        <option value="tag">标签</option>
+        <option value="custom">{copy().customLink}</option>
+        <option value="post">{copy().fromPosts}</option>
+        <option value="page">{copy().fromPages}</option>
+        <option value="category">{copy().fromCategories}</option>
+        <option value="tag">{copy().fromTags}</option>
       </select>
       {#if (() => menuIsRef(r))()}
       <select class="adm-select adm-menu-ref" data-f="ref">
         <option value={r.referenceSlug}>{refLabel(r)}</option>
       </select>
       {/if}
-      <input class="adm-input adm-menu-label" data-f="label" value={r.label} placeholder="显示文字">
+      <input class="adm-input adm-menu-label" data-f="label" value={r.label} placeholder={copy().phLabel}>
       {#if (() => menuIsCustom(r))()}
-      <input class="adm-input adm-menu-url" data-f="url" value={r.url} placeholder="链接 /">
+      <input class="adm-input adm-menu-url" data-f="url" value={r.url} placeholder={copy().phUrl}>
       {/if}
       {#if (() => menuIsRef(r))()}
       <span class="adm-menu-mono" title={r.url}>{refState(r)}</span>
       {/if}
-      <input class="adm-input adm-menu-icon" data-f="icon" data-icon-picker="compact" value={r.icon} placeholder="图标标识" title="设置图标">
+      <input class="adm-input adm-menu-icon" data-f="icon" data-icon-picker="compact" value={r.icon} placeholder={copy().phIcon} title={copy().setIcon}>
       <div class="adm-menu-tools">
-        <button type="button" class="adm-iconbtn" data-menu-act="up" title="上移" aria-label="上移"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-up.svg)"></span></button>
-        <button type="button" class="adm-iconbtn" data-menu-act="down" title="下移" aria-label="下移"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-down.svg)"></span></button>
-        <button type="button" class="adm-iconbtn" data-menu-act="indent" title="作为上一项的子项" aria-label="缩进"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/corner-down-right.svg)"></span></button>
+        <button type="button" class="adm-iconbtn" data-menu-act="up" title={copy().moveUp} aria-label={copy().moveUp}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-up.svg)"></span></button>
+        <button type="button" class="adm-iconbtn" data-menu-act="down" title={copy().moveDown} aria-label={copy().moveDown}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-down.svg)"></span></button>
+        <button type="button" class="adm-iconbtn" data-menu-act="indent" title={copy().indent} aria-label={copy().indent}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/corner-down-right.svg)"></span></button>
         {#if (() => menuIsIndented(r))()}
-        <button type="button" class="adm-iconbtn" data-menu-act="outdent" title="升回顶级" aria-label="升回顶级"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/corner-up-left.svg)"></span></button>
+        <button type="button" class="adm-iconbtn" data-menu-act="outdent" title={copy().outdent} aria-label={copy().outdent}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/corner-up-left.svg)"></span></button>
         {/if}
-        <button type="button" class="adm-iconbtn danger" data-menu-act="del" title="删除" aria-label="删除"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span></button>
+        <button type="button" class="adm-iconbtn danger" data-menu-act="del" title={copy().delete} aria-label={copy().delete}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span></button>
       </div>
     </div>
     {/each}
@@ -118,8 +121,8 @@
 
   <div class={emptyClass()} data-menu-empty>
     <div style="margin-bottom:8px;display:flex;justify-content:center"><span class="adm-ic" style="width:32px;height:32px;--i:url(/public/icons/compass.svg)"></span></div>
-    <p>这个菜单还没有项目。</p>
+    <p>{copy().empty}</p>
   </div>
 
-  <button type="button" class="adm-btn adm-btn-ghost adm-menu-add" data-menu-add><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/plus.svg)"></span>添加菜单项</button>
+  <button type="button" class="adm-btn adm-btn-ghost adm-menu-add" data-menu-add><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/plus.svg)"></span>{copy().addItem}</button>
 </div>

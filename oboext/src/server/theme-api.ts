@@ -97,36 +97,10 @@ export type HomeParts = {
 
   total?: number;
 
-  widgets?: string;
   settings: Record<string, unknown>;
-  // bluemix full-home extras (ignored by the other themes)
-  recent?: PostView[];
-  sections?: { row: { category: TaxRef; title: string; icon: string | null }; posts: PostView[] }[];
-  rankings?: { most_comments: RankPost[]; most_likes: RankPost[]; most_reads: RankPost[] } | null;
-  rankTabs?: { labels: Record<string, string>; order: string[]; defaultTab: string };
   themeSettings?: Record<string, unknown>;
-  blogIndex?: string;
-  showHero?: boolean;
-  bannerMax?: number;
-  recentCount?: number;
-
-  /** bluemix `home-top` widget area, rendered under the banner. */
-  homeTop?: string;
-
-  /** bluemix home sidebar widget area (inside aside.bmx-blocks). */
-  sideWidgets?: string;
   /** Published posts per category id, for the sidebar list (default theme). */
   catCounts?: Map<number, number>;
-};
-
-export type RankPost = {
-  id: number;
-  url: string;
-  title: string;
-  thumbnail: string | null;
-  likes: number;
-  comments: number;
-  views: number;
 };
 
 export type ListParts = {
@@ -138,18 +112,12 @@ export type ListParts = {
   hrefFor: (p: number) => string;
   showPager?: boolean;
   extra?: string;
-  /** bluemix list page extras (ignored by the other themes) */
   hero?: PostView[];
   cats?: TaxRef[];
   blogIndex?: string;
-  bannerMax?: number;
   activeHref?: string;
 
   variant?: "blog" | "category" | "search" | "term";
-
-  widgets?: string;
-
-  drawerPosts?: PostView[];
 
   sidebarData?: { posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons?: boolean; catCounts?: Map<number, number> };
 
@@ -159,8 +127,6 @@ export type ListParts = {
   titleIcon?: string | null;
 
   titleDesc?: string;
-
-  emptyHint?: string;
 
   total?: number;
 
@@ -179,7 +145,6 @@ export type ListParts = {
 export type PostPageParts = {
   post: PostView;
   bodyHtml: string;
-  related: PostView[];
 
   relatedTaxonomy?: PostView[];
 
@@ -188,10 +153,6 @@ export type PostPageParts = {
   random?: PostView[];
   commentsHtml: string;
   metaHtml: string;
-
-  /** post.meta filter values for the bluemix hero badge row (original
-   *  parity: PostPage.tsx meta={{ ..., badges: metaItems.map(m => m.value) }}). */
-  metaBadges?: string[];
 
   /** The full post.meta items (label + value) — themes whose post page is
    *  R.postPage render them on the meta line via the pluginMeta param. */
@@ -206,8 +167,6 @@ export type PostPageParts = {
   shareHtml: string;
 
   blogIndex?: string;
-
-  widgets?: string;
 
   postBottom?: string;
 
@@ -229,8 +188,6 @@ export type PagePageParts = {
   bodyHtml: string;
   recent: PostView[];
   commentsHtml: string;
-
-  widgets?: string;
 
   settings?: Record<string, unknown>;
 };
@@ -318,8 +275,6 @@ export function fontPreloadLinks(slug: string): string {
 
 export const themeHrefCache = new Map<string, string>();
 export function themeCssHref(slug: string): string {
-  // Skyscraper's stylesheet is the build-time generated /public/theme.css (tools/gen.mjs inlines its fonts), so it never rides /theme-style/<slug>.
-  if (slug === "skyscraper") return publicAssetHref("theme.css");
   const main = readThemeCss(slug, slug + ".css");
   const extra = readThemeCss(slug, slug + "-extra.css");
   const key = slug + ":" + main.mtime + ":" + extra.mtime;
@@ -750,11 +705,6 @@ export function minifyCss(css: string): string {
 }
 
 export function themeCssContent(slug: string): string {
-  // Skyscraper is served from /public/theme.css, not this route. Returning ""
-  // made /theme-style/skyscraper answer 404 with a 9-byte body, which reads
-  // like a broken deploy; the middleware maps falsy to that bare 404, so the
-  // empty string is load-bearing and only the comment was missing.
-  if (slug === "skyscraper") return "";
   // readThemeCss answers { css: "", mtime: 0 } for a missing file, so the
   // optional -extra.css needs no try/catch and its mtime is a valid key half.
   const main = readThemeCss(slug, slug + ".css");
@@ -852,24 +802,6 @@ export const CATEGORY_ICON_MAP: Record<string, string> = {
 export const iconFileCache = new Map<string, string | null>();
 
 export const LUCIDE_CLASS_ALIAS: Record<string, string> = { "share-2": "share2" };
-
-export function bmixNavActive(settings: Record<string, any>, url: string): boolean {
-  let path = String(settings.__pathname ?? "/");
-  const base = String(settings.__basePath ?? "").replace(/\/+$/, "");
-  if (base && path.indexOf(base) === 0) path = path.slice(base.length) || "/";
-  if (!path.startsWith("/")) path = "/" + path;
-  path = path.replace(/\/+$/, "") || "/";
-  let href = String(url || "/").trim();
-  if (!href) return false;
-
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("//") || href.startsWith("#")) return false;
-  if (!href.startsWith("/")) href = "/" + href;
-  const q = href.indexOf("?");
-  if (q >= 0) href = href.slice(0, q);
-  href = href.replace(/\/+$/, "") || "/";
-  if (href === "/") return path === "/";
-  return path === href || path.indexOf(href + "/") === 0;
-}
 
 export function dfIconAccent(): string {
   return "df-ic df-ic-accent";

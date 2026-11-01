@@ -260,8 +260,8 @@ export function getWidgetType(type: string): WidgetTypeDef | null {
   return WIDGET_TYPES.find((w) => w.type === type) ?? null;
 }
 
-// Theme widget areas. The only shipped theme is skyscraper, whose manifest declares both base areas with themed labels; p11 will read manifests.
-export const THEME_SLUG = "skyscraper";
+// Fallback theme for widget areas when none is resolved. The shipped theme is default.
+export const THEME_SLUG = "default";
 
 export const WIDGET_AREAS: { key: string; label: string; description?: string }[] = [
   { key: "sidebar", label: "左侧栏", description: "固定左侧栏的组件区域" },

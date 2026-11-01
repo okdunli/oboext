@@ -17,9 +17,7 @@ import { ensurePluginsLoaded } from "./plugins.js";
 import { rawQuery } from "./db.js";
 import { splitLocalePath } from "./i18n.js";
 import { resolveOrigin } from "./site-origin.js";
-import { getActiveThemeSlug } from "./themes.js";
-import { themeLayout } from "./theme-chrome.js";
-import { blogListSize, categoryListSize, tagListSize } from "./dialects.js";
+import { blogListSize } from "./dialects.js";
 import { memoQuery } from "./cache.js";
 import { createLogger } from "./logger.js";
 
@@ -152,7 +150,7 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
   // reach it). Default 10k keeps today's single-query shape for normal sites;
   // the suite lowers it to prove the loop.
   const slice = Math.max(1, Number(process.env.OBOEXT_SITEMAP_SLICE) || 10_000);
-  const [posts, pages, categories, tags, cfg, settings, themeSlug, totals, catCounts, tagCounts, authorRows, authorCounts] =
+  const [posts, pages, categories, tags, cfg, settings, totals, catCounts, tagCounts, authorRows, authorCounts] =
     await Promise.all([
       // R247: windowCap - the sitemap lists the WHOLE site. limit:10000 used
       // to be silently clamped to 100 (the visitor's ceiling), so a blog past
@@ -163,7 +161,6 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
       listTags(),
       getPermalinkConfig(),
       getSettings(),
-      getActiveThemeSlug(),
       counts(),
       categoryPostCounts(),
       tagPostCounts(),
@@ -220,10 +217,9 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
   // loaders resolve - one arithmetic, so an advertised URL can never be a 404
   // and a served page can never be missing from the map. Page counts use
   // counts()/tax counts (published + visible), matching the loaders' totals.
-  const layout = themeLayout(themeSlug);
-  const blogSize = blogListSize(layout, settings.postsPerPage);
-  const catSize = categoryListSize(layout, settings.postsPerPage);
-  const tagSize = tagListSize(layout, settings.postsPerPage);
+  const blogSize = blogListSize(settings.postsPerPage);
+  const catSize = 12; // dialects.ts BASE category page size
+  const tagSize = 12; // dialects.ts BASE tag page size
   const pushPages = (
     path: string,
     count: number,

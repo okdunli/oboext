@@ -128,7 +128,7 @@
 </script>
 
 <head>
-  <title>Newsletter - 管理后台</title>
+  <title>{d().s.docTitle}</title>
 </head>
 
 {#each stats() as _}
@@ -209,7 +209,7 @@
 <div class="adm-pager">
   第 {d().page} 页
   <span style="flex:1"></span>
-  {#if hasPrev()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(d().page - 1)}>上一页</a>{/if}
-  {#if hasNext()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(d().page + 1)}>下一页</a>{/if}
+  {#if hasPrev()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(d().page - 1)}>{d().s.pagerPrev}</a>{/if}
+  {#if hasNext()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(d().page + 1)}>{d().s.pagerNext}</a>{/if}
 </div>
 {/each}

@@ -202,7 +202,7 @@
     var ctInput = root.querySelector("[data-ctheme-input]");
     if (ctInput) {
       var ctor = ed.constructor || {};
-      var ctKey = ctor.CARD_THEME_META_KEY || "bluemix_card_theme";
+      var ctKey = ctor.CARD_THEME_META_KEY || "card_color";
       var ctVal = ctKey in fm && fm[ctKey] != null ? String(fm[ctKey]) : "";
       ctInput.value = ctVal;
       if (typeof ed.setCardTheme === "function") ed.setCardTheme(ctVal);

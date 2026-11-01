@@ -20,7 +20,6 @@ import {
   listTags,
   popularPosts,
   randomPosts,
-  relatedPosts,
   relatedByTaxonomy,
   getAdjacentPosts,
   searchSingleHit,
@@ -47,7 +46,7 @@ import { pageNum } from "./paging.js";
 import { getAreaWidgets } from "./widgets.js";
 import { getActiveThemeSlug, getActiveThemeRenderConfig, getActiveThemeSettings, getThemeManifest } from "./themes.js";
 import { themeToCss, resolveThemeConfig } from "./theme-tokens.js";
-import { skyscraperBridgeRoot, skyscraperBridgeDark, themeColorMetas } from "./theme-bridge.js";
+import { themeColorMetas } from "./theme-bridge.js";
 import { HOOKS, applyFilters } from "./hooks.js";
 import { ensurePluginsLoaded } from "./plugins.js";
 import { getNotFoundSettings, peekNotFoundSettings } from "./not-found-config.js";
@@ -61,7 +60,7 @@ import { getAdminSecurity } from "./security.js";
 import { can } from "./admin.js";
 import { recordSearchTerm } from "./search-terms.js";
 import { getThemeChrome, publicAssetHref, themeScriptTags, themeLayout, catIconName, type MenuItem } from "./theme-chrome.js";
-import { dialectProfile, blogListSize, categoryListSize, tagListSize } from "./dialects.js";
+import { dialectProfile, blogListSize } from "./dialects.js";
 import { createLogger } from "./logger.js";
 import {
   DEFAULT_LOCALE,
@@ -155,17 +154,13 @@ async function pluginFooterHtml(kind: string): Promise<string> {
  * The subscribe door, on every public page's footer (site discoverability).
  *
  * Placed INSIDE the theme's own <footer> — just before its closing tag —
- * rather than as a `footerMenu` item, because only the default theme renders
- * footerMenu (skyscraper's R.footerHtml ignores it, and so do bluemix/codeman/
- * pseudolinear), and appending after tc.footer()'s whole string would park the
- * link outside <footer> on every theme. Every one of the five chrome modules
- * emits exactly one `</footer>`, so the splice is well defined; a future theme
- * that does not falls back to a plain append, which still keeps the link
- * visible.
+ * rather than as a `footerMenu` item: appending after tc.footer()'s whole
+ * string would park the link outside <footer>. The chrome module emits exactly
+ * one `</footer>`, so the splice is well defined; a future theme that does not
+ * falls back to a plain append, which still keeps the link visible.
  *
- * The styling is inline and token-driven rather than a theme class: the five
- * themes share no footer-link class (bmx `footer a`, codeman `.cm-footer a`,
- * skyscraper `footer .links a`, ...), and a bare anchor reads as an
+ * The styling is inline and token-driven rather than a theme class: a bare
+ * anchor reads as an
  * accident. The pill reuses --accent/--accent-text — the very tokens the
  * appearance panel writes — so it follows the site's palette on every theme
  * and both colour schemes, and it costs no stylesheet edit (the red line on
@@ -310,9 +305,8 @@ function chromePageKind(pathname: string, cfg: PermalinkConfig): string {
 
 // ------------------------------------------------------------------- chrome
 
-// Built-in sidebar used until an admin defines a "sidebar" menu; mirrors
-// SKY_SIDEBAR_FALLBACK in themes/skyscraper/Layout.tsx, with the index URL
-// driven by the permalink config so a renamed prefix rewires it too.
+// Built-in sidebar used until an admin defines a "sidebar" menu, with the
+// index URL driven by the permalink config so a renamed prefix rewires it too.
 const sidebarFallback = (cfg: PermalinkConfig, t: Translate): R.SkyItem[] => [
   { id: "s1", label: t("sidebar.home"), url: "/" },
   { id: "s2", label: t("sidebar.all_posts"), url: blogIndexUrlFor(cfg) },
@@ -378,28 +372,11 @@ async function chromeData(pathname: string, t: Translate) {
   // body raw-HTML channel at the top of <body> instead; a :root selector
   // applies identically from a body-positioned stylesheet (HTML5 allows
   // <style> in body), so the visual result is pixel-identical.
-  // Skyscraper's stylesheet consumes its private --sk-* scale; derive it
-  // from the saved generic tokens so the appearance panel actually repaints
-  // (light + dark blocks). See theme-bridge.ts.
   const themeManifest = getThemeManifest(themeSlug);
-  const skBase = (themeManifest?.config ?? {}) as Parameters<
-    typeof skyscraperBridgeRoot
-  >[1];
-  // Private token-scale bridge: the theme declares it (manifest
-  // "tokensBridge"), the program does not know the theme's name.
-  const skBridge =
-    themeManifest?.tokensBridge === "skyscraper"
-      ? {
-          root: skyscraperBridgeRoot(renderConfig, skBase),
-          dark: skyscraperBridgeDark(renderConfig, skBase),
-        }
-      : { root: "", dark: "" };
   const varsHtml =
     pathname.indexOf("/admin") === 0
       ? ""
-      : `<style id="rv-theme-vars">:root{${themeToCss(renderConfig)}${skBridge.root ? ";" + skBridge.root : ""}}` +
-        (skBridge.dark ? `[data-color-scheme="dark"]{${skBridge.dark}}` : "") +
-        `</style>` +
+      : `<style id="rv-theme-vars">:root{${themeToCss(renderConfig)}}</style>` +
         (typeof renderConfig.customCss === "string" && renderConfig.customCss
           ? `<style id="rv-theme-custom">${renderConfig.customCss}</style>`
           : "");
@@ -580,42 +557,6 @@ async function chrome(_payload: unknown, ctx?: Ctx) {
 
 // --------------------------------------------------------------------- home
 
-// -------- bluemix home helpers (mirror themes/bluemix/HomePage.tsx logic) --------
-
-async function sideWidgetsFor(themeSlug: string, t?: Translate): Promise<string> {
-  const layout = themeLayout(themeSlug);
-
-  if (layout !== "codeman" && layout !== "pseudolinear") return "";
-  const wrap = layout === "pseudolinear" ? "pl-side-stack" : "sk-widget-area";
-  return R.widgetAreaHtml(await getAreaWidgets(themeSlug, "sidebar"), wrap, t);
-}
-
-// Sync twin of sideWidgetsFor: identical markup, but over an area that was
-// already read, so a post view does not issue the sidebar query twice.
-function sideWidgetsHtml(
-  themeSlug: string,
-  items: Awaited<ReturnType<typeof getAreaWidgets>>,
-  t?: Translate,
-): string {
-  const layout = themeLayout(themeSlug);
-  if (layout !== "codeman" && layout !== "pseudolinear") return "";
-  const wrap = layout === "pseudolinear" ? "pl-side-stack" : "sk-widget-area";
-  return R.widgetAreaHtml(items, wrap, t);
-}
-
-async function bmixDrawerPosts(themeSlug: string): Promise<PostView[] | undefined> {
-  const layout = themeLayout(themeSlug);
-  if (layout !== "bluemix") return undefined;
-  // Sidebar reads run on every page: memoize 60s. A content write drops the
-  // entry (kvSet registers the key), so a new post shows up immediately.
-  const key = "sidebar:drawer";
-  const hit = kvGet<PostView[]>(key);
-  if (hit) return hit;
-  const { items } = await listPosts({ status: "published", limit: 8 });
-  kvSet(key, items, 60);
-  return items;
-}
-
 async function defaultSidebarData(want: boolean, showCatIcons = false): Promise<{ posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons: boolean; catCounts: Map<number, number> } | undefined> {
   if (!want) return undefined;
   const sKey = `sidebar:default:${showCatIcons}`;
@@ -646,40 +587,6 @@ async function defaultSidebarData(want: boolean, showCatIcons = false): Promise<
     cats: catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) })),
     showCatIcons,
     catCounts,
-  };
-}
-
-function bmClamp(v: unknown, dft: number, min: number, max: number): number {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return dft;
-  return Math.max(min, Math.min(max, Math.round(n)));
-}
-function bmStrOr(v: unknown, dft: string): string {
-  const s = typeof v === "string" ? v.trim() : "";
-  return s || dft;
-}
-const BM_RANK_KEYS = ["most_comments", "most_likes", "most_reads"] as const;
-type BmRankKey = (typeof BM_RANK_KEYS)[number];
-function bmRankOrderFrom(v: unknown): BmRankKey[] {
-  const SHORT: Record<string, BmRankKey> = { comments: "most_comments", likes: "most_likes", reads: "most_reads" };
-  const parsed = String(v ?? "").split(",").map((s) => SHORT[s.trim()]).filter((k): k is BmRankKey => !!k);
-  const order = Array.from(new Set(parsed));
-  for (const k of BM_RANK_KEYS) if (!order.includes(k)) order.push(k);
-  return order;
-}
-function bmRankDefaultFrom(v: unknown, fallback: BmRankKey): BmRankKey {
-  const key = `most_${String(v ?? "").trim()}`;
-  return (BM_RANK_KEYS as readonly string[]).includes(key) ? (key as BmRankKey) : fallback;
-}
-function bmToRankPost(p: any): { id: number; url: string; title: string; thumbnail: string | null; likes: number; comments: number; views: number } {
-  return {
-    id: p.id,
-    url: p.url,
-    title: p.title,
-    thumbnail: p.featuredImage ?? null,
-    likes: p.likes ?? 0,
-    comments: p.commentsCount ?? 0,
-    views: p.views ?? 0,
   };
 }
 
@@ -724,19 +631,14 @@ async function home(ctx?: Ctx) {
   // Neon RTTs on top of each list's own hydration. One Promise.all now issues
   // every main query at once; only the lists' hydration (it needs the post
   // ids first) still forms a second wave. homeLimit was the one real
-  // coupling - resolved by always fetching the pseudolinear maximum (30) and
-  // slicing per theme below. Reads that used to be gated on themeSlug (theme
+  // coupling - resolved by always fetching a 30-post window and slicing the
+  // homeLimit window off it below. Reads that used to be gated on themeSlug (theme
   // settings, per-category counts) run unconditionally: they ride the same
   // wave, so an unused read costs server work but no wall time.
   // The bundle (lists + categories + shuffle pool) is theme-independent and
   // memoized through the framework KV primitive for 60s - a shuffle that
   // changes once a minute is still a shuffle to any visitor.
   const cachedHome = kvGet<HomeBundle>("home:bundle");
-  // Widget area chains off the themeSlug read: the re-read rides the opening
-  // wave, and for themes that render sidebar widgets (codeman, pseudolinear)
-  // the area query issues mid-wave instead of after it. Returns "" without
-  // querying for the other themes (default, skyscraper, bluemix).
-  const widgetsP = getActiveThemeSlug().then(sideWidgetsFor);
   const [settings, themeSlug, cfg, tagRows, ts, catCounts, all, popular, catRows, random] =
     await Promise.all([
       getSettings(),
@@ -760,8 +662,6 @@ async function home(ctx?: Ctx) {
   const items = all.items.slice(0, homeLimit);
   const tc = getThemeChrome(themeSlug);
 
-  // non-bluemix themes render from the slim hero/latest split; skip the extra
-  // queries so their home stays cheap.
   // mirror buildEntityMetadata(kind:"home")：canonical = origin。
   // WebSite JSON-LD rides the home head: SearchAction is only truthful here
   // (the /search route is the sitewide query target).
@@ -798,119 +698,22 @@ async function home(ctx?: Ctx) {
         "query-input": "required name=search_term_string",
       },
     });
-  if (layout !== "bluemix") {
-    // tagRows/ts/catCounts ride the opening wave (see above); widgetsP was
-    // issued alongside it.
-    const widgets = await widgetsP;
-    const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
-    const dp = dialectProfile(layout);
-    return {
-      head: homeHead,
-      main: tc.home({
-
-        hero: dp.heroCount === 0 ? items : items.slice(0, dp.heroCount),
-        latest: dp.heroCount === 0 ? [] : items.slice(dp.heroCount, dp.heroCount + dp.latestCount),
-        liked: popular.items,
-        random,
-        cats,
-        tags,
-        catCounts,
-        total: all.total,
-        widgets,
-        settings: { ...settings, t },
-        themeSettings: ts,
-      }),
-      notice,
-    };
-  }
-
-  // ---- bluemix full two-column home (banner + sidebar + catnav + rankings + sections) ----
-  // `ts` rides the opening wave (see top of home()); the rest of the branch
-  // below depends on it only through pure-JS row building.
-  const blogIndex = blogIndexUrlFor(cfg);
-  const showHero = ts.showHero !== false;
-  const recentCount = bmClamp(ts.homeRecentCount, 8, 1, 24);
-  const catCount = bmClamp(ts.homeCategoryCount, 5, 1, 10);
-  const bannerMax = bmClamp(ts.bannerMaxCount, 5, 1, 10);
-  const mode = ts.homeCategoryMode === "custom" || ts.homeCategoryMode === "off" ? (ts.homeCategoryMode as string) : "auto";
-  const rows: { category: any; title: string; icon: string | null }[] = [];
-  if (mode === "auto") {
-    for (const c of cats) rows.push({ category: c, title: c.name, icon: (c as any).icon ?? null });
-  } else if (mode === "custom" && Array.isArray(ts.homeCategories)) {
-    const seen = new Set<string>();
-    for (const r of ts.homeCategories as { slug?: string; title?: string; icon?: string | null }[]) {
-      const slug = String(r?.slug ?? "");
-      if (!slug || seen.has(slug)) continue;
-      const category = cats.find((c) => c.slug === slug);
-      if (!category) continue;
-      seen.add(slug);
-      rows.push({ category, title: String(r?.title ?? "").trim() || category.name, icon: typeof r?.icon === "string" && r.icon.trim() ? r.icon.trim() : null });
-    }
-  }
-  // recent, the per-category sections, the three ranking lists and the two
-  // widget areas are mutually independent once `ts` is known - one wave
-  // instead of three (each used to be a full Neon RTT on a cold home).
-  const showRankings = ts.showRankings !== false;
-  type RankList = Awaited<ReturnType<typeof listPosts>>;
-  // Array destructuring cannot place a rest element mid-pattern, so the
-  // combined wave is sliced by index (rows.length is dynamic).
-  const results = await Promise.all([
-    listPosts({ status: "published", limit: Math.max(recentCount, bannerMax, 8) }),
-    ...rows.map((r) => listPosts({ status: "published", categorySlug: r.category.slug, limit: catCount })),
-    showRankings ? listPosts({ status: "published", orderBy: "comments", limit: 3, pinned: false }) : Promise.resolve(undefined),
-    showRankings ? listPosts({ status: "published", orderBy: "likes", limit: 3, pinned: false }) : Promise.resolve(undefined),
-    showRankings ? listPosts({ status: "published", orderBy: "views", limit: 3, pinned: false }) : Promise.resolve(undefined),
-    getAreaWidgets(themeSlug, "home-top"),
-    getAreaWidgets(themeSlug, "sidebar"),
-  ]) as unknown[];
-  const recent = results[0] as RankList;
-  const sectionLists = results.slice(1, 1 + rows.length) as RankList[];
-  const rc = results[1 + rows.length] as RankList | undefined;
-  const rl = results[2 + rows.length] as RankList | undefined;
-  const rv = results[3 + rows.length] as RankList | undefined;
-  const homeTopItems = results[4 + rows.length] as Awaited<ReturnType<typeof getAreaWidgets>>;
-  const homeSideItems = results[5 + rows.length] as Awaited<ReturnType<typeof getAreaWidgets>>;
-  const sections = rows
-    .map((row, i) => ({ row, posts: (sectionLists[i]?.items ?? []) as any[] }))
-    .filter((s) => s.posts.length > 0);
-  const rankings: { most_comments: any[]; most_likes: any[]; most_reads: any[] } | null = showRankings
-    ? {
-        most_comments: (rc as RankList).items.map(bmToRankPost),
-        most_likes: (rl as RankList).items.map(bmToRankPost),
-        most_reads: (rv as RankList).items.map(bmToRankPost),
-      }
-    : null;
-  const rankOrder = bmRankOrderFrom(ts.rankOrder);
-  const rankTabs = {
-    labels: {
-      most_comments: bmStrOr(ts.rankLabelComments, "热评文章"),
-      most_likes: bmStrOr(ts.rankLabelLikes, "大家喜欢"),
-      most_reads: bmStrOr(ts.rankLabelReads, "阅读最多"),
-    },
-    order: rankOrder,
-    defaultTab: bmRankDefaultFrom(ts.rankDefault, rankOrder[0]),
-  };
-
+  // tagRows/ts/catCounts ride the opening wave (see above).
+  const tags = tagRows.map((t) => ({ ...t, url: tagUrlFor(cfg, t) }));
+  const dp = dialectProfile(layout);
   return {
     head: homeHead,
     main: tc.home({
-      hero: items.slice(0, 4),
-      latest: items.slice(4, 12),
+      hero: dp.heroCount === 0 ? items : items.slice(0, dp.heroCount),
+      latest: dp.heroCount === 0 ? [] : items.slice(dp.heroCount, dp.heroCount + dp.latestCount),
       liked: popular.items,
       random,
       cats,
+      tags,
+      catCounts,
+      total: all.total,
       settings: { ...settings, t },
-      recent: recent.items as any[],
-      sections: sections as any,
-      rankings,
-      rankTabs,
       themeSettings: ts,
-      blogIndex,
-      showHero,
-      bannerMax,
-      recentCount,
-      homeTop: R.widgetAreaHtml(homeTopItems, "container-np bmx-ad-area", t),
-      sideWidgets: R.widgetAreaHtml(homeSideItems, "bmx-ad-area", t),
     }),
     notice,
   };
@@ -925,7 +728,7 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
   // its queries overlap the pager window's wave instead of following it.
   const themeSlugP = safe(getActiveThemeSlug());
   const tsP = safe(getActiveThemeSettings());
-  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default", t);
+  const sideP = sidebarBatchP(tsP);
   const [settings, themeSlug, cfg, catRows, all, ts] = await Promise.all([
     getSettings(),
     themeSlugP,
@@ -934,12 +737,9 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
     listPosts({ status: "published", limit: 5, orderBy: "views" }),
     tsP,
   ]);
-  // The chrome LAYOUT dialect this theme declares (see theme-api).
-  const layout = themeLayout(themeSlug);
-
   // R148: window size from the shared helpers (dialects.ts) - the sitemap
   // computes page counts from the very same functions.
-  const perPage = blogListSize(layout, settings.postsPerPage);
+  const perPage = blogListSize(settings.postsPerPage);
   const page = pageNum(payload.page);
   // R284: the /en tree lists PAIRED en posts (they are self-contained
   // documents with their own hreflang cluster) instead of re-listing the zh
@@ -970,7 +770,7 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
   if (page > totalPages) return { notFound: true };
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
   const blogIndex = blogIndexUrlFor(cfg);
-  const [widgets, drawerPosts, sidebarData] = await sideP;
+  const sidebarData = await sideP;
   const tc = getThemeChrome(themeSlug);
 
   const siteTitle = settings.siteTitle ?? "";
@@ -1017,7 +817,7 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
       ]),
     main: tc.listPage({
 
-      title: layout === "bluemix" ? t("list.latest_bm", { n: total }) : t("list.all"),
+      title: t("list.all"),
       sub: t("list.sub", { n: total, page, total: totalPages }),
       items: markLiked(items, await likedP),
       page,
@@ -1026,11 +826,8 @@ async function blogList(payload: { page?: number }, ctx?: Ctx) {
       hero: all.items,
       cats,
       blogIndex,
-      bannerMax: bmClamp(ts.bannerMaxCount, 5, 1, 10),
       activeHref: blogIndex,
       variant: "blog",
-      widgets,
-      drawerPosts,
       sidebarData,
       settings: { ...settings, t },
       themeSettings: ts,
@@ -1048,7 +845,7 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
   // (same pattern as blogList).
   const themeSlugP = safe(getActiveThemeSlug());
   const tsP = safe(getActiveThemeSettings());
-  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default", t);
+  const sideP = sidebarBatchP(tsP);
   const [category, settings, cfg, themeSlug, catRows, ts] = await Promise.all([
     getCategoryBySlug(payload.slug),
     getSettings(),
@@ -1057,20 +854,16 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     listCategories(),
     tsP,
   ]);
-  // The chrome LAYOUT dialect this theme declares (see theme-api).
-  const layout = themeLayout(themeSlug);
   if (!category) return { notFound: true };
-  const isSk = layout === "skyscraper";
-  // 0 means "follow the admin setting" (skyscraper); every other dialect
-  // carries a fixed page size in its profile.
-  const catPerPage = categoryListSize(layout, settings.postsPerPage);
+  // Category page size: the dialects.ts BASE profile.
+  const catPerPage = 12;
   // Category listing: memoize the page's post window for 2 minutes (a new
   // post surfaces on refresh or an admin write invalidates by TTL).
   // The locale is part of the key: the window is now per language tree (R305),
   // so the zh and en windows must not share one KV entry.
   const catKey = `cat:${payload.slug}:${page}:${themeSlug}:${locale}`;
   const cachedCat = kvGet<{ items: any[]; total: number }>(catKey);
-  // R146: every layout windows for real. Non-skyscraper layouts used to pass
+  // R146: every layout windows for real. The list used to pass
   // `offset: 0` plus a `page` option that PostQuery has never had (a silently
   // ignored property) - so /cat?page=2 rendered the IDENTICAL window as page
   // 1, and content past the dialect's page size was unreachable: the pager was
@@ -1103,12 +896,10 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
     ],
   });
   const cats = catRows.map((c) => ({ ...c, url: categoryUrlFor(cfg, c) }));
-  const [widgets, drawerPosts, sidebarData] = await sideP;
+  const sidebarData = await sideP;
   const tc = getThemeChrome(themeSlug);
 
-  const sub = isSk
-    ? `${category.description ? `<span>${category.description} · </span>` : ""}${t("list.sub", { n: total, page, total: totalPages })}`
-    : "";
+  const sub = "";
   const catCanonical = `${ctx.origin ?? ""}${canonicalPath(catUrl, locale)}`;
   // R146: self-canonical per page + page-marked title (was: every page
   // canonicalised to the bare category, i.e. page 2 labelled a duplicate).
@@ -1155,35 +946,27 @@ async function categoryList(payload: { slug: string; page?: number }, ctx: Ctx) 
       ]),
     pluginHead,
     main: tc.listPage({
-      title:
-        layout === "bluemix" || layout === "codeman" || layout === "pseudolinear"
-          ? category.name
-          : t("list.category_title", { name: category.name }),
+      title: t("list.category_title", { name: category.name }),
       crumbLast: category.name,
       sub,
       items: markLiked(items, await likedP),
       page,
       totalPages,
       hrefFor: (n) => paginate(catUrl, n),
-      // R146: the pager shows whenever there is more to page through - it used
-      // to be skyscraper-only, which (paired with the dead non-sk offset) made
-      // content past the first window unreachable for every other layout.
+      // R146: the pager shows whenever there is more to page through - the
+      // paired dead non-paged offset above used to make content past the
+      // first window unreachable.
       showPager: total > catPerPage,
       hero: items.slice(0, 5),
       cats,
       blogIndex: blogIndexUrlFor(cfg),
-      bannerMax: bmClamp(ts.bannerMaxCount, 5, 1, 10),
       activeHref: catUrl,
       variant: "category",
-      widgets,
-      drawerPosts,
       sidebarData,
       settings: { ...settings, t },
       themeSettings: ts,
 
-      titleIcon: layout === "bluemix"
-        ? (ts.useCustomIcons !== false ? catIconName(category) : null)
-        : (ts.useCustomIcons === true ? catIconName(category) : null),
+      titleIcon: ts.useCustomIcons === true ? catIconName(category) : null,
       titleDesc: category.description || "",
     }),
   };
@@ -1197,7 +980,7 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
   // (same pattern as blogList/categoryList).
   const themeSlugP = safe(getActiveThemeSlug());
   const tsP = safe(getActiveThemeSettings());
-  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s !== "skyscraper", t);
+  const sideP = sidebarBatchP(tsP);
   const [tag, settings, cfg, themeSlug, ts] = await Promise.all([
     getTagBySlug(payload.slug),
     getSettings(),
@@ -1205,13 +988,11 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
     themeSlugP,
     tsP,
   ]);
-  // The chrome LAYOUT dialect this theme declares (see theme-api).
-  const layout = themeLayout(themeSlug);
   if (!tag) return { notFound: true };
 
-  const isSk = layout === "skyscraper";
-  const tagPerPage = tagListSize(layout, settings.postsPerPage);
-  // R146: same fix as categoryList - non-skyscraper layouts passed offset 0
+  // Tag page size: the dialects.ts BASE profile.
+  const tagPerPage = 12;
+  // R146: same fix as categoryList - the tag list used to pass offset 0
   // (with no page option existing), so /tag?page=2 was byte-identical to
   // page 1 and content past the window was unreachable. Real windowing now.
   const { items, total } = await listPosts({
@@ -1238,10 +1019,8 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
       { label: `#${tag.name}`, href: tagUrl },
     ],
   });
-  const [widgets, drawerPosts, sidebarData] = await sideP;
+  const sidebarData = await sideP;
   const tc = getThemeChrome(themeSlug);
-
-  const contentTc = isSk ? tc : getThemeChrome("default");
   const tagCanonical = `${ctx.origin ?? ""}${canonicalPath(tagUrl, locale)}`;
   // R146: self-canonical per page + page-marked title (mirrors category/blog).
   const tagPageUrl = page > 1 ? `${tagCanonical}?page=${page}` : tagCanonical;
@@ -1286,21 +1065,18 @@ async function tagList(payload: { slug: string; page?: number }, ctx: Ctx) {
         { name: `#${tag.name}`, url: tagCanonical },
       ]),
     pluginHead,
-    main: contentTc.listPage({
+    main: tc.listPage({
       title: t("list.tag_title", { name: tag.name }),
       crumbLast: `#${tag.name}`,
 
-      sub: isSk ? t("list.sub", { n: total, page, total: totalPages }) : "",
+      sub: "",
       items: markLiked(items, await likedP),
       page,
       totalPages,
       hrefFor: (n) => paginate(tagUrl, n),
-      // R146: pager whenever there is more to page through (was skyscraper-only).
+      // R146: pager whenever there is more to page through.
       showPager: total > tagPerPage,
       variant: "term",
-      widgets,
-      drawerPosts,
-
       sidebarData,
       settings: { ...settings, t },
       themeSettings: ts,
@@ -1326,7 +1102,7 @@ async function authorList(payload: { authorId: number; page?: number }, ctx: Ctx
   const page = pageNum(payload.page);
   const themeSlugP = safe(getActiveThemeSlug());
   const tsP = safe(getActiveThemeSettings());
-  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s !== "skyscraper", t);
+  const sideP = sidebarBatchP(tsP);
   const [author, settings, cfg, themeSlug, ts] = await Promise.all([
     getPublicAuthor(payload.authorId),
     getSettings(),
@@ -1337,11 +1113,9 @@ async function authorList(payload: { authorId: number; page?: number }, ctx: Ctx
   if (!author) return { notFound: true };
   const origin = ctx.origin ?? "";
   // The listing window follows the post index: an author archive is a plain
-  // "the posts, filtered" listing, so the admin's own per-page setting has to
-  // move it — categoryListSize is dialect-fixed and would ignore it.
-  const layout = themeLayout(themeSlug);
-  const isSk = layout === "skyscraper";
-  const perPage = blogListSize(layout, settings.postsPerPage);
+  // "the posts, filtered" listing, so the admin's own per-page setting
+  // decides its size.
+  const perPage = blogListSize(settings.postsPerPage);
   // The locale is part of the key (R305): the window is per language tree.
   const aKey = `author:${payload.authorId}:${page}:${themeSlug}:${locale}`;
   const cachedA = kvGet<{ items: any[]; total: number }>(aKey);
@@ -1370,7 +1144,7 @@ async function authorList(payload: { authorId: number; page?: number }, ctx: Ctx
       { label: author.name, href: authorUrl },
     ],
   });
-  const [widgets, drawerPosts, sidebarData] = await sideP;
+  const sidebarData = await sideP;
   const tc = getThemeChrome(themeSlug);
   const avatar = author.avatarUrl
     ? author.avatarUrl.startsWith("http")
@@ -1427,17 +1201,13 @@ async function authorList(payload: { authorId: number; page?: number }, ctx: Ctx
     main: tc.listPage({
       title: t("list.author_title", { name: author.name }),
       crumbLast: author.name,
-      sub: isSk
-        ? `${bio ? `<span>${R.esc(bio)} · </span>` : ""}${t("list.sub", { n: total, page, total: totalPages })}`
-        : "",
+      sub: "",
       items: markLiked(items, await likedP),
       page,
       totalPages,
       hrefFor: (n: number) => paginate(authorUrl, n),
       showPager: total > perPage,
       variant: "term",
-      widgets,
-      drawerPosts,
       sidebarData,
       settings: { ...settings, t },
       themeSettings: ts,
@@ -1462,21 +1232,15 @@ async function search(payload: { q?: string; page?: unknown; all?: boolean }, ct
   const settingsP = safe(getSettings());
   const themeSlugP = safe(getActiveThemeSlug());
   const tsP = safe(getActiveThemeSettings());
-  const sideP = sidebarBatchP(themeSlugP, tsP, (s) => s === "default", t);
-  const settings0 = await settingsP;
+  const sideP = sidebarBatchP(tsP);
+  // Warm the settings read for the wave below.
+  await settingsP;
   const themeSlug = await themeSlugP;
-  const layout = themeLayout(themeSlug);
-
-  const isBm = layout === "bluemix";
-  const isSk = layout === "skyscraper";
-  // 0 means "follow the admin setting" (bluemix); every other dialect
-  // carries a fixed page size in its profile.
-  const perPage =
-    dialectProfile(layout).searchPerPage ||
-    Math.min(100, Math.max(1, Number(settings0.postsPerPage) || 10));
-  // R153: every layout windows for real - the same defect R146 fixed for
-  // category/tag (non-bluemix/non-skyscraper layouts were pinned to offset 0,
-  // so /search?page=N answered the page-1 window while the pager stayed
+  // Search page size: the dialects.ts BASE profile.
+  const perPage = 20;
+  // R153: search windows for real - the same defect R146 fixed for
+  // category/tag (the list was pinned to offset 0, so /search?page=N answered
+  // the page-1 window while the pager stayed
   // hidden), and an out-of-range page is a 404, not a 200 with an empty
   // window. Search is noindex so crawlers shrugged at the soft-404, but a
   // user holding a stale page-2 link got a silent lie.
@@ -1532,20 +1296,12 @@ async function search(payload: { q?: string; page?: unknown; all?: boolean }, ct
     : "";
   const hrefFor = (n: number) =>
     `/search?q=${encodeURIComponent(cleaned)}&page=${n}${payload.all ? "&all=1" : ""}`;
-  const extra =
-    cleaned && total > 1 && !payload.all
-      ? `<div class="sk-search-all">${t("search.all_lead")}<a href="/search?q=${encodeURIComponent(
-          cleaned,
-        )}&all=1">${t("search.all_link")}</a></div>`
-      : "";
   const [settings, ts] = await Promise.all([settingsP, tsP]);
-  const [widgets, drawerPosts, sidebarData] = await sideP;
+  const sidebarData = await sideP;
 
   const searchSiteTitle = settings.siteTitle ?? "";
   const searchTitle = cleaned
-    ? isBm
-      ? t("search.title_bm", { q: cleaned, n: total })
-      : t("search.title_q", { q: cleaned })
+    ? t("search.title_q", { q: cleaned })
     : t("search.title");
   // R465: with only page hits the old line said "0 posts" right above the page
   // list; name the pages instead when there are no post results.
@@ -1603,37 +1359,24 @@ async function search(payload: { q?: string; page?: unknown; all?: boolean }, ct
   return {
     likedIds: [...(await likedP)].sort((a, b) => a - b),
     head: searchHead,
-    main: pagesSection + getThemeChrome(themeSlug || "skyscraper").listPage({
+    main: pagesSection + getThemeChrome(themeSlug).listPage({
 
       title: searchTitle,
 
-      sub: isBm || layout === "codeman" || layout === "pseudolinear"
-        ? ""
-        : cleaned
-          ? isSk
-            ? t("search.sub_results", { n: total, page, total: totalPages })
-            : t("search.sub_found", { n: items.length })
-          : isSk
-            ? t("search.sub_hint")
-            : "",
+      sub: cleaned ? t("search.sub_found", { n: items.length }) : "",
       items: markLiked(items, await likedP),
       page,
       totalPages,
       hrefFor,
-      // R153: pager whenever there is more to page through (was bluemix/
-      // skyscraper-only, paired with the dead non-paged offset above).
+      // R153: pager whenever there is more to page through.
       showPager: total > perPage,
-      extra: isBm || isSk ? extra : "",
+      extra: "",
       variant: "search",
-      titleIcon: isBm ? null : "search",
+      titleIcon: "search",
       query: cleaned,
-      widgets,
-      drawerPosts,
-
       sidebarData,
       settings: { ...settings, t },
       themeSettings: ts,
-      emptyHint: isBm && !cleaned ? t("search.empty_hint") : undefined,
     }),
   };
 }
@@ -1649,25 +1392,15 @@ function safe<T>(p: Promise<T>): Promise<T> {
 }
 
 // Pre-issued sidebar batch shared by the list loaders (blog/category/tag/
-// search): the widget-area, drawer-post and sidebar reads all gate on the
-// theme slug, so calling this at the top of a loader chains them off the
-// themeSlug/themeSettings reads and their queries issue mid-wave instead of
-// forming their own wave after the loader's main reads. Await the returned
-// promise where the batch used to sit; the noop catch keeps a notFound
-// early return from orphaning it.
+// search): the sidebar read gates on the theme settings, so calling this at
+// the top of a loader chains it off the themeSettings read and its queries
+// issue mid-wave instead of forming their own wave after the loader's main
+// reads. Await the returned promise where the batch used to sit; the noop
+// catch keeps a notFound early return from orphaning it.
 function sidebarBatchP(
-  themeSlugP: Promise<string>,
   tsP: Promise<Record<string, unknown>>,
-  want: (themeSlug: string) => boolean,
-  tr?: Translate,
-): Promise<[string, PostView[] | undefined, Awaited<ReturnType<typeof defaultSidebarData>>]> {
-  const p = Promise.all([themeSlugP, tsP]).then(([s, t]) =>
-    Promise.all([
-      sideWidgetsFor(s, tr),
-      bmixDrawerPosts(s),
-      defaultSidebarData(want(s), t.useCustomIcons === true),
-    ]),
-  );
+): Promise<Awaited<ReturnType<typeof defaultSidebarData>>> {
+  const p = tsP.then((t) => defaultSidebarData(true, t.useCustomIcons === true));
   p.catch(() => {});
   return p;
 }
@@ -1725,20 +1458,11 @@ async function postDetail(
   // adjacentKeyOf mirrors the SQL's coalesce(published_at, created_at).
   const adjacentP = safe(getAdjacentPosts(postId, adjacentKeyOf(row.post)));
 
-  const relatedN = dialectProfile(layout).relatedN;
-  // Only three themes render `related` (bluemix / pseudolinear / codeman);
-  // the default theme's post page reads relatedTaxonomy alone and skyscraper
-  // reads neither. Computing the date-based set unconditionally ran ~6
-  // pointless queries per post view on every per-cookie render-cache miss.
-  const usesRelated = layout === "bluemix" || layout === "pseudolinear" || layout === "codeman";
-  const highlight = layout === "skyscraper" || layout === "bluemix";
+  // The default theme's post page reads relatedTaxonomy alone; both widget
+  // areas (post-bottom + sidebar) are read unconditionally.
   const isDefault = layout === "default";
-  const isBluemix = layout === "bluemix";
-  // Bluemix renders both areas too (PostPage.tsx: sidebar after PostSidebar).
-  // Every theme but skyscraper renders a sidebar area, so the sidebar read is
-  // not gated on widgetAreas - codeman/pseudolinear paint it through `widgets`.
-  const widgetAreas = isDefault || isBluemix;
-  const wantsSidebar = layout !== "skyscraper";
+  const widgetAreas = isDefault;
+  const wantsSidebar = isDefault;
   // The view-count write used to be awaited AFTER the reads block — a whole
   // extra serial round trip on Neon (~550ms) tacked onto every render-cache
   // miss. It reads nothing the reads produce, so it rides the same wave and
@@ -1769,7 +1493,7 @@ async function postDetail(
   // round trip with them) overlaps the reads wave instead of running after it,
   // and the head follows the post instead of re-reading anything.
   const hydratedP = safe(hydrate(row, { preview: previewing }));
-  const bodyHtmlP = hydratedP.then((p) => R.buildPostBody(p, "post", highlight));
+  const bodyHtmlP = hydratedP.then((p) => R.buildPostBody(p, "post", false));
   const pluginHeadP = Promise.all([hydratedP, settingsP])
     .then(([post, settings]) => ({
       kind: "post" as const,
@@ -1791,10 +1515,8 @@ async function postDetail(
   // The default theme's sidebar bundle is five more queries on a cold 60s
   // window, and it needs the theme settings only to read `useCustomIcons`.
   // Pre-issuing it here folds the old second wave into the opening one.
-  const tsP = isDefault ? safe(getActiveThemeSettings()) : null;
-  const sideDataP = tsP
-    ? tsP.then((t) => defaultSidebarData(true, t?.useCustomIcons === true))
-    : null;
+  const tsP = safe(getActiveThemeSettings());
+  const sideDataP = tsP.then((t) => defaultSidebarData(true, t?.useCustomIcons === true));
   // The wave: everything that needs no other read's result issues together -
   // hydration, the comments/related reads, the body render, the plugin head
   // and both widget areas. One Neon round trip on a cold view.
@@ -1802,7 +1524,6 @@ async function postDetail(
     post,
     bodyHtml,
     pluginHead,
-    related,
     settings,
     items,
     popular,
@@ -1817,22 +1538,19 @@ async function postDetail(
     hydratedP,
     bodyHtmlP,
     pluginHeadP,
-    usesRelated ? relatedPosts(postId, relatedN) : Promise.resolve([] as PostView[]),
     settingsP,
     listPostCommentsCached(postId, "post"),
     popularP,
     randomP,
     cfgP,
-    layout === "default"
-      ? relatedByTaxonomy(postId, dialectProfile(layout).taxonomyRelatedN)
-      : Promise.resolve(undefined),
+    relatedByTaxonomy(postId, dialectProfile(layout).taxonomyRelatedN),
     widgetAreas
       ? getAreaWidgets(themeSlug, "post-bottom")
       : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),
     wantsSidebar
       ? getAreaWidgets(themeSlug, "sidebar")
       : Promise.resolve<Awaited<ReturnType<typeof getAreaWidgets>>>([]),
-    sideDataP ?? Promise.resolve(undefined),
+    sideDataP,
     adjacentP,
     viewsWrite,
   ]);
@@ -1867,8 +1585,8 @@ async function postDetail(
 
   // Reading time from the rendered body: CJK counts per character (~400/min),
   // everything else per word (~200/min). Floor of 1 so short posts still read
-  // as "about a minute". Rides the postMeta payload so every theme's meta row
-  // (defMetaHtml, bluemix hero badges) picks it up in one place. wordCount /
+  // as "about a minute". Rides the postMeta payload so the theme's meta row
+  // (defMetaHtml) picks it up in one place. wordCount /
   // minutes also feed the BlogPosting JSON-LD (timeRequired / wordCount).
   const readPlain = bodyHtml.replace(/<[^>]+>/g, " ");
   const readCjk = (readPlain.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) ?? []).length;
@@ -1909,14 +1627,11 @@ async function postDetail(
     ? `<div class="mt-8 flex flex-wrap gap-2 border-t border-[var(--border)] pt-6">${(post.tags || []).map((t) => `<a href="${R.esc(t.url || tagUrlFor(cfg, t))}" class="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--text)] hover:border-[var(--accent)] hover:text-[var(--accent)]">#${R.esc(t.name)}</a>`).join("")}</div>`
     : "";
 
-  // Sidebar widgets for codeman/pseudolinear paint the area read in the
-  // opening wave; the other themes return "" and use sidebarWidgets below.
-  const widgets = sideWidgetsHtml(themeSlug, sideItems, t);
   const postBottom = widgetAreas
-    ? R.widgetAreaHtml(bottomItems, isBluemix ? "model-wrapper bmx-ad-area" : "space-y-6", t)
+    ? R.widgetAreaHtml(bottomItems, "space-y-6", t)
     : "";
   const sidebarWidgets = widgetAreas
-    ? R.widgetAreaHtml(sideItems, isBluemix ? "bmx-ad-area" : "space-y-6", t)
+    ? R.widgetAreaHtml(sideItems, "space-y-6", t)
     : "";
   // F7: the preview banner rides the rendered main for managers/authors on
   // unpublished posts only - a fixed bar over the theme's own chrome.
@@ -1931,16 +1646,12 @@ async function postDetail(
     main: previewBanner + tc.postPage({
       post: postView,
       bodyHtml,
-      related,
       relatedTaxonomy,
       popular,
       random,
       commentsHtml,
       metaHtml,
       defMetaHtml,
-      // post.meta filter values (reading-time, . ) ride the bluemix hero card's.
-      // badge row (original parity: PostPage.tsx meta={{ ..., badges }}).
-      metaBadges: metaPayload.items.map((m) => m.value),
       metaItems: metaPayload.items,
       tagsHtml,
       defTagsHtml,
@@ -1955,7 +1666,6 @@ async function postDetail(
         locale,
       ),
       blogIndex: blogIndexUrlFor(cfg),
-      widgets,
       postBottom,
       sidebarWidgets,
 
@@ -2019,14 +1729,12 @@ async function pageDetail(
   // One hydration, three consumers: the page, its rendered body and the plugin
   // head all chain off it, so body rendering (pure CPU without DB-backed
   // shortcodes, one round trip with them) overlaps the reads wave instead of
-  // running after it, and the sidebar widgets need only the theme slug.
+  // running after it.
   const hydratedPageP = safe(hydratePage(row));
-  const [page, bodyHtml, pluginHead, widgets, settings, recent, items, themeSlug] =
+  const [page, bodyHtml, pluginHead, settings, recent, items, themeSlug] =
     await Promise.all([
       hydratedPageP,
-      Promise.all([hydratedPageP, themeSlugP]).then(([p, s]) =>
-        R.buildPostBody(p, "page", s === "skyscraper" || s === "bluemix"),
-      ),
+      hydratedPageP.then((p) => R.buildPostBody(p, "page", false)),
       Promise.all([hydratedPageP, settingsP])
         .then(([p, settings]) => ({
           kind: "page" as const,
@@ -2044,10 +1752,9 @@ async function pageDetail(
           ],
         }))
         .then((headContext) => pluginHeadHtml(headContext)),
-      themeSlugP.then(sideWidgetsFor),
       settingsP,
       themeSlugP
-        .then((s) => listPosts({ status: "published", limit: s === "bluemix" ? 4 : 5 })),
+        .then(() => listPosts({ status: "published", limit: 5 })),
       listPostCommentsCached(row.id, "page"),
       themeSlugP,
     ]);
@@ -2095,7 +1802,6 @@ async function pageDetail(
       recent: recent.items,
       commentsHtml,
 
-      widgets,
       settings: { ...settings, t },
     }),
     head:

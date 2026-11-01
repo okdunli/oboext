@@ -14,9 +14,8 @@
 
   import { ping } from "@server/db";
 
-  // Build-time constant, kept in sync with the root package.json by
-  // scripts/health-endpoint.test.mts (a JSON import is not reliable under the
-  // esbuild rose bundler).
+  // Build-time constant, kept in sync with the root package.json (a JSON
+  // import is not reliable under the esbuild rose bundler).
   const VERSION = "0.2.9";
 
   export async function GET() {

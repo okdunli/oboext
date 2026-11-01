@@ -1,6 +1,14 @@
 <script>
   // Categories manager — port of <TaxonomyManager type="category" />.
   let d = $data(() => __rvLoad("admin.taxonomies", {}));
+  function copy() {
+    return d().s || {};
+  }
+  function hint(key, vars) {
+    let out = String(copy()[key] || "");
+    for (const k of Object.keys(vars)) out = out.split("{" + k + "}").join(String(vars[k]));
+    return out;
+  }
   function cats() {
     return d().categories || [];
   }
@@ -25,7 +33,7 @@
     return cats().length ? [] : [1];
   }
   function confirmDelete(c) {
-    return "确认删除分类「" + c.name + "」？子分类会提升为顶级分类。";
+    return hint("catConfirmDelete", { name: c.name });
   }
   function ic(n) {
     return '<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/' + n + '.svg)"></span>';
@@ -44,55 +52,55 @@
 </script>
 
 <head>
-  <title>分类 - 管理后台</title>
+  <title>{copy().catDocTitle}</title>
 </head>
 
 <form class="adm-card adm-tax-add adm-tax-add-cat" data-adm-form="create-category">
   <div class="adm-tax-fields">
     <div class="adm-field">
-      <label>名称</label>
-      <input class="adm-input" name="name" required placeholder="例如：技术随笔">
+      <label>{copy().name}</label>
+      <input class="adm-input" name="name" required placeholder={copy().catPhName}>
     </div>
     <div class="adm-field">
-      <label>别名（可选）</label>
-      <input class="adm-input" name="slug" placeholder="留空自动生成">
+      <label>{copy().slugOptional}</label>
+      <input class="adm-input" name="slug" placeholder={copy().catPhSlug}>
     </div>
     <div class="adm-field">
-      <label>父分类</label>
+      <label>{copy().catParent}</label>
       <select class="adm-select" name="parentId">
-        <option value="">无（顶级）</option>
+        <option value="">{copy().catNoneTop}</option>
         {#each topCats() as c}
         <option value={c.id}>{c.name}</option>
         {/each}
       </select>
     </div>
     <div class="adm-field adm-tax-grow">
-      <label>描述（可选）</label>
-      <input class="adm-input" name="description" placeholder="分类说明">
+      <label>{copy().catDescOptional}</label>
+      <input class="adm-input" name="description" placeholder={copy().catPhDesc}>
     </div>
     <div class="adm-field">
-      <label>图标（可选）</label>
-      <input class="adm-input" name="icon" data-icon-picker placeholder="留空则用默认图标">
+      <label>{copy().catIconOptional}</label>
+      <input class="adm-input" name="icon" data-icon-picker placeholder={copy().catPhIcon}>
     </div>
   </div>
-  <button class="adm-btn" type="submit">{@html ic("plus")} 添加</button>
+  <button class="adm-btn" type="submit">{@html ic("plus")} {copy().add}</button>
 </form>
 
 <div class="adm-toolbar" style="gap:8px;">
-  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-op="delete" data-url="/api/categories" data-confirm="确认删除选中的分类？其下文章将转为未分类，子分类升级为顶级。">批量删除</button>
+  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-op="delete" data-url="/api/categories" data-confirm={copy().catConfirmBulk}>{copy().catBulkDelete}</button>
 </div>
 
 <div class="adm-card adm-table-wrap adm-tax-table">
   <table class="adm-table">
     <thead>
       <tr>
-        <th style="width:34px"><input type="checkbox" data-adm-act="check-all" title="全选"></th>
+        <th style="width:34px"><input type="checkbox" data-adm-act="check-all" title={copy().selectAll}></th>
         <th style="width:32px"></th>
-        <th>名称</th>
-        <th style="width:24%">别名</th>
-        <th style="width:120px">父分类</th>
-        <th>描述</th>
-        <th style="width:200px;text-align:right">操作</th>
+        <th>{copy().name}</th>
+        <th style="width:24%">{copy().slug}</th>
+        <th style="width:120px">{copy().catParent}</th>
+        <th>{copy().description}</th>
+        <th style="width:200px;text-align:right">{copy().actions}</th>
       </tr>
     </thead>
     <tbody>
@@ -100,8 +108,8 @@
       <tr data-cat-id={c.id} data-parent-id={c.parentId || ""}>
         <td><input type="checkbox" class="adm-check" value={c.id}></td>
         <td class="adm-cat-td">
-          <button type="button" class="adm-iconbtn adm-cat-ic" data-cat-icon-id={c.id} data-cat-icon-val={iconOf(c)} title="更换图标">{@html catGlyph(c)}</button>
-          <span class="adm-drag-handle" draggable="true" title="拖动排序（拖到行左侧空白＝同级/置顶，拖到行身＝成为其子分类）">{@html ic("grip-vertical")}</span>
+          <button type="button" class="adm-iconbtn adm-cat-ic" data-cat-icon-id={c.id} data-cat-icon-val={iconOf(c)} title={copy().catTitleIcon}>{@html catGlyph(c)}</button>
+          <span class="adm-drag-handle" draggable="true" title={copy().catTitleDrag}>{@html ic("grip-vertical")}</span>
         </td>
         <td>
           <span class={taxNameClass(c)}>{c.name}</span>
@@ -111,7 +119,7 @@
         <td><span class="adm-muted">{descOf(c)}</span></td>
         <td>
           <div class="row-actions">
-            <a class="adm-iconbtn" href={"/blog/category/" + c.slug} target="_blank" title="查看">
+            <a class="adm-iconbtn" href={"/blog/category/" + c.slug} target="_blank" title={copy().view}>
               {@html ic("external-link")}
             </a>
             <button
@@ -124,16 +132,16 @@
               data-description={descOf(c)}
               data-icon={iconOf(c)}
               data-parentid={parentOf(c)}
-              title="编辑名称 / 描述 / 图标"
-            >{@html ic("pencil")} 编辑</button>
+              title={copy().catTitleEdit}
+            >{@html ic("pencil")} {copy().edit}</button>
             <button
               type="button"
               class="adm-iconbtn danger"
               data-adm-act="delete"
               data-url={"/api/categories/" + c.id}
               data-confirm={confirmDelete(c)}
-              title="删除"
-            >{@html ic("trash-2")} 删除</button>
+              title={copy().delete}
+            >{@html ic("trash-2")} {copy().delete}</button>
           </div>
         </td>
       </tr>
@@ -141,7 +149,7 @@
     </tbody>
   </table>
   {#each emptyHint() as _}
-  <div class="adm-empty">还没有分类，在上方添加第一个吧。</div>
+  <div class="adm-empty">{copy().catEmpty}</div>
   {/each}
 </div>
 
@@ -149,40 +157,40 @@
   <div class="adm-modal-box">
     <form data-adm-form="edit-category">
       <div class="adm-modal-hd">
-        <h2>编辑分类</h2>
-        <button type="button" class="adm-modal-x" data-tax-cancel aria-label="关闭">{@html ic("x")}</button>
+        <h2>{copy().catEditTitle}</h2>
+        <button type="button" class="adm-modal-x" data-tax-cancel aria-label={copy().close}>{@html ic("x")}</button>
       </div>
       <div class="adm-modal-bd">
         <input type="hidden" name="id">
         <div class="adm-field">
-          <label>名称</label>
+          <label>{copy().name}</label>
           <input class="adm-input" name="name" required maxlength="100">
         </div>
         <div class="adm-field">
-          <label>别名（留空保存则保持现有别名）</label>
+          <label>{copy().slugKeep}</label>
           <input class="adm-input" name="slug" maxlength="120">
         </div>
         <div class="adm-field">
-          <label>父分类</label>
+          <label>{copy().catParent}</label>
           <select class="adm-select" name="parentId">
-            <option value="">无（顶级）</option>
+            <option value="">{copy().catNoneTop}</option>
             {#each topCats() as c}
             <option value={c.id}>{c.name}</option>
             {/each}
           </select>
         </div>
         <div class="adm-field">
-          <label>描述</label>
+          <label>{copy().description}</label>
           <textarea class="adm-textarea" name="description" rows="2" maxlength="500"></textarea>
         </div>
         <div class="adm-field">
-          <label>图标</label>
-          <input class="adm-input" name="icon" data-icon-picker placeholder="留空则用默认图标">
+          <label>{copy().icon}</label>
+          <input class="adm-input" name="icon" data-icon-picker placeholder={copy().catPhIcon}>
         </div>
       </div>
       <div class="adm-modal-ft">
-        <button type="button" class="adm-btn adm-btn-ghost" data-tax-cancel>取消</button>
-        <button type="submit" class="adm-btn">保存</button>
+        <button type="button" class="adm-btn adm-btn-ghost" data-tax-cancel>{copy().cancel}</button>
+        <button type="submit" class="adm-btn">{copy().save}</button>
       </div>
     </form>
   </div>

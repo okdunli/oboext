@@ -171,8 +171,7 @@
     if (p === "/api/data") return;
 
     // ----------------------------------------------- theme CSS assets
-    // /theme-style/<slug> serves the combined CSS for non-skyscraper themes.
-    // Skyscraper uses /public/theme.css directly; other themes ride this route.
+    // /theme-style/<slug> serves the combined CSS for a theme's stylesheets.
     // The ?v= stamp is the file mtime, so the bytes behind a given URL never
     // change and immutable is safe: a theme switch picks a different slug, and
     // an edited stylesheet picks a different v. Without the stamp this route

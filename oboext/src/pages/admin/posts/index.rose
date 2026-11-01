@@ -15,14 +15,31 @@
   function rows() {
     return data().items;
   }
+  // The loader hands down every visible string in the request's language
+  // (R487, same contract as the dashboard), so the template reads copy().
+  function copy() {
+    return data().s || {};
+  }
+  function hint(key, vars) {
+    let out = String(copy()[key] || "");
+    for (const k of Object.keys(vars)) out = out.split("{" + k + "}").join(String(vars[k]));
+    return out;
+  }
+  function pagerSummary() {
+    return hint("pagerSummary", { total: data().total, page: data().page });
+  }
+  function confirmDeleteOne(title) {
+    return hint("confirmDeleteOne", { title: title });
+  }
   function fmtDate(iso) {
     if (!iso) return "—";
     const d = new Date(iso);
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
       "-" + String(d.getDate()).padStart(2, "0");
   }
-  function statusLabel(s) {
-    return s === "published" ? "已发布" : s === "draft" ? "草稿" : "已归档";
+  function statusLabel(v) {
+    const c = copy();
+    return v === "published" ? c.published : v === "draft" ? c.draft : c.archived;
   }
   // Categories and tags render as separate chips so a row does not read as one
   // undifferentiated string; tags carry a # prefix.
@@ -55,7 +72,7 @@
   function scheduledLabel(p) {
     if (p.status !== "draft" || !p.publishedAt) return "";
     const t = new Date(p.publishedAt).getTime();
-    return t > Date.now() ? "定时 " + fmtDate(p.publishedAt) : "";
+    return t > Date.now() ? copy().scheduled + " " + fmtDate(p.publishedAt) : "";
   }
   function viewUrl(p) {
     return p.url || "#";
@@ -99,32 +116,32 @@
 </script>
 
 <head>
-  <title>文章 - 管理后台</title>
+  <title>{copy().docTitle}</title>
 </head>
 
 <div class="adm-toolbar">
   <div class="adm-tabs">
-    <a class={tabClass("")} href="/admin/posts">全部</a>
-    <a class={tabClass("published")} href="/admin/posts?status=published">已发布</a>
-    <a class={tabClass("draft")} href="/admin/posts?status=draft">草稿</a>
-    <a class={tabClass("archived")} href="/admin/posts?status=archived">已归档</a>
+    <a class={tabClass("")} href="/admin/posts">{copy().filterAll}</a>
+    <a class={tabClass("published")} href="/admin/posts?status=published">{copy().published}</a>
+    <a class={tabClass("draft")} href="/admin/posts?status=draft">{copy().draft}</a>
+    <a class={tabClass("archived")} href="/admin/posts?status=archived">{copy().archived}</a>
     <span style="width:1px;height:18px;background:var(--border);display:inline-block;margin:0 6px"></span>
-    <a class={tabClass(__rvQs().get("locale") || "")} href="/admin/posts">全部语言</a>
+    <a class={tabClass(__rvQs().get("locale") || "")} href="/admin/posts">{copy().languageAll}</a>
     <a class={tabClass("en")} href="/admin/posts?locale=en">EN</a>
-    <a class={tabClass("zh-CN")} href="/admin/posts?locale=zh-CN">中文</a>
+    <a class={tabClass("zh-CN")} href="/admin/posts?locale=zh-CN">{copy().languageZh}</a>
   </div>
   <span style="flex:1"></span>
   <form class="adm-search" action="/admin/posts">
-    <input class="adm-input" name="q" placeholder="搜索标题/摘要" value={__rvQs().get("q") || ""}>
+    <input class="adm-input" name="q" placeholder={copy().searchPlaceholder} value={__rvQs().get("q") || ""}>
   </form>
-  <a class="adm-btn" href="/admin/posts/new"><span class="adm-ic" style="--i:url(/public/icons/plus.svg)"></span>写文章</a>
+  <a class="adm-btn" href="/admin/posts/new"><span class="adm-ic" style="--i:url(/public/icons/plus.svg)"></span>{copy().write}</a>
 </div>
 
 <div class="adm-toolbar" style="gap:8px;">
-  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="publish">批量发布</button>
-  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="draft">转草稿</button>
-  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="archive">批量归档</button>
-  <button class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="delete" data-confirm="确认删除选中的文章？此操作不可撤销。">批量删除</button>
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="publish">{copy().bulkPublish}</button>
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="draft">{copy().bulkDraft}</button>
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="archive">{copy().bulkArchive}</button>
+  <button class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-url="/api/posts" data-op="delete" data-confirm={copy().confirmBulkDelete}>{copy().bulkDelete}</button>
 </div>
 
 <div class="adm-card adm-table-wrap">
@@ -132,12 +149,12 @@
     <thead>
       <tr>
         <th style="width:34px"><input type="checkbox" data-adm-act="check-all"></th>
-        <th>标题</th>
-        <th style="width:110px">作者</th>
-        <th style="width:60px">语言</th>
-        <th style="width:90px">状态</th>
-        <th style="width:110px">日期</th>
-        <th style="width:60px">浏览</th>
+        <th>{copy().colTitle}</th>
+        <th style="width:110px">{copy().colAuthor}</th>
+        <th style="width:60px">{copy().colLanguage}</th>
+        <th style="width:90px">{copy().colStatus}</th>
+        <th style="width:110px">{copy().colDate}</th>
+        <th style="width:60px">{copy().colViews}</th>
         <th style="width:120px"></th>
       </tr>
     </thead>
@@ -153,7 +170,7 @@
             {@html tagChipHtml(p.tags)}
           </div>
         </td>
-        <td class="adm-hint">{p.locale === "en" ? "EN" : "中文"}</td>
+        <td class="adm-hint">{p.locale === "en" ? "EN" : copy().languageZh}</td>
         <td>{p.authorName || "—"}</td>
         <td><span class={"adm-tag " + p.status}>{statusLabel(p.status)}</span>
           {#if scheduledLabel(p)}<span class="adm-tag scheduled">{scheduledLabel(p)}</span>{/if}
@@ -162,9 +179,9 @@
         <td class="adm-hint">{p.views}</td>
         <td>
           <div class="row-actions">
-            <a class="adm-iconbtn" href={viewUrl(p)} target="_blank" rel="noopener noreferrer" title="查看"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/eye.svg)"></span>查看</a>
-            <a class="adm-iconbtn" href={"/admin/posts/" + p.id}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pencil.svg)"></span>编辑</a>
-            <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/posts/" + p.id} data-confirm={"确认删除文章「" + p.title + "」？"}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span>删除</button>
+            <a class="adm-iconbtn" href={viewUrl(p)} target="_blank" rel="noopener noreferrer" title={copy().actView}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/eye.svg)"></span>{copy().actView}</a>
+            <a class="adm-iconbtn" href={"/admin/posts/" + p.id}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pencil.svg)"></span>{copy().actEdit}</a>
+            <button class="adm-iconbtn danger" data-adm-act="delete" data-url={"/api/posts/" + p.id} data-confirm={confirmDeleteOne(p.title)}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span>{copy().actDelete}</button>
           </div>
         </td>
       </tr>
@@ -172,15 +189,15 @@
     </tbody>
   </table>
   {#each emptyHint() as _}
-  <div class="adm-empty">还没有文章，点击右上角「写文章」开始创作。</div>
+  <div class="adm-empty">{copy().empty}</div>
   {/each}
 </div>
 
 {#each pager() as _}
 <div class="adm-pager">
-  共 {data().total} 篇 · 第 {data().page} 页
+  {pagerSummary()}
   <span style="flex:1"></span>
-  {#if hasPrev()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(prevPage())}>上一页</a>{/if}
-  {#if hasNext()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(nextPage())}>下一页</a>{/if}
+  {#if hasPrev()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(prevPage())}>{copy().pagerPrev}</a>{/if}
+  {#if hasNext()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={pagerHref(nextPage())}>{copy().pagerNext}</a>{/if}
 </div>
 {/each}

@@ -1,6 +1,9 @@
 <script>
   // Media library (port of components/MediaLibrary.tsx).
   let d = $data(() => __rvLoad("admin.media", {}));
+  function copy() {
+    return d().s || {};
+  }
   function items() {
     return d().items || [];
   }
@@ -22,7 +25,7 @@
 </script>
 
 <head>
-  <title>媒体库 - 管理后台</title>
+  <title>{copy().docTitle}</title>
 </head>
 
 <form class="adm-card adm-media-upload" data-media-upload-form>
@@ -30,15 +33,15 @@
     <div class="adm-dropzone" data-media-drop role="button" tabindex="0">
       <input type="file" class="adm-hidden-file" data-media-file>
       <div class="adm-dz-icon"><span class="adm-ic adm-ic-xl" style="--i:url(/public/icons/upload.svg)"></span></div>
-      <p class="adm-dz-text" data-media-dz-text>点击选择文件，或拖拽到此处上传</p>
-      <p class="adm-dz-hint">支持图片、文档等任意类型；截图可直接 Ctrl+V 粘贴上传</p>
+      <p class="adm-dz-text" data-media-dz-text>{copy().uploadHint}</p>
+      <p class="adm-dz-hint">{copy().pasteHint}</p>
     </div>
     <div class="adm-upload-row">
       <div class="adm-field" style="flex:1;min-width:240px">
-        <span class="adm-hint" style="display:block;margin-bottom:4px">备注（作为图片替代文本，留空默认使用上传文件名）</span>
-        <input class="adm-input" data-media-alt placeholder="图片描述，利于 SEO 与无障碍">
+        <span class="adm-hint" style="display:block;margin-bottom:4px">{copy().altLabel}</span>
+        <input class="adm-input" data-media-alt placeholder="{copy().phAlt}">
       </div>
-      <button type="submit" class="adm-btn adm-btn-green" data-media-submit disabled>上传</button>
+      <button type="submit" class="adm-btn adm-btn-green" data-media-submit disabled>{copy().upload}</button>
       <span class="adm-media-msg" data-media-msg></span>
     </div>
   </div>
@@ -49,23 +52,23 @@
 <input type="file" class="adm-hidden-file" data-media-replace-file>
 
 <div class="adm-toolbar" style="margin-top:16px">
-  <label class="adm-check-line"><input type="checkbox" data-media-all> 全选</label>
-  <input class="adm-input" data-media-search placeholder="搜索文件名 / 备注" style="max-width:220px">
+  <label class="adm-check-line"><input type="checkbox" data-media-all> {copy().selectAll}</label>
+  <input class="adm-input" data-media-search placeholder="{copy().phSearch}" style="max-width:220px">
   <select class="adm-input" data-media-type style="max-width:120px">
-    <option value="">全部类型</option>
-    <option value="image">仅图片</option>
-    <option value="doc">仅非图片</option>
+    <option value="">{copy().filterAll}</option>
+    <option value="image">{copy().filterImages}</option>
+    <option value="doc">{copy().filterNonImages}</option>
   </select>
-  <input class="adm-input" data-media-tagfilter placeholder="按标签筛选" style="max-width:130px">
+  <input class="adm-input" data-media-tagfilter placeholder="{copy().phTags}" style="max-width:130px">
   <span style="flex:1"></span>
-  <span class="adm-hint" data-media-count>已选 0 / 0</span>
-  <button type="button" class="adm-btn adm-btn-sm" data-media-copyall disabled title="复制所有选中项的链接（每行一个）">复制链接</button>
-  <button type="button" class="adm-btn adm-btn-sm" data-media-tagbtn disabled title="为选中项批量设置标签">打标签</button>
-  <button type="button" class="adm-btn adm-btn-sm" data-media-variants-all title="为所有缺少变体的图片补齐响应式尺寸">补全变体</button>
-  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-media-bulk disabled>批量删除</button>
+  <span class="adm-hint" data-media-count>{copy().selectedN}</span>
+  <button type="button" class="adm-btn adm-btn-sm" data-media-copyall disabled title="{copy().titleCopyAll}">{copy().titleCopy}</button>
+  <button type="button" class="adm-btn adm-btn-sm" data-media-tagbtn disabled title="{copy().titleBulkTag}">{copy().tag}</button>
+  <button type="button" class="adm-btn adm-btn-sm" data-media-variants-all title="{copy().titleVariants}">{copy().variants}</button>
+  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-media-bulk disabled>{copy().bulkDelete}</button>
 </div>
 
-<div class="adm-media-grid" data-media-grid data-media={dataJson()} title="拖拽卡片可调整媒体库顺序">
+<div class="adm-media-grid" data-media-grid data-media={dataJson()} title="{copy().titleDrag}">
   {#each items() as m}
   <div class="adm-media-card" data-media-id={m.id} draggable="true">
     <label class="adm-media-check">
@@ -85,12 +88,12 @@
       {/if}
       <div class="adm-media-actions">
         <div class="row-actions">
-          <button type="button" class="adm-iconbtn" data-media-preview-btn title="查看 / 详情"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/eye.svg)"></span></button>
-          <button type="button" class="adm-iconbtn" data-media-copy data-url={m.url} title="复制链接"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/link.svg)"></span></button>
-          <button type="button" class="adm-iconbtn" data-media-edit-btn title="编辑信息"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pencil.svg)"></span></button>
-          <button type="button" class="adm-iconbtn" data-media-replace-btn title="替换文件（保留引用链接）"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/replace.svg)"></span></button>
+          <button type="button" class="adm-iconbtn" data-media-preview-btn title="{copy().titleView}"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/eye.svg)"></span></button>
+          <button type="button" class="adm-iconbtn" data-media-copy data-url={m.url} title="{copy().titleCopy}"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/link.svg)"></span></button>
+          <button type="button" class="adm-iconbtn" data-media-edit-btn title={copy().titleEdit}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pencil.svg)"></span></button>
+          <button type="button" class="adm-iconbtn" data-media-replace-btn title="{copy().titleReplace}"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/replace.svg)"></span></button>
         </div>
-        <button type="button" class="adm-iconbtn danger" data-media-del data-url={"/api/media/" + m.id} data-confirm="删除该媒体？此操作不可恢复。" title="删除"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span></button>
+        <button type="button" class="adm-iconbtn danger" data-media-del data-url={"/api/media/" + m.id} data-confirm="{copy().confirmDelete}" title={copy().titleDelete}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/trash-2.svg)"></span></button>
       </div>
     </div>
   </div>
@@ -98,52 +101,52 @@
 </div>
 
 <div style="margin-top:16px;text-align:center">
-  <button type="button" class="adm-btn adm-btn-ghost" data-media-more hidden>加载更多</button>
+  <button type="button" class="adm-btn adm-btn-ghost" data-media-more hidden>{copy().loadMore}</button>
   <p class="adm-hint" data-media-total style="margin-top:8px"></p>
 </div>
 
 <div class={"adm-empty adm-media-empty" + (items().length ? " is-hidden" : "")} data-media-empty style="padding:48px 16px">
   <div style="margin-bottom:8px;display:flex;justify-content:center"><span class="adm-ic" style="width:32px;height:32px;--i:url(/public/icons/image.svg)"></span></div>
-  <p>还没有媒体文件。</p>
-  <p class="adm-hint">使用上方上传区添加你的第一张图片或文档。</p>
+  <p>{copy().empty}</p>
+  <p class="adm-hint">使用上方{copy().upload}区添加你的第一张图片或文档。</p>
 </div>
 
 <!-- edit alt text modal -->
 <div class="adm-modal" data-media-edit hidden>
   <div class="adm-modal-box">
     <div class="adm-modal-hd">
-      <strong>编辑媒体信息</strong>
-      <button type="button" class="adm-iconbtn" data-media-edit-close aria-label="关闭"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/x.svg)"></span></button>
+      <strong>{copy().editTitle}</strong>
+      <button type="button" class="adm-iconbtn" data-media-edit-close aria-label={copy().close}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/x.svg)"></span></button>
     </div>
     <div class="adm-modal-bd">
       <label class="adm-field" style="display:block">
-        <span class="adm-hint" style="display:block;margin-bottom:4px">备注（作为图片替代文本 alt，利于 SEO 与无障碍）</span>
+        <span class="adm-hint" style="display:block;margin-bottom:4px">{copy().editAlt}</span>
         <textarea class="adm-textarea" rows="3" data-media-edit-alt></textarea>
       </label>
       <label class="adm-field" style="display:block;margin-top:10px">
-        <span class="adm-hint" style="display:block;margin-bottom:4px">标签（逗号分隔，可用于筛选）</span>
-        <input class="adm-input" data-media-edit-tags placeholder="如：封面, 头像">
+        <span class="adm-hint" style="display:block;margin-bottom:4px">{copy().editTags}</span>
+        <input class="adm-input" data-media-edit-tags placeholder="{copy().phBulkTags}">
       </label>
       <div class="adm-hint" style="margin-top:10px">
-        实际文件名
+        {copy().editFile}
         <div class="adm-media-realname" data-media-edit-name></div>
       </div>
       <img class="adm-media-edit-img" data-media-edit-img alt="">
       <div class="adm-hint" style="margin-top:10px" data-media-edit-usage hidden></div>
     </div>
     <div class="adm-modal-ft">
-      <button type="button" class="adm-btn adm-btn-ghost" data-media-edit-close>取消</button>
-      <button type="button" class="adm-btn" data-media-edit-save>保存</button>
+      <button type="button" class="adm-btn adm-btn-ghost" data-media-edit-close>{copy().cancel}</button>
+      <button type="button" class="adm-btn" data-media-edit-save>{copy().save}</button>
     </div>
   </div>
 </div>
 
 <!-- preview modal -->
 <div class="adm-modal" data-media-preview hidden>
-  <button type="button" class="adm-modal-x" data-media-preview-close aria-label="关闭"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/x.svg)"></span></button>
+  <button type="button" class="adm-modal-x" data-media-preview-close aria-label={copy().close}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/x.svg)"></span></button>
   <div class="adm-modal-preview" data-media-preview-inner>
     <img class="adm-media-preview-img" data-media-preview-img alt="">
-    <a class="adm-btn adm-btn-ghost adm-media-preview-open" target="_blank" rel="noopener" data-media-preview-open>打开文件</a>
+    <a class="adm-btn adm-btn-ghost adm-media-preview-open" target="_blank" rel="noopener" data-media-preview-open>{copy().openFile}</a>
     <div class="adm-media-preview-meta" data-media-preview-meta></div>
   </div>
 </div>
@@ -152,20 +155,20 @@
 <div class="adm-modal" data-media-tagmodal hidden>
   <div class="adm-modal-box">
     <div class="adm-modal-hd">
-      <strong>批量打标签</strong>
-      <button type="button" class="adm-iconbtn" data-media-tag-close aria-label="关闭"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/x.svg)"></span></button>
+      <strong>批量{copy().tag}</strong>
+      <button type="button" class="adm-iconbtn" data-media-tag-close aria-label={copy().close}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/x.svg)"></span></button>
     </div>
     <div class="adm-modal-bd">
       <p class="adm-hint" data-media-tag-count style="margin-top:0"></p>
-      <input class="adm-input" data-media-tag-input placeholder="标签，逗号分隔，如：封面, 头像">
+      <input class="adm-input" data-media-tag-input placeholder={copy().phTagsEdit}>
       <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
-        <label class="adm-check-line"><input type="radio" name="media-tag-mode" value="add" checked> 追加（保留已有标签）</label>
-        <label class="adm-check-line"><input type="radio" name="media-tag-mode" value="replace"> 覆盖（清空后写入）</label>
+        <label class="adm-check-line"><input type="radio" name="media-tag-mode" value="add" checked> {copy().tagAppend}</label>
+        <label class="adm-check-line"><input type="radio" name="media-tag-mode" value="replace"> {copy().tagOverwrite}</label>
       </div>
     </div>
     <div class="adm-modal-ft">
-      <button type="button" class="adm-btn adm-btn-ghost" data-media-tag-close>取消</button>
-      <button type="button" class="adm-btn" data-media-tag-save>保存</button>
+      <button type="button" class="adm-btn adm-btn-ghost" data-media-tag-close>{copy().cancel}</button>
+      <button type="button" class="adm-btn" data-media-tag-save>{copy().save}</button>
     </div>
   </div>
 </div>

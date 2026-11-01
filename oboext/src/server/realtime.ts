@@ -36,8 +36,8 @@ const localSubs: Set<(e: AdminEvent) => void> =
  * 轮询（见该文件顶部说明：框架把请求放进全局串行队列，任何 hold 都会阻塞
  * 整站），轮询只比较 `currentAdminVersion()` 的 since 游标，不需要订阅。保留
  * 它的原因：一旦上游给 prod-server 补上流式直通、并把 api 分发移出 edge 队列，
- * SSE/长轮询可直接接这张表，无需重写本模块。行为由 scripts/admin-sse.test.mts
- * 锁定（收到 → 退订后收不到 → 抛错订阅者不破坏发射端）。
+ * SSE/长轮询可直接接这张表，无需重写本模块（收到 → 退订后收不到 → 抛错订阅者不
+ * 破坏发射端）。
  */
 export function subscribeAdminEvents(cb: (e: AdminEvent) => void): () => void {
   localSubs.add(cb);

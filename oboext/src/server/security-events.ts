@@ -36,7 +36,7 @@ export async function recordAdminAction(
 //
 // The predicate stays a bare `created_at <` with no new index and no bounded
 // batch, because both were measured against the shipped form (200 000 rows,
-// 90% stale, scripts/retention.test.mts records the verdict). The existing
+// 90% stale). The existing
 // security_events_type_idx - (event_type, created_at) - already answers it with
 // a Bitmap Index Scan: the steady-state no-op pass costs 0.581 ms / 585 buffers.
 // A (created_at, id) btree made the bulk delete *slower* (253 ms vs 226 ms),

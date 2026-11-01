@@ -1,6 +1,9 @@
 <script>
   // Page editor (new + existing), same blocks editor as posts.
   let id = $state("");
+  function copy() {
+    return (d() && d().s) || {};
+  }
   let d = $data(async () => {
     const r = await __rvLoad("admin.page", { id: id() });
     // R228: same dead-bookmark rule as the post editor.
@@ -49,18 +52,18 @@
         const pad = (n) => String(n).padStart(2, "0");
         return pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes());
       };
-      const statusLabel = (s) => (s === "published" ? "已发布" : s === "draft" ? "草稿" : s === "archived" ? "归档" : s);
+      const statusLabel = (s) => (s === "published" ? copy().statusPublished : s === "draft" ? copy().statusDraft : s === "archived" ? copy().statusArchived : s);
       async function load() {
         const qs = new URLSearchParams({ kind: "page", targetId: String(targetId) });
         if (before) qs.set("before", String(before));
         const r = await fetch("/api/revisions?" + qs.toString(), { credentials: "same-origin" });
         if (!r.ok) {
-          list.innerHTML = '<div class="adm-hint">历史版本加载失败（' + r.status + "）</div>";
+          list.innerHTML = '<div class="adm-hint">' + copy().historyLoadFailed + r.status + "）</div>";
           return;
         }
         const data = await r.json();
         if (!data.items.length && !list.querySelector(".adm-rev-row")) {
-          list.innerHTML = '<div class="adm-hint">暂无历史版本，保存后自动生成</div>';
+          list.innerHTML = '<div class="adm-hint">' + copy().noHistory + '</div>';
           return;
         }
         for (const it of data.items) {
@@ -71,16 +74,16 @@
           time.textContent = fmt(it.createdAt);
           const title = document.createElement("span");
           title.className = "adm-rev-title";
-          title.textContent = it.title || "（无标题）";
+          title.textContent = it.title || copy().untitled;
           const st = document.createElement("span");
           st.className = "adm-rev-status";
           st.textContent = statusLabel(it.status);
           const btn = document.createElement("button");
           btn.type = "button";
           btn.className = "adm-btn adm-btn-ghost adm-btn-sm";
-          btn.textContent = "回滚到此版本";
+          btn.textContent = copy().rollbackTo;
           btn.addEventListener("click", async () => {
-            if (!confirm("回滚到「" + (it.title || "无标题") + "」（" + fmt(it.createdAt) + "）？当前版本会先自动留存，可再次回滚。")) return;
+            if (!confirm(copy().rollbackToNamed + (it.title || copy().untitled2) + "」（" + fmt(it.createdAt) + copy().rollbackNote)) return;
             btn.disabled = true;
             const pr = await fetch("/api/revisions", {
               method: "POST",
@@ -89,7 +92,7 @@
               body: JSON.stringify({ kind: "page", targetId, revisionId: it.id }),
             });
             if (!pr.ok) {
-              alert("回滚失败：" + (await pr.text()).slice(0, 160));
+              alert(copy().rollbackFailed + (await pr.text()).slice(0, 160));
               btn.disabled = false;
               return;
             }
@@ -106,7 +109,7 @@
           const more = document.createElement("button");
           more.type = "button";
           more.className = "adm-btn adm-btn-sm";
-          more.textContent = "加载更早版本";
+          more.textContent = copy().loadEarlier;
           more.addEventListener("click", () => {
             more.remove();
             load();
@@ -189,17 +192,17 @@
             const when = dt && !isNaN(dt.getTime())
               ? pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()) + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes())
               : "";
-            msg.textContent = "检测到服务器草稿" + (when ? "（" + when + " 保存）" : "") + "，比当前内容新。";
+            msg.textContent = copy().serverDraftFound + (when ? "（" + when + copy().draftSavedAgo : "") + copy().draftNewer;
             const sp = document.createElement("span");
             sp.style.cssText = "flex:1";
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "adm-btn adm-btn-sm";
-            btn.textContent = "恢复上次草稿";
+            btn.textContent = copy().restoreDraft;
             const drop = document.createElement("button");
             drop.type = "button";
             drop.className = "adm-btn adm-btn-ghost adm-btn-sm";
-            drop.textContent = "忽略";
+            drop.textContent = copy().ignore;
             const dismiss = () => { if (bar.parentNode) bar.parentNode.removeChild(bar); };
             btn.addEventListener("click", () => {
               try {
@@ -207,9 +210,9 @@
                 if (titleEl && draft.title != null) titleEl.value = String(draft.title);
                 adEd.blocks = blocks;
                 if (typeof adEd.render === "function") adEd.render();
-                if (typeof window.admToast === "function") window.admToast("已恢复服务器草稿", "ok");
+                if (typeof window.admToast === "function") window.admToast(copy().draftRestored, "ok");
               } catch (e) {
-                if (typeof window.admToast === "function") window.admToast("恢复失败", "err");
+                if (typeof window.admToast === "function") window.admToast(copy().restoreFailed, "err");
               }
               dismiss();
             });
@@ -238,43 +241,43 @@
     try {
       const r = await fetch("/api/preview-link?kind=" + kind + "&id=" + encodeURIComponent(pid), { credentials: "same-origin" });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.url) throw new Error(data.error || "生成失败");
+      if (!r.ok || !data.url) throw new Error(data.error || copy().generateFailed);
       const abs = new URL(data.url, location.origin).href;
       if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(abs);
-      else window.prompt("复制预览链接", abs);
+      else window.prompt(copy().copyPreview, abs);
       const exp = Date.parse(data.expiresAt);
       const days = Number.isFinite(exp) ? Math.max(1, Math.round((exp - Date.now()) / 86400000)) : 7;
-      if (typeof window.admToast === "function") window.admToast("预览链接已复制（" + days + " 天内有效）", "ok");
+      if (typeof window.admToast === "function") window.admToast(copy().previewCopied + days + copy().previewValid, "ok");
     } catch (err) {
-      if (typeof window.admToast === "function") window.admToast(err instanceof Error ? err.message : "生成失败", "err");
+      if (typeof window.admToast === "function") window.admToast(err instanceof Error ? err.message : copy().generateFailed, "err");
     }
   });
 </script>
 
 <head>
-  <title>编辑页面 - 管理后台</title>
+  <title>{copy().editPageTitle}</title>
 </head>
 
 <form data-adm-editor data-adm-form="page" data-page={pageDataAttr()}>
   <div class="adm-toolbar">
-    <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/pages"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-left.svg)"></span>页面列表</a>
+    <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/pages"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-left.svg)"></span>{copy().backToPages}</a>
     <span style="flex:1"></span>
     {#if isLive()}
-    <a class="adm-btn adm-btn-ghost adm-btn-sm" href={pageUrl()} target="_blank">查看页面<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/external-link.svg)"></span></a>
+    <a class="adm-btn adm-btn-ghost adm-btn-sm" href={pageUrl()} target="_blank">{copy().viewPage}<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/external-link.svg)"></span></a>
     {/if}
     {#if !isNew()}
-    <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-preview-link={pg().id} data-adm-preview-kind="page">预览链接</button>
+    <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-preview-link={pg().id} data-adm-preview-kind="page">{copy().previewLink}</button>
     <button
       type="button"
       class="adm-btn adm-btn-danger adm-btn-sm"
       data-adm-act="delete"
       data-url={deleteUrl()}
-      data-confirm="确认删除这个页面？此操作不可撤销。"
-    >删除</button>
+      data-confirm={copy().confirmDeletePageFull}
+    >{copy().genericDelete}</button>
     {/if}
-    <button type="submit" class="adm-btn adm-btn-ghost adm-btn-sm" data-save-as="draft">存为草稿</button>
-    <button type="submit" class="adm-btn adm-btn-sm" data-save-as="">保存</button>
-    <button type="submit" class="adm-btn adm-btn-green adm-btn-sm" data-save-as="published">发布</button>
+    <button type="submit" class="adm-btn adm-btn-ghost adm-btn-sm" data-save-as="draft">{copy().saveDraft}</button>
+    <button type="submit" class="adm-btn adm-btn-sm" data-save-as="">{copy().genericSave}</button>
+    <button type="submit" class="adm-btn adm-btn-green adm-btn-sm" data-save-as="published">{copy().publish}</button>
   </div>
 
   <div class="adm-grid adm-cols-editor">
@@ -284,18 +287,18 @@
           <input
             class="adm-input adm-title-input"
             name="title"
-            placeholder="请输入页面标题"
+            placeholder="{copy().titlePhPage}"
             value={val('title')}
           >
           <div class="adm-permalink">
-            <span>固定链接：</span>
-            <input name="slug" placeholder="留空则按标题自动生成" value={val('slug')}>
+            <span>{copy().permalink}</span>
+            <input name="slug" placeholder="{copy().slugPhPage}" value={val('slug')}>
           </div>
           <textarea
             class="adm-textarea"
             name="excerpt"
             rows="2"
-            placeholder="摘要（留空则自动从正文提取）"
+            placeholder="{copy().excerptPhFull}"
             data-dv={val('excerpt')}
           ></textarea>
         </div>
@@ -304,19 +307,19 @@
       <div class="adm-card" style="margin-top:16px">
         <div class="adm-card-bd">
           <div class="adm-card-hd" style="padding:0 0 12px;border-bottom:none">
-            <strong>正文区块</strong>
+            <strong>{copy().bodyBlocks}</strong>
             <span class="spacer"></span>
-            <span class="adm-hint">段落、标题、图片、引用等可自由拖拽排序</span>
+            <span class="adm-hint">{copy().blocksHint}</span>
           </div>
           <div class="adm-blocks"></div>
           <div class="adm-block-add">
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="paragraph"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pilcrow.svg)"></span>段落</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="heading"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/heading.svg)"></span>标题</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="image"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/image.svg)"></span>图片</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="quote"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/quote.svg)"></span>引用</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="code"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/code.svg)"></span>代码</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="list"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/list.svg)"></span>列表</button>
-            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="divider"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/minus.svg)"></span>分割线</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="paragraph"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/pilcrow.svg)"></span>{copy().blockParagraph}</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="heading"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/heading.svg)"></span>{copy().blockHeading}</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="image"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/image.svg)"></span>{copy().blockImage}</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="quote"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/quote.svg)"></span>{copy().blockQuote}</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="code"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/code.svg)"></span>{copy().blockCode}</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="list"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/list.svg)"></span>{copy().blockList}</button>
+            <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="divider"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/minus.svg)"></span>{copy().blockDivider}</button>
             <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-block" data-type="html"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/code-xml.svg)"></span>HTML</button>
           </div>
         </div>
@@ -325,39 +328,39 @@
 
     <div class="adm-side-sticky">
       <div class="adm-card">
-        <div class="adm-card-hd"><strong>发布</strong></div>
+        <div class="adm-card-hd"><strong>{copy().publish}</strong></div>
         <div class="adm-card-bd">
           <div class="adm-field" style="margin-bottom:12px">
-            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">状态</span>
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().status}</span>
             <select class="adm-select" name="status">
-              <option value="draft">草稿</option>
-              <option value="published">已发布</option>
-              <option value="archived">已归档</option>
+              <option value="draft">{copy().statusDraft}</option>
+              <option value="published">{copy().statusPublished}</option>
+              <option value="archived">{copy().statusArchived}</option>
             </select>
           </div>
           <div class="adm-field" style="margin-bottom:12px">
-            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">发布时间</span>
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().publishTime}</span>
             <input class="adm-input" type="datetime-local" name="publishedAt" value="">
-            <div class="adm-hint" style="margin-top:4px">草稿设为未来时间即定时发布，到点自动上线；留空按保存时间。</div>
+            <div class="adm-hint" style="margin-top:4px">{copy().scheduledHint}</div>
           </div>
           <div class="adm-field" style="margin-bottom:12px">
-            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">评论</span>
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().comments}</span>
             <select class="adm-select" name="commentStatus">
-              <option value="open">开放评论</option>
-              <option value="closed">关闭评论</option>
+              <option value="open">{copy().commentsOpen}</option>
+              <option value="closed">{copy().commentsClosed}</option>
             </select>
           </div>
           <div class="adm-field" style="margin-bottom:12px">
-            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">父页面</span>
-            <input class="adm-input" type="number" name="parentId" min="1" placeholder="父页面 ID（可选）" value={parentVal()}>
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().parentPage}</span>
+            <input class="adm-input" type="number" name="parentId" min="1" placeholder={copy().parentPagePh} value={parentVal()}>
           </div>
           <div class="adm-field" style="margin-bottom:12px">
-            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">排序</span>
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().order}</span>
             <input class="adm-input" type="number" name="order" min="0" max="1000000" placeholder="0" value={val('order')}>
-            <div class="adm-hint" style="margin-top:4px">数字越小越靠前；首页/导航等公开页面列表按此排序，相同则按更新时间。</div>
+            <div class="adm-hint" style="margin-top:4px">{copy().orderHint}</div>
           </div>
           <div class="adm-field" style="margin-bottom:0">
-            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">特色图 URL</span>
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().featuredImage}</span>
             <input class="adm-input" name="featuredImage" placeholder="https://…" value={val('featuredImage')}>
           </div>
         </div>
@@ -366,23 +369,23 @@
       <div class="adm-card">
         <div class="adm-card-hd"><strong>SEO</strong></div>
         <div class="adm-card-bd">
-          <input class="adm-input" name="seoTitle" placeholder="SEO 标题" value={val('seoTitle')} style="margin-bottom:10px">
+          <input class="adm-input" name="seoTitle" placeholder="{copy().seoTitle}" value={val('seoTitle')} style="margin-bottom:10px">
           <textarea
             class="adm-textarea"
             name="seoDescription"
             rows="2"
-            placeholder="SEO 描述"
+            placeholder="{copy().seoDesc}"
             data-dv={val('seoDescription')}
           ></textarea>
-          <input class="adm-input" name="seoKeywords" placeholder="SEO 关键词，逗号分隔" value={val('seoKeywords')} style="margin-top:10px">
+          <input class="adm-input" name="seoKeywords" placeholder="{copy().seoKeywords}" value={val('seoKeywords')} style="margin-top:10px">
         </div>
       </div>
 
       <div class="adm-card">
-        <div class="adm-card-hd"><strong>自定义字段</strong></div>
+        <div class="adm-card-hd"><strong>{copy().customFields}</strong></div>
         <div class="adm-card-bd">
           <div class="adm-metas" data-adm-metas></div>
-          <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-meta" style="margin-top:8px"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/plus.svg)"></span>添加字段</button>
+          <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-adm-act="add-meta" style="margin-top:8px"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/plus.svg)"></span>{copy().addField}</button>
         </div>
       </div>
     </div>
@@ -391,7 +394,7 @@
 
 {#if !isNew()}
 <div class="adm-card" style="margin-top:16px" data-adm-revisions="page" data-adm-rev-id={pg().id}>
-  <div class="adm-card-hd"><strong>历史版本</strong><span class="adm-hint" style="margin-left:auto">每次保存自动留存，可回滚；回滚前会先保存当前版本</span></div>
+  <div class="adm-card-hd"><strong>{copy().revisions}</strong><span class="adm-hint" style="margin-left:auto">{copy().revisionsHint}</span></div>
   <div class="adm-card-bd">
     <div class="adm-rev-list" data-adm-rev-list></div>
   </div>

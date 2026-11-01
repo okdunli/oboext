@@ -11,10 +11,13 @@
   function curYear() {
     return new Date().getFullYear();
   }
+  function copy() {
+    return (brand() && brand().s) || {};
+  }
 </script>
 
 <head>
-  <title>登录 - 管理后台</title>
+  <title>{copy().docTitle}</title>
 </head>
 
 <div class="adm-auth">
@@ -22,7 +25,7 @@
     <div class="adm-auth-brand"><span class="adm-auth-mark"><span class="adm-ic adm-ic-lg" style="--i:url(/public/icons/layout-dashboard.svg)"></span></span> Oboext</div>
     <div>
       <h1>{blogName()}</h1>
-      <p class="adm-auth-sub">系统管理后台</p>
+      <p class="adm-auth-sub">{copy().sub}</p>
     </div>
     <div class="adm-hint">© {curYear()} Oboext</div>
   </div>

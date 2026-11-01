@@ -27,8 +27,8 @@
         offset: q.get("offset") ? Number(q.get("offset")) : 0,
       };
       if (user) return listPosts(opts);
-      // R156: this route is the OTHER per-keystroke search surface (the bluemix
-      // React popover) and, for guests, the answer is the same for everybody.
+      // R156: this route is the OTHER per-keystroke search surface (the
+      // live-search popover) and, for guests, the answer is the same for everybody.
       // Memoized 20s per full option signature: typing "ja"/"jav"/"java" is one
       // ILIKE scan per prefix per minute instead of one per keystroke per
       // visitor. The key lowercases the search (ILIKE is case-insensitive) and

@@ -1,6 +1,9 @@
 <script>
 
   let d = $data(() => __rvLoad("admin.icons", {}));
+  function copy() {
+    return (d() && d().s) || {};
+  }
   function names() { return d().names || []; }
   function pascal(k) {
     return k.split("-").map((s) => (s ? s.slice(0, 1).toUpperCase() + s.slice(1) : "")).join("");
@@ -10,18 +13,18 @@
 </script>
 
 <head>
-  <title>图标库 - 管理后台</title>
+  <title>{copy().docTitle}</title>
 </head>
 
 <div class="adm-toolbar">
   <div style="display:flex;align-items:center;gap:8px;">
     <span class="adm-ic" style="--i:url(/public/icons/shapes.svg);width:20px;height:20px;color:#818cf8;"></span>
-    <strong style="font-size:16px">图标库</strong>
+    <strong style="font-size:16px">{copy().title}</strong>
     <span class="adm-hint" style="margin:0;">共 {count()} 个</span>
   </div>
   <span style="flex:1"></span>
-  <a class="adm-iconbtn" href="https://lucide.dev/icons/" target="_blank" rel="noopener noreferrer" title="在 lucide.dev 查看全部图标与用法">来源 lucide.dev</a>
-  <input class="adm-input" data-ic-search placeholder="搜索标识符或名称…" style="max-width:260px;" spellcheck="false" autocomplete="off">
+  <a class="adm-iconbtn" href="https://lucide.dev/icons/" target="_blank" rel="noopener noreferrer" title={copy().browse}>{copy().source}</a>
+  <input class="adm-input" data-ic-search placeholder={copy().phSearch} style="max-width:260px;" spellcheck="false" autocomplete="off">
 </div>
 
 <div class="adm-card adm-table-wrap adm-icons-grid adm-icons-scroll">
@@ -29,9 +32,9 @@
     <colgroup><col style="width:64px"><col><col><col style="width:80px"></colgroup>
     <thead>
       <tr>
-        <th>图标</th>
-        <th>标识符</th>
-        <th>组件名</th>
+        <th>{copy().colIcon}</th>
+        <th>{copy().colName}</th>
+        <th>{copy().colComponent}</th>
         <th></th>
       </tr>
     </thead>
@@ -41,10 +44,10 @@
         <td><span class="adm-ic" style="--i:url(/public/icons/{k}.svg);"></span></td>
         <td class="adm-mono">{k}</td>
         <td class="adm-hint">{pascal(k)}</td>
-        <td><button type="button" class="adm-iconbtn" data-ic-copy={k} title="复制标识符">复制</button></td>
+        <td><button type="button" class="adm-iconbtn" data-ic-copy={k} title={copy().copyName}>{copy().copy}</button></td>
       </tr>
       {/each}
     </tbody>
   </table>
-  <div class="adm-card-bd adm-empty" data-ic-empty hidden>没有匹配的图标。</div>
+  <div class="adm-card-bd adm-empty" data-ic-empty hidden>{copy().empty}</div>
 </div>

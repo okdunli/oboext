@@ -60,16 +60,31 @@
   function navRaw() {
     return (session() && session().navRaw) || "";
   }
+  // The shared client script prints its own notices; hand it the translated
+  // block as a data island so it never needs an inline script (CSP-safe, and
+  // admin.js falls back to Chinese when the island is absent).
+  function shellCopy() {
+    return (session() && session().shell) || {};
+  }
+  function toastJson() {
+    const t = (session() && session().toast) || {};
+    try {
+      return JSON.stringify(t).replace(/</g, "\\u003c");
+    } catch {
+      return "{}";
+    }
+  }
 </script>
 
 <head>
-  <title>管理后台</title>
+  <title>{shellCopy().docTitle}</title>
   <meta name="robots" content="noindex,nofollow">
   <link rel="stylesheet" href="/public/admin.css">
   <!-- Must precede admin.js: it wraps window.fetch, and a script that captured
        the native reference before the wrapper installed would bypass it. Both
        are deferred; document order keeps csrf.js first. -->
   <script src={session().csrfHref} defer></script>
+  <script type="application/json" id="adm-toast-copy">{@html toastJson()}</script>
   <script src={session().adminHref} defer></script>
   <script src={session().autosaveHref} defer></script>
   <script src={session().liveHref} defer></script>
@@ -78,26 +93,26 @@
 {#if authed()}
 <div class="adm-shell">
   <aside class="adm-side">
-    <div class="adm-logo"><span class="adm-auth-mark"><span class="adm-ic adm-ic-lg" style="--i:url(/public/icons/layout-dashboard.svg)"></span></span> Oboext<button type="button" class="adm-logo-x" data-nav-close aria-label="关闭菜单"><span class="adm-ic" style="--i:url(/public/icons/x.svg)"></span></button></div>
+    <div class="adm-logo"><span class="adm-auth-mark"><span class="adm-ic adm-ic-lg" style="--i:url(/public/icons/layout-dashboard.svg)"></span></span> Oboext<button type="button" class="adm-logo-x" data-nav-close aria-label={shellCopy().closeNav}><span class="adm-ic" style="--i:url(/public/icons/x.svg)"></span></button></div>
     <nav class="adm-nav">
       {@html navRaw()}
     </nav>
     <div class="adm-side-foot">
-      <a class="adm-avatar" href="/admin/account" title="我的账号" style="text-decoration:none;">{initial()}</a>
+      <a class="adm-avatar" href="/admin/account" title={shellCopy().myAccount} style="text-decoration:none;">{initial()}</a>
       <div class="who"><b>{authed() ? session().user.name : ""}</b><span>{authed() ? session().user.role : ""}</span></div>
-      <button class="adm-iconbtn" data-adm-act="logout" title="退出登录" aria-label="退出登录"><span class="adm-ic" style="--i:url(/public/icons/log-out.svg)"></span></button>
+      <button class="adm-iconbtn" data-adm-act="logout" title={shellCopy().logout} aria-label={shellCopy().logout}><span class="adm-ic" style="--i:url(/public/icons/log-out.svg)"></span></button>
     </div>
   </aside>
   <div class="adm-main">
     <div class="adm-mbar">
-      <button type="button" class="adm-mbar-btn" data-nav-open aria-label="打开菜单"><span class="adm-ic" style="--i:url(/public/icons/menu.svg)"></span></button>
-      <span class="adm-mbar-title">Oboext 管理后台</span>
+      <button type="button" class="adm-mbar-btn" data-nav-open aria-label={shellCopy().openNav}><span class="adm-ic" style="--i:url(/public/icons/menu.svg)"></span></button>
+      <span class="adm-mbar-title">Oboext {shellCopy().logoSuffix}</span>
     </div>
     <div class="adm-scrim" data-nav-close aria-hidden="true"></div>
     <header class="adm-topbar">
       <h1>{pageTitle()}</h1>
       <span class="spacer"></span>
-      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/" target="_blank"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/external-link.svg)"></span> 访问站点</a>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/" target="_blank"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/external-link.svg)"></span> {shellCopy().visitSite}</a>
     </header>
     <main class="adm-content">
       <slot />

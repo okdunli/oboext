@@ -1,4 +1,4 @@
-// Server-side HTML builders for the skyscraper theme — a straight port of tools/gen.mjs's pure functions.
+// Program-side HTML builders — heads, cards, lists, comments, widgets — shared with themes through the theme API (R.*).
 import type { Block } from "./schema.js";
 import type { PostView, TaxRef } from "./queries.js";
 import type { PageView } from "./pages.js";
@@ -9,7 +9,7 @@ import { ensurePluginsLoaded } from "./plugins.js";
 import { inArray } from "drizzle-orm";
 import { db } from "./db.js";
 import { media } from "./schema.js";
-import { listPosts, getSettings } from "./queries.js";
+import { listPosts } from "./queries.js";
 import { uploadsAbsPath } from "./storage.js";
 import { sanitizeHtml } from "./sanitize.js";
 import { authorUrlFor } from "./links.js";
@@ -78,24 +78,6 @@ const variantCache = new Map<string, string>();
 // srcset implies, never looser.
 export const IMG_SIZES_BODY = "(min-width: 1024px) 660px, calc(100vw - 32px)";
 
-// Wide-column themes put the article over the 800px variant bucket, where the
-// default's 660px hint would upscale the 800w file to fill them (bluemix's
-// .main-content alone is 1216px). Variants ship at [400, 800, 1600], so the
-// hint only has to land in the right BUCKET - one wide value covers
-// skyscraper (~1130px) and codeman; pseudolinear keeps its own 920px column.
-export const IMG_SIZES_BODY_WIDE = "(min-width: 1024px) 1130px, calc(100vw - 40px)";
-
-const THEME_BODY_SIZES: Record<string, string> = {
-  bluemix: "(min-width: 1280px) 1216px, calc(100vw - 40px)",
-  pseudolinear: "(min-width: 960px) 920px, calc(100vw - 44px)",
-  skyscraper: IMG_SIZES_BODY_WIDE,
-  codeman: IMG_SIZES_BODY_WIDE,
-};
-
-/** Body-image sizes of the ACTIVE theme; unknown theme -> the default column. */
-export function bodySizesFor(activeThemeSlug?: string | null): string {
-  return (activeThemeSlug && THEME_BODY_SIZES[activeThemeSlug]) || IMG_SIZES_BODY;
-}
 
 // URL-keyed memo caches would otherwise grow one entry per distinct image for
 // the life of the process. Cap them FIFO (Map preserves insertion order, so the
@@ -721,17 +703,9 @@ export async function buildPostBody(
     HOOKS.contentHtml,
     { html, context: { kind, slug: p.slug, title: p.title ?? undefined } },
   );
-  // Body HTML is one string shared by the page render and syndication, but it
-  // renders into the ACTIVE theme's column - a bluemix article is ~1216px
-  // wide, the default's 660px hint would upscale its 800w variants.
-  let themeSlug: string | null = null;
-  try {
-    const s = (await getSettings()) as { activeThemeSlug?: string | null };
-    themeSlug = s.activeThemeSlug ?? null;
-  } catch {
-    themeSlug = null; // a settings hiccup must not fail the body build
-  }
-  return optimizeContentImages(filtered.html, bodySizesFor(themeSlug));
+  // Body HTML is one string shared by the page render and syndication; the
+  // sizes hint is the default theme's article column (IMG_SIZES_BODY).
+  return optimizeContentImages(filtered.html, IMG_SIZES_BODY);
 }
 
 /** DB-backed resolvers for the [gallery]/[posts] shortcodes (original
@@ -807,8 +781,8 @@ export function postCard(p: PostView, award = 0, t?: Translate, high = false): s
   // always emitted - related/recent/feed call sites pass no `liked` at all.
   const likes =
     p.liked === true
-      ? `<span class="likes" data-liked="1" data-toggle="tooltip" title="${L("theme.liked")}"><i class="skyscraper-icons-heart"></i>${p.likes ?? 0}</span>`
-      : `<span class="likes" data-toggle="tooltip" title="${L("post.likes_tip")}"><i class="skyscraper-icons-heart"></i>${p.likes ?? 0}</span>`;
+      ? `<span class="likes" data-liked="1" data-toggle="tooltip" title="${L("theme.liked")}"><i class="obx-icons-heart"></i>${p.likes ?? 0}</span>`
+      : `<span class="likes" data-toggle="tooltip" title="${L("post.likes_tip")}"><i class="obx-icons-heart"></i>${p.likes ?? 0}</span>`;
   // R279: a non-default-locale card carries a small language tag — a visitor
   // browsing the zh home sees "EN" on the paired twin, and the /en tree shows
   // the same on unpaired originals. Default-locale rows (the vast majority)
@@ -823,9 +797,9 @@ export function postCard(p: PostView, award = 0, t?: Translate, high = false): s
     img +
     `<div class="metas"><time class="time">${fmtDate(p.publishedAt)}</time>` +
     `<div class="info">` +
-    `<span class="reads" data-toggle="tooltip" title="${L("post.reads_tip")}"><i class="skyscraper-icons-book-reader"></i>${p.views ?? 0}</span>` +
+    `<span class="reads" data-toggle="tooltip" title="${L("post.reads_tip")}"><i class="obx-icons-book-reader"></i>${p.views ?? 0}</span>` +
     likes +
-    `<span class="comments" data-toggle="tooltip" title="${L("comments.title")}"><i class="skyscraper-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
+    `<span class="comments" data-toggle="tooltip" title="${L("comments.title")}"><i class="obx-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
     `</div><a class="read-more" href="${esc(p.url)}">${L("post.read_more")}</a></div></div></div>`
   );
 }
@@ -844,21 +818,18 @@ export function nestedCard(p: PostView, t?: Translate, high = false): string {
     `<a class="post-thumbnail-wrapper" href="${esc(p.url)}">${img}</a>` +
     `<div class="metas"><time class="time">${fmtDate(p.publishedAt)}</time>` +
     `<div class="info">` +
-    `<span class="reads" data-toggle="tooltip" title="${L("post.reads_tip")}"><i class="skyscraper-icons-book-reader"></i>${p.views ?? 0}</span>` +
-    `<span class="likes" data-toggle="tooltip" title="${L("post.likes_tip")}"><i class="skyscraper-icons-heart"></i>${p.likes ?? 0}</span>` +
-    `<span class="comments" data-toggle="tooltip" title="${L("comments.title")}"><i class="skyscraper-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
+    `<span class="reads" data-toggle="tooltip" title="${L("post.reads_tip")}"><i class="obx-icons-book-reader"></i>${p.views ?? 0}</span>` +
+    `<span class="likes" data-toggle="tooltip" title="${L("post.likes_tip")}"><i class="obx-icons-heart"></i>${p.likes ?? 0}</span>` +
+    `<span class="comments" data-toggle="tooltip" title="${L("comments.title")}"><i class="obx-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
     `</div><a class="read-more" href="${esc(p.url)}">${L("post.read_more")}</a></div></div></div>`
   );
 }
 
-// Card slots of the skyscraper grid (theme.css `.th-skyscraper`): 25% of the
+// Card-grid widths the post-card thumbnails were sized against: 25% of the
 // 1480px container at >=1510, 25% of 1170px at >=1200, a third of 970px at
 // >=992, a third of 750px at >=768, half the viewport below.
 const SKY_CARD_SIZES =
   "(min-width: 1510px) 370px, (min-width: 1200px) 292px, (min-width: 992px) 323px, (min-width: 768px) 250px, 50vw";
-
-export const section = (title: string, inner: string): string =>
-  `<div class="clearfix"><div class="pf-modal-title"><span class="title-text">${title}</span></div>${inner}</div>`;
 
 export const cardRow = (items: PostView[], awards = false, t?: Translate): string =>
   items.length === 0
@@ -1301,8 +1272,7 @@ export function commentsBare(m: CommentModel): string {
 }
 
 /** Cover + first inline images — the flickering collage backdrop of the
- *  gallery header. Empty array = plain article header.
- *  mirror themes/skyscraper/PostPage.tsx collectGalleryImages。 */
+ *  gallery header. Empty array = plain article header. */
 function collectGalleryImages(html: string, featured?: string | null): string[] {
   const out: string[] = [];
   if (featured) out.push(featured);
@@ -1406,7 +1376,7 @@ export function postPage(
 
 // ---------------------------------------------------------------- page pages
 
-/** Skyscraper PageBySlug uses slash dates in its meta line. */
+/** Slash-form date (Y/M/D) for the page meta line. */
 function fmtDateSlash(v: Date | string | null | undefined): string {
   if (!v) return "";
   const d = new Date(v);
@@ -1590,85 +1560,6 @@ export function pagePage(
   );
 }
 
-// ---------------------------------------------------------------- home page
-
-const POS0 = ["current", "future0", "future1", "future2"];
-function heroPage(p: PostView, pos: number): string {
-  const c = p.categories[0] ?? null;
-  return (
-    `<div class="page ${POS0[pos]}" data-url="${esc(p.url)}" data-cat="${esc(c?.name ?? "")}"` +
-    ` data-date="${fmtDate(p.publishedAt)}" data-reads="${p.views ?? 0}" data-comments="${p.commentsCount ?? 0}"><div class="title">` +
-    (c ? `<div class="type">${esc(c.name)}</div>` : "") +
-    `<div class="post">${esc(p.title)}</div></div>` +
-    `<a class="img" tabindex="-1" style="background-image:url(${esc(p.featuredImage ?? "")})" href="${esc(p.url)}"></a></div>`
-  );
-}
-function heroMeta(p: PostView, t?: Translate): string {
-  const L = (k: string, v?: Record<string, string | number>) =>
-    t ? t(k, v) : makeT(DEFAULT_LOCALE)(k, v);
-  const c = p.categories[0] ?? null;
-  return (
-    `<div class="meta-wrapper"><div class="meta">` +
-    (c ? `<div class="taxonomy">${esc(c.name)}</div>` : "") +
-    `<a class="title" href="${esc(p.url)}">${esc(p.title)}</a>` +
-    `<div class="meta-bottom"><time>${fmtDate(p.publishedAt)}</time>` +
-    `<span class="reads">${L("theme.reads", { n: p.views ?? 0 })}</span>` +
-    `<span class="comments">${L("theme.comments", { n: p.commentsCount ?? 0 })}</span></div>` +
-    `<a class="goto" href="${esc(p.url)}">${L("post.read_more")}</a></div></div>`
-  );
-}
-
-export function cardFlip(hero: PostView[], t?: Translate): string {
-  if (!hero.length) return "";
-  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
-  return (
-    `<section class="cardFlip" id="cardFlip">` +
-    `<div class="background" aria-hidden="true"><div class="default-background"><div class="head-img"><div class="img"></div></div></div></div>` +
-    `<div class="slider-wrapper" aria-hidden="true"><div class="cardFlip-slider">` +
-    hero.map((p, i) => heroPage(p, i)).join("") +
-    `</div></div>` +
-    heroMeta(hero[0], t) +
-    `<div class="navigator"><div class="prev" role="button" tabindex="0" aria-label="${L("adjacent.older")}"><i class="skyscraper-icons-arrow-left"></i></div>` +
-    `<div class="next" role="button" tabindex="0" aria-label="${L("adjacent.newer")}"><i class="skyscraper-icons-arrow-left sk-i-flip-x"></i></div></div>` +
-    `</section>`
-  );
-}
-
-export function scrollCats(cats: TaxRef[]): string {
-  return (
-    `<div class="scroll-cats">` +
-    cats
-      .slice(0, 3)
-      .map((c) => `<a class="scroll-cat" href="${esc(c.url)}"><span class="name">${esc(c.name)}</span></a>`)
-      .join("") +
-    `</div>`
-  );
-}
-
-export function homeHtml(parts: {
-  hero: PostView[];
-  latest: PostView[];
-  liked: PostView[];
-  random: PostView[];
-  cats: TaxRef[];
-  t?: Translate;
-}): string {
-  const L = (k: string) => (parts.t ? parts.t(k) : makeT(DEFAULT_LOCALE)(k));
-  // Trade-off: skyscraper theme-settings showCatsStrip assumed on; read the
-  // themes table if an admin switch appears in B/C phase.
-  return (
-    '<div class="sk-home">' +
-    cardFlip(parts.hero, parts.t) +
-    (parts.cats.length ? scrollCats(parts.cats) : "") +
-    section(L("sidebar.recent"), cardRow(parts.latest, false, parts.t)) +
-    (parts.liked.length ? section(L("rank.most_likes"), cardRow(parts.liked, true, parts.t)) : "") +
-    (parts.random.length
-      ? section(L("rank.random"), `<div class="row post-card-nested-row">${parts.random.map((c, i) => nestedCard(c, parts.t, i === 0)).join("")}</div>`)
-      : "") +
-    "</div>"
-  );
-}
-
 // --------------------------------------------------------------- list pages
 
 export function pager(page: number, totalPages: number, hrefFor: (p: number) => string, t?: Translate): string {
@@ -1732,38 +1623,10 @@ export function listPage(parts: {
 
 // ------------------------------------------------------------------- chrome
 
-export function topNav(settings: Record<string, any>): string {
-  const title = esc(settings.siteTitle ?? "");
-  // The loaders' settings bag carries the bound translator (settings.t) under
-  // a non-default locale; the Chinese default catalog is the fallback.
-  const bound: Translate | undefined =
-    typeof settings.t === "function" ? settings.t : undefined;
-  const L = (k: string) => (bound ? bound(k) : makeT(DEFAULT_LOCALE)(k));
-
-  const isHome = String(settings.__pathname ?? "/") === "/";
-  const navCls = `top-nav is-sticky${isHome ? "" : " is-scrolled always-stay"}`;
-  return (
-    `<header class="${navCls}">` +
-    `<div class="sidebar-btn" role="button" tabindex="0" aria-label="${L("sky.sidebar_open")}"><i class="skyscraper-icons-bread"></i><i class="skyscraper-icons-cross closeBtn"></i></div>` +
-    `<div class="toolbox-btn" role="button" tabindex="0" aria-label="${L("sky.toolbox_open")}"><i class="skyscraper-icons-cog"></i></div>` +
-    `<div class="container"><div class="logo"><center><a aria-label="${title}" href="/"><div class="sk-logo">${title}</div></a></center></div>` +
-    `<div class="toolbox"><div class="return-btn"><i class="skyscraper-icons-arrow-left"></i></div>` +
-    `<div class="search sk-live-search"><i class="skyscraper-icons-search"></i>` +
-    `<form role="search" action="/search" method="get"><input id="pf_header_search" type="search" placeholder="${L("search.placeholder")}" autocomplete="off" name="q" value=""></form></div>` +
-    `<div class="color-switcher-wrapper"><div class="mobile-button show-on-desktop" title="${L("sky.color_mode")}"><i class="night-day"></i></div></div>` +
-    `<div class="login"><div class="vcard cursor-hand">` +
-    `<img alt="" src="${BRAND_LOGO}" srcset="/public/avatar@2x.png 2x" class="avatar avatar-96 photo avatar-default" height="96" width="96">` +
-    `<span class="name">${title} </span><span class="caret"></span></div>` +
-    `<div class="login-main"><div class="user-type">${L("sky.welcome")}</div><div class="operation">` +
-    `<a href="/about">${L("sky.about")}</a><a href="/admin/login">Login&nbsp;<i class="skyscraper-icons-sign-in"></i></a>` +
-    `</div></div></div></div></div></header>`
-  );
-}
-
-// Sidebar nav tree, DOM contract ported from themes/skyscraper/SidebarMenu.tsx:
+// Sidebar nav tree DOM contract:
 //   ul#menu-main.menu > li.menu-item(.menu-item-has-children) > a (+ ul.sub-menu)
 // Parent rows are non-navigating toggles; SSR marks `open` when the row or any
-// descendant is active so first paint matches the React useState(active||. )
+// descendant is active so first paint matches the client's open state.
 export type SkyItem = {
   id: number | string;
   label: string;
@@ -1795,7 +1658,7 @@ export function sidebarMenu(items: SkyItem[], pathname: string): string {
           .filter(Boolean)
           .join(" ");
         const anchor = has
-          ? `<a>${esc(it.label)}<i class="skyscraper-icons-right"></i></a>`
+          ? `<a>${esc(it.label)}<i class="obx-icons-right"></i></a>`
           : `<a href="${esc(it.url)}"${
               it.target && it.target !== "_self"
                 ? ` target="${esc(it.target)}" rel="noopener"`
@@ -1825,7 +1688,7 @@ export function tagCloud(tags: TaxRef[], t?: Translate): string {
         return (
           `<a class="pf-tag-cloud-link" data-tag-type="${type}" href="${esc(t.url)}">` +
           `<span class="tag-link-name">${esc(t.name)}</span>` +
-          `<span class="tag-link-count"><i class="skyscraper-icons-${icon}"></i></span></a>`
+          `<span class="tag-link-count"><i class="obx-icons-${icon}"></i></span></a>`
         );
       })
       .join("") +
@@ -1860,7 +1723,7 @@ export function popularWidget(posts: PostView[], t?: Translate): string {
           `<li><div class="post-thumbnail-wrapper"><a class="post-thumbnail" href="${esc(p.url)}">` +
           `<img src="${esc(p.featuredImage ?? "")}" alt="${esc(p.title)}" loading="lazy" crossorigin="anonymous"></a></div>` +
           `<div class="infos"><a class="title" href="${esc(p.url)}">${esc(p.title)}</a>` +
-          `<div class="metas"><span class="reads"><i class="skyscraper-icons-book-reader"></i>${p.views ?? 0}</span></div></div></li>`,
+          `<div class="metas"><span class="reads"><i class="obx-icons-book-reader"></i>${p.views ?? 0}</span></div></div></li>`,
       )
       .join("") +
     `</ul></section>`
@@ -1868,11 +1731,10 @@ export function popularWidget(posts: PostView[], t?: Translate): string {
 }
 
 export function footerHtml(settings: Record<string, any>, widgetsHtml = ""): string {
-
-    const POLICE_ICON = "/theme-assets/skyscraper/police_icon.png";
+  // The ICP badge image shipped with a removed theme; the number renders as a plain link.
   const icp = settings.icpNumber
     ? `<div class="links"><a href="https://beian.miit.gov.cn" target="_blank" rel="noopener noreferrer">` +
-      `<img src="${POLICE_ICON}" alt=""><span>&nbsp;&nbsp;${esc(settings.icpNumber)} </span></a></div>`
+      `<span>${esc(settings.icpNumber)}</span></a></div>`
     : "";
   return `<footer>${widgetsHtml}<div class="pagenav is-empty"></div><div class="copyright">${esc(settings.footerText ?? "")}</div>${icp}</footer>`;
 }

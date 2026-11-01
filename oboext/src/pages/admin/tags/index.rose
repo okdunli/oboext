@@ -1,6 +1,14 @@
 <script>
   // Tags manager — port of <TaxonomyManager type="tag" />.
   let d = $data(() => __rvLoad("admin.taxonomies", {}));
+  function copy() {
+    return d().s || {};
+  }
+  function hint(key, vars) {
+    let out = String(copy()[key] || "");
+    for (const k of Object.keys(vars)) out = out.split("{" + k + "}").join(String(vars[k]));
+    return out;
+  }
   function tags() {
     return d().tags || [];
   }
@@ -13,35 +21,35 @@
 </script>
 
 <head>
-  <title>标签 - 管理后台</title>
+  <title>{copy().tagDocTitle}</title>
 </head>
 
 <form class="adm-card adm-tax-add" data-adm-form="create-tag">
   <div class="adm-tax-fields">
     <div class="adm-field">
-      <label>名称</label>
-      <input class="adm-input" name="name" required placeholder="例如：Node.js">
+      <label>{copy().name}</label>
+      <input class="adm-input" name="name" required placeholder={copy().tagPhName}>
     </div>
     <div class="adm-field">
-      <label>别名（可选）</label>
-      <input class="adm-input" name="slug" placeholder="留空按名称自动生成">
+      <label>{copy().slugOptional}</label>
+      <input class="adm-input" name="slug" placeholder={copy().tagPhSlug}>
     </div>
   </div>
-  <button class="adm-btn" type="submit">{@html ic("plus")} 添加</button>
+  <button class="adm-btn" type="submit">{@html ic("plus")} {copy().add}</button>
 </form>
 
 <div class="adm-toolbar" style="gap:8px;">
-  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-op="delete" data-url="/api/tags" data-confirm="确认删除选中的标签？文章上的该标签会自动移除。">批量删除</button>
+  <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-adm-act="bulk" data-op="delete" data-url="/api/tags" data-confirm={copy().tagConfirmBulk}>{copy().tagBulkDelete}</button>
 </div>
 
 <div class="adm-card adm-table-wrap adm-tax-table">
   <table class="adm-table">
     <thead>
       <tr>
-        <th style="width:34px"><input type="checkbox" data-adm-act="check-all" title="全选"></th>
-        <th>名称</th>
-        <th style="width:34%">别名</th>
-        <th style="width:200px;text-align:right">操作</th>
+        <th style="width:34px"><input type="checkbox" data-adm-act="check-all" title={copy().selectAll}></th>
+        <th>{copy().name}</th>
+        <th style="width:34%">{copy().slug}</th>
+        <th style="width:200px;text-align:right">{copy().actions}</th>
       </tr>
     </thead>
     <tbody>
@@ -54,7 +62,7 @@
         <td><span class="adm-muted">{t.slug}</span></td>
         <td>
           <div class="row-actions">
-            <a class="adm-iconbtn" href={"/blog/tag/" + t.slug} target="_blank" title="查看">
+            <a class="adm-iconbtn" href={"/blog/tag/" + t.slug} target="_blank" title={copy().view}>
               {@html ic("external-link")}
             </a>
             <button
@@ -64,16 +72,16 @@
               data-id={t.id}
               data-name={t.name}
               data-slug={t.slug}
-              title="编辑名称 / 别名"
-            >{@html ic("pencil")} 编辑</button>
+              title={copy().tagTitleEdit}
+            >{@html ic("pencil")} {copy().edit}</button>
             <button
               type="button"
               class="adm-iconbtn danger"
               data-adm-act="delete"
               data-url={"/api/tags/" + t.id}
-              data-confirm={"确认删除标签「" + t.name + "」？文章关联会一并解除。"}
-              title="删除"
-            >{@html ic("trash-2")} 删除</button>
+              data-confirm={hint("tagConfirmDelete", { name: t.name })}
+              title={copy().delete}
+            >{@html ic("trash-2")} {copy().delete}</button>
           </div>
         </td>
       </tr>
@@ -81,7 +89,7 @@
     </tbody>
   </table>
   {#each emptyHint() as _}
-  <div class="adm-empty">还没有标签，在上方添加第一个吧。</div>
+  <div class="adm-empty">{copy().tagEmpty}</div>
   {/each}
 </div>
 
@@ -89,23 +97,23 @@
   <div class="adm-modal-box">
     <form data-adm-form="edit-tag">
       <div class="adm-modal-hd">
-        <h2>编辑标签</h2>
-        <button type="button" class="adm-modal-x" data-tax-cancel aria-label="关闭">{@html ic("x")}</button>
+        <h2>{copy().tagEditTitle}</h2>
+        <button type="button" class="adm-modal-x" data-tax-cancel aria-label={copy().close}>{@html ic("x")}</button>
       </div>
       <div class="adm-modal-bd">
         <input type="hidden" name="id">
         <div class="adm-field">
-          <label>名称</label>
+          <label>{copy().name}</label>
           <input class="adm-input" name="name" required maxlength="100">
         </div>
         <div class="adm-field">
-          <label>别名（留空保存则保持现有别名）</label>
+          <label>{copy().slugKeep}</label>
           <input class="adm-input" name="slug" maxlength="120">
         </div>
       </div>
       <div class="adm-modal-ft">
-        <button type="button" class="adm-btn adm-btn-ghost" data-tax-cancel>取消</button>
-        <button type="submit" class="adm-btn">保存</button>
+        <button type="button" class="adm-btn adm-btn-ghost" data-tax-cancel>{copy().cancel}</button>
+        <button type="submit" class="adm-btn">{copy().save}</button>
       </div>
     </form>
   </div>

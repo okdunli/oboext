@@ -5,8 +5,20 @@
   function list() {
     return users() || [];
   }
+  function copy() {
+    return users().s || {};
+  }
+  function roles() {
+    return copy().roles || {};
+  }
+  function hint(key, vars) {
+    let out = String(copy()[key] || "");
+    for (const k of Object.keys(vars)) out = out.split("{" + k + "}").join(String(vars[k]));
+    return out;
+  }
   function roleLabel(r) {
-    return r === "admin" ? "管理员" : r === "editor" ? "编辑" : r === "subscriber" ? "订阅者" : "作者";
+    const c = roles();
+    return r === "admin" ? c.admin : r === "editor" ? c.editor : r === "subscriber" ? c.subscriber : c.author;
   }
   function fmt(iso) {
     if (!iso) return "—";
@@ -23,41 +35,41 @@
 </script>
 
 <head>
-  <title>用户 - 管理后台</title>
+  <title>{copy().docTitle}</title>
 </head>
 
 <div class="adm-grid adm-cols-2">
   <div class="adm-card">
-    <div class="adm-card-hd"><strong id="user-form-title">新增用户</strong></div>
+    <div class="adm-card-hd"><strong id="user-form-title">{copy().add}</strong></div>
     <div class="adm-card-bd">
       <form data-adm-form="user">
         <input type="hidden" name="id">
         <div class="adm-field">
-          <label>昵称</label>
-          <input class="adm-input" name="name" required placeholder="显示名称">
+          <label>{copy().nickname}</label>
+          <input class="adm-input" name="name" required placeholder={copy().phName}>
         </div>
         <div class="adm-field">
-          <label>邮箱</label>
+          <label>{copy().email}</label>
           <input class="adm-input" type="email" name="email" required placeholder="login@example.com">
         </div>
         <div class="adm-field">
-          <label>密码</label>
-          <input class="adm-input" type="password" name="password" placeholder="至少 6 位">
+          <label>{copy().password}</label>
+          <input class="adm-input" type="password" name="password" placeholder={copy().phPassword}>
         </div>
         <div class="adm-field">
-          <label>角色</label>
+          <label>{copy().role}</label>
           <select class="adm-select" name="role">
-            <option value="author">作者（仅管理自己的内容）</option>
-            <option value="editor">编辑（管理所有内容）</option>
-            <option value="admin">管理员（全部权限）</option>
-            <option value="subscriber">订阅者（只读）</option>
+            <option value="author">{roles().authorHint}</option>
+            <option value="editor">{roles().editorHint}</option>
+            <option value="admin">{roles().adminHint}</option>
+            <option value="subscriber">{roles().subscriberHint}</option>
           </select>
         </div>
         <div class="adm-field">
-          <label>简介</label>
-          <textarea class="adm-textarea" name="bio" rows="3" placeholder="个人简介（可选）"></textarea>
+          <label>{copy().bio}</label>
+          <textarea class="adm-textarea" name="bio" rows="3" placeholder={copy().phBio}></textarea>
         </div>
-        <button class="adm-btn" type="submit">新增用户</button>
+        <button class="adm-btn" type="submit">{copy().add}</button>
       </form>
     </div>
   </div>
@@ -66,9 +78,9 @@
     <table class="adm-table">
       <thead>
         <tr>
-          <th>用户</th>
-          <th style="width:90px">角色</th>
-          <th style="width:100px">注册日期</th>
+          <th>{copy().colUser}</th>
+          <th style="width:90px">{copy().colRole}</th>
+          <th style="width:100px">{copy().colCreated}</th>
           <th style="width:130px"></th>
         </tr>
       </thead>
@@ -84,15 +96,15 @@
           <td>
             <div class="row-actions">
               {#if u.role !== "subscriber"}
-              <a class="adm-iconbtn" href={"/author/" + u.id} target="_blank" rel="noopener">主页</a>
+              <a class="adm-iconbtn" href={"/author/" + u.id} target="_blank" rel="noopener">{copy().home}</a>
               {/if}
-              <button class="adm-iconbtn" data-adm-act="user-edit" data-user={userJson(u)}>编辑</button>
+              <button class="adm-iconbtn" data-adm-act="user-edit" data-user={userJson(u)}>{copy().edit}</button>
               <button
                 class="adm-iconbtn danger"
                 data-adm-act="delete"
                 data-url={"/api/users/" + u.id}
-                data-confirm={"确认删除用户「" + u.name + "」？该操作不可撤销。"}
-              >删除</button>
+                data-confirm={hint("confirmDelete", { name: u.name })}
+              >{copy().delete}</button>
             </div>
           </td>
         </tr>
@@ -100,7 +112,7 @@
       </tbody>
     </table>
     {#each emptyHint() as _}
-    <div class="adm-empty">还没有用户。</div>
+    <div class="adm-empty">{copy().empty}</div>
     {/each}
   </div>
 </div>

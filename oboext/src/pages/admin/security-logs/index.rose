@@ -1,6 +1,9 @@
 <script>
 
   let d = $data(() => __rvLoad("admin.security-logs", {}));
+  function copy() {
+    return d().s || {};
+  }
   function items() { return d().items || []; }
   function total() { return d().total || 0; }
   function page() { return d().page || 1; }
@@ -22,11 +25,11 @@
       + param("account", curAccount()) + param("ip", curIp());
   }
   const EVENT_LABEL = {
-    "login.success": "登录成功",
-    "login.fail": "登录失败",
-    "login.locked": "登录锁定",
-    "password.reset.request": "申请重置密码",
-    "password.reset.done": "密码已重置",
+    "login.success": copy().loginOk,
+    "login.fail": copy().loginFail,
+    "login.locked": copy().loginLock,
+    "password.reset.request": copy().resetRequest,
+    "password.reset.done": copy().resetDone,
   };
   function eventLabel(t) {
     return EVENT_LABEL[t] || t;
@@ -48,7 +51,7 @@
     const parts = [];
     if (e.detail && typeof e.detail === "object") {
       const stage = e.detail.stage;
-      if (stage) parts.push("阶段：" + stage);
+      if (stage) parts.push(copy().stage + stage);
     }
     if (e.userAgent) parts.push(e.userAgent);
     return parts.join(" · ");
@@ -57,37 +60,37 @@
 </script>
 
 <head>
-  <title>安全日志 - 管理后台</title>
+  <title>{copy().docTitle}</title>
 </head>
 
 <div class="adm-toolbar">
   <div style="display:flex;align-items:center;gap:8px;">
     <span class="adm-ic" style="--i:url(/public/icons/scroll-text.svg);width:20px;height:20px;color:#818cf8;"></span>
-    <strong style="font-size:16px">安全日志</strong>
+    <strong style="font-size:16px">{copy().title}</strong>
     <span class="adm-hint" style="margin:0;">共 {total()} 条</span>
   </div>
 </div>
 
 <form method="get" class="adm-toolbar" style="gap:8px;">
   <select class="adm-select" name="type" data-val={curType()} style="max-width:220px;">
-    <option value="">全部事件</option>
-    <option value="login.success">登录成功</option>
-    <option value="login.fail">登录失败</option>
-    <option value="login.locked">登录锁定</option>
-    <option value="password.reset.request">申请重置密码</option>
-    <option value="password.reset.done">密码已重置</option>
+    <option value="">{copy().filterAll}</option>
+    <option value="login.success">{copy().loginOk}</option>
+    <option value="login.fail">{copy().loginFail}</option>
+    <option value="login.locked">{copy().loginLock}</option>
+    <option value="password.reset.request">{copy().resetRequest}</option>
+    <option value="password.reset.done">{copy().resetDone}</option>
   </select>
-  <select class="adm-select" name="typePrefix" data-val={curTypePrefix()} style="max-width:220px;" aria-label="按事件类型前缀筛选">
-    <option value="">任意类型前缀</option>
-    <option value="admin.">全部管理操作（admin.*）</option>
+  <select class="adm-select" name="typePrefix" data-val={curTypePrefix()} style="max-width:220px;" aria-label={copy().typePrefix}>
+    <option value="">{copy().typePrefix}</option>
+    <option value="admin.">{copy().adminPrefix}</option>
   </select>
   <input class="adm-input" name="account" value={curAccount()} maxlength="120"
-         placeholder="账号（完整邮箱）" aria-label="按账号筛选" style="max-width:220px;">
+         placeholder={copy().phAccount} aria-label={copy().accountFilter} style="max-width:220px;">
   <input class="adm-input" name="ip" value={curIp()} maxlength="45"
-         placeholder="IP 地址" aria-label="按 IP 筛选" style="max-width:160px;">
-  <button class="adm-btn adm-btn-ghost adm-btn-sm" type="submit">筛选</button>
+         placeholder={copy().phIp} aria-label={copy().ipFilter} style="max-width:160px;">
+  <button class="adm-btn adm-btn-ghost adm-btn-sm" type="submit">{copy().filter}</button>
   {#if anyFilter()}
-  <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/security-logs">清除筛选</a>
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/security-logs">{copy().clear}</a>
   {/if}
 </form>
 
@@ -95,11 +98,11 @@
   <table class="adm-table">
     <thead>
       <tr>
-        <th style="width:170px">时间</th>
-        <th style="width:130px">事件</th>
-        <th style="width:140px">账号</th>
+        <th style="width:170px">{copy().colTime}</th>
+        <th style="width:130px">{copy().colEvent}</th>
+        <th style="width:140px">{copy().colAccount}</th>
         <th style="width:130px">IP</th>
-        <th>User-Agent / 详情</th>
+        <th>{copy().colUa}</th>
       </tr>
     </thead>
     <tbody>
@@ -107,26 +110,26 @@
       <tr>
         <td class="adm-hint">{fmt(e.createdAt)}</td>
         <td><span class="adm-tag" style="{eventStyle(e.eventType)}">{eventLabel(e.eventType)}</span></td>
-        <td>{#if e.account}<a href={byAccount(e.account)} title="只看这个账号的事件">{e.account}</a>{/if}{#if !e.account}{e.userId ? "用户 #" + e.userId : "—"}{/if}</td>
-        <td class="adm-hint">{#if e.ip}<a href={byIp(e.ip)} title="只看这个 IP 的事件">{e.ip}</a>{/if}{#if !e.ip}—{/if}</td>
+        <td>{#if e.account}<a href={byAccount(e.account)} title={copy().seeThisAccount}>{e.account}</a>{/if}{#if !e.account}{e.userId ? "用户 #" + e.userId : "—"}{/if}</td>
+        <td class="adm-hint">{#if e.ip}<a href={byIp(e.ip)} title={copy().seeThisIp}>{e.ip}</a>{/if}{#if !e.ip}—{/if}</td>
         <td class="adm-hint">{detailText(e)}</td>
       </tr>
       {/each}
     </tbody>
   </table>
   {#each emptyHint() as _}
-  <div class="adm-card-bd adm-empty">没有符合条件的安全事件。</div>
+  <div class="adm-card-bd adm-empty">{copy().empty}</div>
   {/each}
 </div>
 
 {#if pages() > 1}
 <div class="adm-toolbar" style="gap:6px;">
   {#if page() > 1}
-  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() - 1)}>上一页</a>
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() - 1)}>{copy().pagerPrev}</a>
   {/if}
   <span class="adm-hint" style="margin:0;">第 {page()} / {pages()} 页</span>
   {#if page() < pages()}
-  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() + 1)}>下一页</a>
+  <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() + 1)}>{copy().pagerNext}</a>
   {/if}
 </div>
 {/if}

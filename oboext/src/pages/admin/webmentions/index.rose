@@ -40,7 +40,7 @@
 </script>
 
 <head>
-  <title>Webmention - 管理后台</title>
+  <title>{d().s.docTitle}</title>
 </head>
 
 <div class="adm-toolbar">

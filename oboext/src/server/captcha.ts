@@ -59,8 +59,8 @@ export function generateCaptchaCode(): string {
 /**
  * 5x7 bitmap glyphs for the builtin captcha, one string row per pixel row
  * ("#" = filled). Rendered as <rect> pixels, never as text - see captchaSvg.
- * Exported only for scripts/captcha-svg-vector.test.mts, which locks full
- * ALPHABET coverage and the 7x5 shape of every glyph.
+ * Exported so the full ALPHABET coverage and the 7x5 shape of every glyph
+ * stay inspectable.
  */
 export const CAPTCHA_FONT: Record<string, string[]> = {
   A: [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],

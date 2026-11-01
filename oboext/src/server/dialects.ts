@@ -1,15 +1,10 @@
 /**
  * Per-dialect numeric constants.
  *
- * The program implements the layout dialects; a theme only declares which one
- * it uses. The *behaviour* differences between dialects live in loaders.ts as
- * explicit branches, but the plain numbers those branches used to carry
- * (page windows, hero/latest split sizes, related-post counts) are data, not
- * logic — they belong in one table so a new dialect ships without editing
- * four functions, and so the shipped values stay reviewable at a glance.
- *
- * Values below reproduce the pre-R62 inline ternaries exactly; the live smoke
- * matrix (five themes x home/list/search/post) is the equivalence proof.
+ * One BASE profile: the page windows, hero/latest split sizes and related-post
+ * counts the loaders read. The program ships a single public theme, so every
+ * layout resolves to BASE; unknown layouts get it too, which keeps a new theme
+ * working before any per-dialect tuning exists.
  */
 
 /** One dialect's numeric tuning. Every field has a program-wide default. */
@@ -20,12 +15,8 @@ export interface DialectProfile {
   heroCount: number;
   /** home(): posts in the "latest" block after the hero. `0` means none. */
   latestCount: number;
-  /** Category page size. `0` means follow settings.postsPerPage. */
-  catPerPage: number;
   /** Search page size. `0` means follow settings.postsPerPage (clamped 1..100). */
   searchPerPage: number;
-  /** Post page: related-post block size. */
-  relatedN: number;
   /** Post page: taxonomy-based related count (default theme only). */
   taxonomyRelatedN: number;
 }
@@ -34,66 +25,23 @@ const BASE: DialectProfile = {
   homeLimit: 12,
   heroCount: 4,
   latestCount: 8,
-  catPerPage: 12,
   searchPerPage: 20,
-  relatedN: 4,
   taxonomyRelatedN: 4,
 };
 
-const PROFILES: Record<string, Partial<DialectProfile>> = {
-  pseudolinear: {
-    homeLimit: 30,
-    heroCount: 0,
-    latestCount: 0,
-    catPerPage: 30,
-    searchPerPage: 30,
-    relatedN: 5,
-  },
-  codeman: {
-    catPerPage: 30,
-    searchPerPage: 30,
-    relatedN: 5,
-  },
-  skyscraper: {
-    catPerPage: 0,
-  },
-  bluemix: {
-    searchPerPage: 0,
-  },
-};
-
-/** Dialects the program ships with; anything else falls back to BASE. */
-export const KNOWN_DIALECTS = Object.keys(PROFILES);
-
 /**
- * R148: the three list window sizes, NAMED once. loaders.ts inlined each of
- * these at its call site, and the sitemap now needs the exact same numbers to
- * know where page 2 starts - two independent copies of this arithmetic is how
- * a sitemap ends up advertising a page the router 404s (or hiding one it
- * serves). The formulas below are verbatim relocations of the loader code.
- */
-export function blogListSize(layout: string, postsPerPage?: number | null): number {
-  return layout === "bluemix"
-    ? Math.min(100, Math.max(1, Number(postsPerPage) || 10))
-    : layout === "skyscraper"
-      ? postsPerPage || 10
-      : postsPerPage || 12;
-}
-
-export function categoryListSize(layout: string, postsPerPage?: number | null): number {
-  return dialectProfile(layout).catPerPage || postsPerPage || 10;
-}
-
-export function tagListSize(layout: string, postsPerPage?: number | null): number {
-  return layout === "skyscraper" ? postsPerPage || 10 : 12;
-}
-
-/**
- * The numeric profile for a layout dialect. Pure map lookup — no cache, no
- * filesystem. Unknown dialects (including a brand-new theme's dialect) get
- * the BASE defaults, so a new theme works before any per-dialect tuning.
+ * The numeric profile for a layout dialect. Pure lookup — no cache, no
+ * filesystem. Every layout gets the BASE defaults.
  */
 export function dialectProfile(layout: string): DialectProfile {
-  const override = PROFILES[layout];
-  return override ? { ...BASE, ...override } : BASE;
+  return BASE;
+}
+
+/**
+ * The blog/author list window: the admin's per-page setting, or 12. The
+ * sitemap reads the same function, so its page counts can never disagree with
+ * the served windows.
+ */
+export function blogListSize(postsPerPage?: number | null): number {
+  return postsPerPage || 12;
 }

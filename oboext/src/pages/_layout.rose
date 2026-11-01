@@ -15,17 +15,6 @@
   function publicPath() {
     return !adminPath();
   }
-  // The public chrome layout dialect, declared by the theme's manifest
-  // ("layout"). The program switches on the DIALECT, never on a theme name.
-  function chromeLayout() {
-    return chrome().layout || "default";
-  }
-  function isSkyscraper() {
-    return chromeLayout() === "skyscraper";
-  }
-  function isNotSkyscraper() {
-    return chromeLayout() !== "skyscraper";
-  }
   // Locale-dependent document attributes are read through this pure closure
   // instead of the chrome signal: Rosezm's signal map is process-global with
   // save/restore isolation, so under concurrent renders one render's setChrome
@@ -45,9 +34,7 @@
   // the compiler's regexes (handbook G3/G4). The bytes at runtime are unchanged
   // - config-replace-guard's D3 lock folds the concatenation and compares.
   function linkResetHtml() {
-    return isNotSkyscraper()
-      ? '<sty' + 'le id="rv-link-reset">a{text-decoration:none}</st' + 'yle>'
-      : '';
+    return '<sty' + 'le id="rv-link-reset">a{text-decoration:none}</st' + 'yle>';
   }
   // The theme stylesheet, inlined to keep it off the critical path.
   function cssInlineHtml() {
@@ -165,22 +152,8 @@
 {#if publicPath()}
 {@html chrome().bodyFix}
 {@html skipLinkHtml()}
-{#if isSkyscraper()}
-{@html chrome().nav}
-<div class="th-skyscraper">
-{@html chrome().bodyOpen}
-<slot />
-{@html chrome().bodyClose}
-{@html chrome().aside}
-</div></main></div>
-{@html chrome().footer}
-</div>
-{@html chrome().pluginFooter}
-{/if}
-{#if isNotSkyscraper()}
 {@html chrome().bodyOpen}
 <slot />
 {@html chrome().bodyClose}
 {@html chrome().pluginFooter}
-{/if}
 {/if}

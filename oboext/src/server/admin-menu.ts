@@ -37,7 +37,7 @@ export type MenuGroup = {
 /** The dashboard is a standalone top-level entry; participates in prefs as a virtual leaf. */
 export const DASHBOARD_LEAF: MenuLeaf = {
   href: ADMIN_HOME_DEFAULT,
-  label: "仪表盘",
+  label: "@admin.nav.dash",
   glyph: "layout-dashboard",
   exact: true,
 };
@@ -47,85 +47,85 @@ export const DASHBOARD_LEAF: MenuLeaf = {
 const CORE_GROUPS: MenuGroup[] = [
   {
     id: "content",
-    label: "内容管理",
+    label: "@admin.nav.content",
     glyph: "file-text",
     children: [
-      { href: "/admin/posts", label: "文章", glyph: "file-text" },
-      { href: "/admin/pages", label: "页面", glyph: "files" },
-      { href: "/admin/categories", label: "分类", glyph: "folder" },
-      { href: "/admin/tags", label: "标签", glyph: "tags" },
-      { href: "/admin/comments", label: "评论", glyph: "message-square", adminOnly: true },
-      { href: "/admin/webmentions", label: "Webmention", glyph: "message-square", adminOnly: true },
-      { href: "/admin/newsletter", label: "Newsletter", glyph: "mail", adminOnly: true },
-      { href: "/admin/search-terms", label: "搜索热词", glyph: "search", adminOnly: true },
-      { href: "/admin/media", label: "媒体库", glyph: "image" },
+      { href: "/admin/posts", label: "@admin.nav.posts", glyph: "file-text" },
+      { href: "/admin/pages", label: "@admin.nav.pages", glyph: "files" },
+      { href: "/admin/categories", label: "@admin.nav.categories", glyph: "folder" },
+      { href: "/admin/tags", label: "@admin.nav.tags", glyph: "tags" },
+      { href: "/admin/comments", label: "@admin.nav.comments", glyph: "message-square", adminOnly: true },
+      { href: "/admin/webmentions", label: "@admin.nav.webmentions", glyph: "message-square", adminOnly: true },
+      { href: "/admin/newsletter", label: "@admin.nav.newsletter", glyph: "mail", adminOnly: true },
+      { href: "/admin/search-terms", label: "@admin.nav.search_terms", glyph: "search", adminOnly: true },
+      { href: "/admin/media", label: "@admin.nav.media", glyph: "image" },
     ],
   },
   {
     id: "appearance",
-    label: "外观设置",
+    label: "@admin.nav.appearance",
     glyph: "palette",
     children: [
-      { href: "/admin/themes", label: "主题", glyph: "palette", superOnly: true },
-      { href: "/admin/widgets", label: "小工具", glyph: "layout-grid", superOnly: true },
-      { href: "/admin/menus", label: "菜单", glyph: "menu", superOnly: true },
+      { href: "/admin/themes", label: "@admin.nav.themes", glyph: "palette", superOnly: true },
+      { href: "/admin/widgets", label: "@admin.nav.widgets", glyph: "layout-grid", superOnly: true },
+      { href: "/admin/menus", label: "@admin.nav.menus", glyph: "menu", superOnly: true },
     ],
   },
   {
     id: "plugins",
-    label: "插件扩展",
+    label: "@admin.nav.plugins",
     glyph: "plug",
     superOnly: true,
     children: [
-      { href: "/admin/plugins", label: "全部插件", glyph: "plug", exact: true },
+      { href: "/admin/plugins", label: "@admin.nav.plugins_all", glyph: "plug", exact: true },
     ],
   },
   {
     id: "personal",
-    label: "个人中心",
+    label: "@admin.nav.personal",
     glyph: "user-round",
     children: [
-      { href: "/admin/account", label: "我的账号", glyph: "user-round" },
+      { href: "/admin/account", label: "@admin.nav.account", glyph: "user-round" },
     ],
   },
   {
     id: "users",
-    label: "用户与权限",
+    label: "@admin.nav.users_group",
     glyph: "users",
     superOnly: true,
     children: [
-      { href: "/admin/users", label: "用户", glyph: "users" },
-      { href: "/admin/members", label: "会员注册", glyph: "user-plus", superOnly: true },
-      { href: "/admin/oauth", label: "第三方登录", glyph: "share-2", superOnly: true },
+      { href: "/admin/users", label: "@admin.nav.users", glyph: "users" },
+      { href: "/admin/members", label: "@admin.nav.members", glyph: "user-plus", superOnly: true },
+      { href: "/admin/oauth", label: "@admin.nav.oauth", glyph: "share-2", superOnly: true },
     ],
   },
   {
     id: "system",
-    label: "系统设置",
+    label: "@admin.nav.system",
     glyph: "settings",
     superOnly: true,
     children: [
-      { href: "/admin/settings", label: "站点设置", glyph: "settings" },
-      { href: "/admin/security", label: "后台安全", glyph: "shield", superOnly: true },
-      { href: "/admin/security-logs", label: "安全日志", glyph: "scroll-text", superOnly: true },
-      { href: "/admin/maintenance", label: "维护模式", glyph: "construction", superOnly: true },
-      { href: "/admin/email", label: "邮件设置", glyph: "mail", superOnly: true },
-      { href: "/admin/sms", label: "短信设置", glyph: "smartphone", superOnly: true },
+      { href: "/admin/settings", label: "@admin.nav.settings", glyph: "settings" },
+      { href: "/admin/security", label: "@admin.nav.security", glyph: "shield", superOnly: true },
+      { href: "/admin/security-logs", label: "@admin.nav.security_logs", glyph: "scroll-text", superOnly: true },
+      { href: "/admin/maintenance", label: "@admin.nav.maintenance", glyph: "construction", superOnly: true },
+      { href: "/admin/email", label: "@admin.nav.email", glyph: "mail", superOnly: true },
+      { href: "/admin/sms", label: "@admin.nav.sms", glyph: "smartphone", superOnly: true },
     ],
   },
   {
     id: "tools",
-    label: "站点工具",
+    label: "@admin.nav.tools",
     glyph: "wrench",
     superOnly: true,
     children: [
-      { href: "/admin/permalinks", label: "固定链接", glyph: "link-2", superOnly: true },
-      { href: "/admin/redirects", label: "重定向", glyph: "arrow-right-left", superOnly: true },
-      { href: "/admin/notfound", label: "404 页面", glyph: "file-question" },
-      { href: "/admin/backup", label: "备份恢复", glyph: "database-backup", superOnly: true },
-      { href: "/admin/export", label: "内容导出", glyph: "file-text", superOnly: true },
-      { href: "/admin/icons", label: "图标库", glyph: "shapes", superOnly: true },
-      { href: "/admin/menu-settings", label: "菜单与首页", glyph: "panel-left", locked: true },
+      { href: "/admin/permalinks", label: "@admin.nav.permalinks", glyph: "link-2", superOnly: true },
+      { href: "/admin/redirects", label: "@admin.nav.redirects", glyph: "arrow-right-left", superOnly: true },
+      { href: "/admin/notfound", label: "@admin.nav.notfound", glyph: "file-question" },
+      { href: "/admin/backup", label: "@admin.nav.backup", glyph: "database-backup", superOnly: true },
+      { href: "/admin/export", label: "@admin.nav.export", glyph: "file-text", superOnly: true },
+      { href: "/admin/icons", label: "@admin.nav.icons", glyph: "shapes", superOnly: true },
+      { href: "/admin/menu-settings", label: "@admin.nav.menu_settings", glyph: "panel-left", locked: true },
     ],
   },
 ];
@@ -287,7 +287,7 @@ export function buildAdminMenuGroups(extras: AdminMenuExtras = EMPTY_EXTRAS): Me
 
 export function buildAdminMenuAll(extras?: AdminMenuExtras): MenuGroup[] {
   return [
-    { id: "top", label: "顶部入口", glyph: "layout-dashboard", children: [DASHBOARD_LEAF] },
+    { id: "top", label: "@admin.nav.top", glyph: "layout-dashboard", children: [DASHBOARD_LEAF] },
     ...buildAdminMenuGroups(extras),
   ];
 }
@@ -471,11 +471,27 @@ const escAttr = (s: string): string => escText(s).replace(/"/g, "&quot;");
  * (if > each > if), so the preference-driven nav ships as one raw HTML blob
  * through the session loader, exactly like the public chrome nav/aside/footer.
  */
+/** Built-in entries carry a catalog marker ("@admin.nav.posts"); hook and
+ *  plugin contributions carry the literal label their author wrote. One
+ *  resolver, so the sidebar and the menu settings screen can never disagree. */
+export function menuLabelText(label: string, t?: (key: string) => string): string {
+  return label.startsWith("@") && t ? t(label.slice(1)) : label;
+}
+
+export function localizeMenuGroups(groups: MenuGroup[], t?: (key: string) => string): MenuGroup[] {
+  return groups.map((g) => ({
+    ...g,
+    label: menuLabelText(g.label, t),
+    children: g.children.map((c) => ({ ...c, label: menuLabelText(c.label, t) })),
+  }));
+}
+
 export function shellNavHtml(
   role: Role,
   pathname: string,
   prefs: MenuPrefs,
   extras?: AdminMenuExtras,
+  t?: (key: string) => string,
 ): string {
   const items = shellNav(role, pathname, prefs, extras);
   const caret =
@@ -491,7 +507,7 @@ export function shellNavHtml(
         '">' +
         (n.glyph ? admIcon(n.glyph, 17) : "") +
         "<span>" +
-        escText(n.label) +
+        escText(menuLabelText(n.label, t)) +
         "</span></a>";
     } else if (n.kind === "gstart") {
       // Accordion (AdminShell.tsx): the group holding the current route renders
@@ -506,7 +522,7 @@ export function shellNavHtml(
         '">' +
         (n.glyph ? admIcon(n.glyph, 15) : "") +
         '<span class="adm-nav-glabel">' +
-        escText(n.label) +
+        escText(menuLabelText(n.label, t)) +
         "</span>" +
         caret +
         '</button><div class="adm-nav-leaves"' +
@@ -521,7 +537,7 @@ export function shellNavHtml(
         '">' +
         (n.glyph ? admIcon(n.glyph, 15) : "") +
         "<span>" +
-        escText(n.label) +
+        escText(menuLabelText(n.label, t)) +
         "</span></a>";
     } else {
       html += "</div></div>";

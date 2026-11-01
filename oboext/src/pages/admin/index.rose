@@ -6,6 +6,23 @@
   function counts() {
     return st().counts;
   }
+  // The loader hands down every visible string in the request's language
+  // (prefix -> cookie -> Accept-Language, resolved by the middleware), so the
+  // template only ever reads copy() - no literal lives here twice.
+  function copy() {
+    return st().s || {};
+  }
+  function hint(key, vars) {
+    let out = String(copy()[key] || "");
+    for (const k of Object.keys(vars)) out = out.split("{" + k + "}").join(String(vars[k]));
+    return out;
+  }
+  function trendsHint() {
+    return hint("trendsHint", { posts: trendTotal().posts, comments: trendTotal().comments });
+  }
+  function sourcesHint() {
+    return hint("sourcesHint", { views: sourceTotal() });
+  }
   function postStatus() {
     return st().postStatus;
   }
@@ -72,11 +89,12 @@
     }, 0);
   }
   function sourceKindLabel(k) {
-    return k === "search" ? "搜索引擎"
-      : k === "social" ? "社交媒体"
-      : k === "internal" ? "站内跳转"
-      : k === "direct" ? "直接访问"
-      : "其它来源";
+    const c = copy();
+    return k === "search" ? c.srcSearch
+      : k === "social" ? c.srcSocial
+      : k === "internal" ? c.srcInternal
+      : k === "direct" ? c.srcDirect
+      : c.srcOther;
   }
   // 占比条：以当前最大来源为满格，避免一个 90% 的搜索引擎把其余全压成 0px。
   function sourcePct(r) {
@@ -129,11 +147,13 @@
       "-" + String(d.getDate()).padStart(2, "0") + " " +
       String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
   }
-  function statusLabel(s) {
-    return s === "published" ? "已发布" : s === "draft" ? "草稿" : "已归档";
+  function statusLabel(v) {
+    const c = copy();
+    return v === "published" ? c.published : v === "draft" ? c.draft : c.archived;
   }
-  function commentStatusLabel(s) {
-    return s === "published" ? "已通过" : s === "pending" ? "待审核" : "垃圾";
+  function commentStatusLabel(v) {
+    const c = copy();
+    return v === "published" ? c.commentApproved : v === "pending" ? c.commentPending : c.commentSpam;
   }
   function short(t, n) {
     t = String(t || "");
@@ -163,18 +183,18 @@
     try {
       const r = await fetch("/api/admin/demo-content", { method: "POST", credentials: "same-origin" });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data.error || "载入失败");
-      if (typeof window.admToast === "function") window.admToast("示例内容已载入，正在刷新", "ok");
+      if (!r.ok) throw new Error(data.error || copy().seedFail);
+      if (typeof window.admToast === "function") window.admToast(copy().seedOk, "ok");
       setTimeout(() => location.reload(), 600);
     } catch (err) {
       btn.disabled = false;
-      if (typeof window.admToast === "function") window.admToast(err instanceof Error ? err.message : "载入失败", "err");
+      if (typeof window.admToast === "function") window.admToast(err instanceof Error ? err.message : copy().seedFail, "err");
     }
   });
 </script>
 
 <head>
-  <title>仪表盘 - 管理后台</title>
+  <title>{copy().docTitle}</title>
 </head>
 
 <div class="adm-grid adm-stats">
@@ -205,52 +225,52 @@
 
 {#if isEmptySite()}
 <div class="adm-card" style="margin-top:16px;">
-  <div class="adm-card-hd">第一次使用</div>
+  <div class="adm-card-hd">{copy().firstRun}</div>
   <div class="adm-card-bd">
-    <p class="adm-hint" style="margin:0 0 10px">这个站点还没有内容。一键载入示例文章、页面、分类与标签，并把导航指向它们；示例内容可以随时删除。</p>
-    <button class="adm-btn adm-btn-sm" type="button" data-adm-demo-seed>载入示例内容</button>
+    <p class="adm-hint" style="margin:0 0 10px">{copy().firstRunLead}</p>
+    <button class="adm-btn adm-btn-sm" type="button" data-adm-demo-seed>{copy().seed}</button>
   </div>
 </div>
 {/if}
 
 <div class="adm-grid adm-cols-2" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
   <div class="adm-card">
-    <div class="adm-card-hd">文章状态分布
+    <div class="adm-card-hd">{copy().postStatus}
       <span class="spacer" style="flex:1"></span>
-      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/posts/new">写文章</a>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/posts/new">{copy().writePost}</a>
     </div>
     <div class="adm-card-bd">
       <div class="adm-kv">
-        <span class="k">已发布</span><b>{postStatus().published}</b>
-        <span class="k">草稿</span><b>{postStatus().draft}</b>
-        <span class="k">已归档</span><b>{postStatus().archived}</b>
+        <span class="k">{copy().published}</span><b>{postStatus().published}</b>
+        <span class="k">{copy().draft}</span><b>{postStatus().draft}</b>
+        <span class="k">{copy().archived}</span><b>{postStatus().archived}</b>
       </div>
     </div>
   </div>
   <div class="adm-card">
-    <div class="adm-card-hd">快捷操作</div>
+    <div class="adm-card-hd">{copy().quickActions}</div>
     <div class="adm-card-bd" style="display:flex;flex-wrap:wrap;gap:8px;">
-      <a class="adm-btn adm-btn-sm" href="/admin/posts/new">新建文章</a>
-      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/comments">审核评论</a>
-      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/security-logs?typePrefix=admin.">审计日志</a>
-      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/categories">管理分类</a>
-      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/settings">站点设置</a>
+      <a class="adm-btn adm-btn-sm" href="/admin/posts/new">{copy().newPost}</a>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/comments">{copy().reviewComments}</a>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/security-logs?typePrefix=admin.">{copy().auditLog}</a>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/categories">{copy().categories}</a>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/settings">{copy().settings}</a>
     </div>
   </div>
 </div>
 
 {#if trends().length > 0}
 <div class="adm-card adm-trends" style="margin-top:16px;">
-  <div class="adm-card-hd">近 7 天趋势
+  <div class="adm-card-hd">{copy().trends}
     <span class="spacer" style="flex:1"></span>
-    <span class="adm-hint" style="font-size:12px">每日新增 · 合计 {trendTotal().posts} 篇文章 / {trendTotal().comments} 条评论</span>
+    <span class="adm-hint" style="font-size:12px">{trendsHint()}</span>
   </div>
   <div class="adm-card-bd">
     <div class="adm-trend-row" style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
       <span style="width:40px;flex:none;display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--adm-muted)">
-        <i style="width:8px;height:8px;border-radius:2px;background:var(--adm-accent);display:inline-block"></i>文章
+        <i style="width:8px;height:8px;border-radius:2px;background:var(--adm-accent);display:inline-block"></i>{copy().posts}
       </span>
-      <svg class="adm-spark" viewBox="0 0 280 48" width="280" height="48" role="img" aria-label="近 7 天文章每日新增" style="height:auto;max-width:100%;">
+      <svg class="adm-spark" viewBox="0 0 280 48" width="280" height="48" role="img" aria-label={copy().chartPosts} style="height:auto;max-width:100%;">
         {#each trendPostBars() as b}
         <rect x={b.x} y={b.y} width={b.w} height={b.h} rx="2" fill="var(--adm-accent)"><title>{b.d} 新增文章 {b.v} 篇</title></rect>
         {/each}
@@ -258,9 +278,9 @@
     </div>
     <div class="adm-trend-row" style="display:flex;align-items:center;gap:10px;">
       <span style="width:40px;flex:none;display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--adm-muted)">
-        <i style="width:8px;height:8px;border-radius:2px;background:var(--adm-green);display:inline-block"></i>评论
+        <i style="width:8px;height:8px;border-radius:2px;background:var(--adm-green);display:inline-block"></i>{copy().comments}
       </span>
-      <svg class="adm-spark" viewBox="0 0 280 48" width="280" height="48" role="img" aria-label="近 7 天评论每日新增" style="height:auto;max-width:100%;">
+      <svg class="adm-spark" viewBox="0 0 280 48" width="280" height="48" role="img" aria-label={copy().chartComments} style="height:auto;max-width:100%;">
         {#each trendCommentBars() as b}
         <rect x={b.x} y={b.y} width={b.w} height={b.h} rx="2" fill="var(--adm-green)"><title>{b.d} 新增评论 {b.v} 条</title></rect>
         {/each}
@@ -272,9 +292,9 @@
 
 {#if sources().length > 0}
 <div class="adm-card" style="margin-top:16px;">
-  <div class="adm-card-hd">今日来源分布
+  <div class="adm-card-hd">{copy().sources}
     <span class="spacer" style="flex:1"></span>
-    <span class="adm-hint" style="font-size:12px">访次 {sourceTotal()} · 按首次落地页计</span>
+    <span class="adm-hint" style="font-size:12px">{sourcesHint()}</span>
   </div>
   <div class="adm-card-bd">
     {#each sourceRows() as r}
@@ -283,7 +303,7 @@
       <span style="flex:1;height:8px;border-radius:4px;background:var(--adm-border);overflow:hidden;display:block;">
         <i style={"display:block;height:100%;border-radius:4px;background:var(--adm-accent);width:" + r.pct + "%"}></i>
       </span>
-      <span class="adm-hint" style="width:88px;flex:none;text-align:right;font-size:12px">{r.views} 访次 / {r.uniques} 访客</span>
+      <span class="adm-hint" style="width:88px;flex:none;text-align:right;font-size:12px">{r.views} {copy().visits} / {r.uniques} {copy().visitors}</span>
     </div>
     {/each}
   </div>
@@ -292,19 +312,19 @@
 
 {#if topSourcePostRows().length > 0}
 <div class="adm-card" style="margin-top:16px;">
-  <div class="adm-card-hd">来源 × 文章
+  <div class="adm-card-hd">{copy().sourcesByPost}
     <span class="spacer" style="flex:1"></span>
-    <span class="adm-hint" style="font-size:12px">近 7 日 · 各渠道访次最高的文章</span>
+    <span class="adm-hint" style="font-size:12px">{copy().sourcesByPostHint}</span>
   </div>
   <div class="table-responsive">
     <table class="adm-table">
-      <thead><tr><th>渠道</th><th>文章标题</th><th style="text-align:right">浏览量</th></tr></thead>
+      <thead><tr><th>{copy().channel}</th><th>{copy().postTitle}</th><th style="text-align:right">{copy().views}</th></tr></thead>
       <tbody>
         {#each topSourcePostRows() as r}
         <tr>
           <td style="white-space:nowrap">{sourceKindLabel(r.kind)}</td>
           <td><a href={"/admin/posts/" + r.postId}><div class="title">{short(r.title, 28)}</div></a></td>
-          <td class="adm-hint" style="text-align:right">{r.views} 访次</td>
+          <td class="adm-hint" style="text-align:right">{r.views} {copy().visits}</td>
         </tr>
         {/each}
       </tbody>
@@ -315,12 +335,12 @@
 
 <div class="adm-grid adm-cols-2" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
   <div class="adm-card">
-    <div class="adm-card-hd">最近文章<span class="spacer" style="flex:1"></span>
-      <a href="/admin/posts" style="display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--adm-muted)">全部{@html ic("arrow-right", 14)}</a>
+    <div class="adm-card-hd">{copy().recentPosts}<span class="spacer" style="flex:1"></span>
+      <a href="/admin/posts" style="display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--adm-muted)">{copy().all}{@html ic("arrow-right", 14)}</a>
     </div>
     <div class="table-responsive">
       <table class="adm-table">
-        <thead><tr><th>标题</th><th>状态</th><th>更新时间</th></tr></thead>
+        <thead><tr><th>{copy().title}</th><th>{copy().status}</th><th>{copy().updated}</th></tr></thead>
         <tbody>
           {#each recentPosts() as p}
           <tr>
@@ -334,12 +354,12 @@
     </div>
   </div>
   <div class="adm-card">
-    <div class="adm-card-hd">最近评论<span class="spacer" style="flex:1"></span>
-      <a href="/admin/comments" style="display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--adm-muted)">全部{@html ic("arrow-right", 14)}</a>
+    <div class="adm-card-hd">{copy().recentComments}<span class="spacer" style="flex:1"></span>
+      <a href="/admin/comments" style="display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--adm-muted)">{copy().all}{@html ic("arrow-right", 14)}</a>
     </div>
     <div class="table-responsive">
       <table class="adm-table">
-        <thead><tr><th>评论</th><th>状态</th><th>时间</th></tr></thead>
+        <thead><tr><th>{copy().comments}</th><th>{copy().status}</th><th>{copy().time}</th></tr></thead>
         <tbody>
           {#each recentComments() as c}
           <tr>
@@ -358,13 +378,13 @@
 </div>
 
 <div class="adm-card" style="margin-top:16px;">
-  <div class="adm-card-hd">API 接入</div>
+  <div class="adm-card-hd">{copy().api}</div>
   <div class="adm-card-bd">
-    <p class="adm-hint" style="margin:0 0 10px">本系统提供 REST 与 GraphQL 两种接口：</p>
+    <p class="adm-hint" style="margin:0 0 10px">{copy().apiLead}</p>
     <ul class="adm-api-list">
       <li>REST：<code>GET /api/posts?status=published</code></li>
-      <li>GraphQL：<code>POST /api/graphql</code>（浏览器访问可打开 Playground）</li>
-      <li>订阅源：<code>GET /feed.xml</code> · 站点地图：<code>GET /sitemap.xml</code></li>
+      <li>GraphQL：<code>POST /api/graphql</code>{copy().apiPlayground}</li>
+      <li>{copy().apiFeeds}<code>GET /feed.xml</code> · {copy().apiSitemap}<code>GET /sitemap.xml</code></li>
     </ul>
   </div>
 </div>

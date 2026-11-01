@@ -30,8 +30,7 @@ node_modules/
 # local dev database (created by running the app)
 .data/
 
-# local scratch: dev-server logs, one-off probe scripts
-*.log
+# local scratch: dev-server logs, one-off probe *.log
 tmp/
 .vfy/
 # diagnostic scratch dir (HTML snapshots, throwaway probe scripts, temp dbs)
@@ -70,6 +69,9 @@ deploy-logs/
 # by every `npm run build`, source of truth is oboext/src/pages/.
 oboext/src/.rosezm/
 .rosezm-export/
+# rosezm CLI scratch (per-process build/dev caches at the app root)
+oboext/.rosezm-build/
+oboext/.rosezm-dev/
 
 # runtime upload target: ship the empty dir, never the uploaded files
 content/uploads/*

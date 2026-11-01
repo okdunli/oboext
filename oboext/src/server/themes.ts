@@ -61,9 +61,6 @@ export type ThemeManifest = {
   chrome?: boolean;
   /** Public chrome layout dialect the theme is built for. */
   layout?: string;
-  /** Design-token bridge module id (e.g. "skyscraper"), when the theme's own
-   *  stylesheet consumes a private token scale. */
-  tokensBridge?: string;
   /** Theme-relative client scripts, served from /theme-assets/<slug>/… */
   scripts?: string[];
   /** Program-owned client scripts, served from /public/… */
@@ -233,7 +230,7 @@ export async function syncThemes(): Promise<void> {
   if (stale.length > 0) await db.delete(themes).where(inArray(themes.slug, stale));
   // Heal an active theme whose public chrome isn't ported yet: keep the
   // site on the newest ported layout instead of silently rendering the
-  // skyscraper chrome under another theme's token set (T20 ports the rest).
+  // fallback chrome under another theme's token set.
   const [s] = await db
     .select({ activeThemeSlug: siteSettings.activeThemeSlug })
     .from(siteSettings)

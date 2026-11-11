@@ -65,7 +65,7 @@ export async function changeOwnProfile(
   // identity from both the memo and the response hot cache until their
   // windows. invalidateContentCaches() is the same commit-point call the
   // admin updateUser makes for a rename: memo prefix + KV + render/hot caches.
-  invalidateContentCaches();
+  invalidateContentCaches(false);
   return {
     id: row.id,
     name: row.name,

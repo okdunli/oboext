@@ -606,7 +606,21 @@ async function resolveProvider(
   throw new ServiceError("登录方式不存在", 404, "api.oauth_unavailable");
 }
 
-export async function listAdminProviders(): Promise<AdminProvider[]> {
+/** English names for the preset brands. Only the Chinese-named presets differ;
+ *  qq / github / linuxdo already read the same in both languages. */
+const PRESET_LABELS_EN: Record<string, string> = {
+  wechat: "WeChat",
+  weibo: "Weibo",
+  dingtalk: "DingTalk",
+  douyin: "Douyin",
+};
+
+/** The label a preset shows in the request language; custom providers keep
+ *  whatever the operator typed. */
+function presetLabel(kind: string, label: string, locale?: string): string {
+  return locale === "en" ? (PRESET_LABELS_EN[kind] ?? label) : label;
+}
+export async function listAdminProviders(locale?: string): Promise<AdminProvider[]> {
   const settings = await getOauthSettings();
   const out: AdminProvider[] = [];
   for (const kind of Object.keys(PRESETS) as PresetKind[]) {
@@ -614,7 +628,7 @@ export async function listAdminProviders(): Promise<AdminProvider[]> {
     const cfg = settings.providers[kind] ?? defaultConfig();
     out.push({
       key: kind,
-      label: preset.label,
+      label: presetLabel(kind, preset.label, locale),
       color: preset.color,
       custom: false,
       config: { ...cfg, clientSecret: "" },
@@ -645,8 +659,8 @@ export async function listAdminProviders(): Promise<AdminProvider[]> {
   return out;
 }
 
-export async function getPublicProviders(): Promise<PublicProvider[]> {
-  const all = await listAdminProviders();
+export async function getPublicProviders(locale?: string): Promise<PublicProvider[]> {
+  const all = await listAdminProviders(locale);
   return all
     .filter((p) => p.config.enabled && p.complete)
     .map(({ key, label, color }) => ({ key, label, color }));
@@ -1192,8 +1206,7 @@ export async function handleOAuthCallback(params: {
         "api.oauth_account_disabled",
       );
     }
-    await touchIdentity(identity.id, profile);
-    await touchUser(row.id);
+    await Promise.all([touchIdentity(identity.id, profile), touchUser(row.id)]);
     return {
       mode: "login",
       user: toSessionUser(row),
@@ -1215,8 +1228,7 @@ export async function handleOAuthCallback(params: {
           "api.oauth_account_disabled",
         );
       }
-      await attachIdentity(byEmail.id, params.key, profile);
-      await touchUser(byEmail.id);
+      await Promise.all([attachIdentity(byEmail.id, params.key, profile), touchUser(byEmail.id)]);
       return {
         mode: "merged",
         user: toSessionUser(byEmail),
@@ -1234,8 +1246,11 @@ export async function handleOAuthCallback(params: {
     );
   }
 
-  const member = await getMemberSettings();
-  const baseName = await makeUniqueName(sanitizeName(profile.nickname));
+  // Independent: the member settings and the users-table uniqueness probe.
+  const [member, baseName] = await Promise.all([
+    getMemberSettings(),
+    makeUniqueName(sanitizeName(profile.nickname)),
+  ]);
   let emailToUse: string | null = profile.email;
   let needProfile = !profile.email;
   if (profile.email) {
@@ -1259,8 +1274,7 @@ export async function handleOAuthCallback(params: {
       emailVerified: !!emailToUse && profile.emailVerified,
     })
     .returning();
-  await attachIdentity(row.id, params.key, profile);
-  await addPasswordlessMark(row.id);
+  await Promise.all([attachIdentity(row.id, params.key, profile), addPasswordlessMark(row.id)]);
   return {
     mode: "registered",
     user: toSessionUser(row),

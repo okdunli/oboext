@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 
 // R355: image variants used to be Windows-only (PowerShell + GDI+), which
@@ -7,6 +8,7 @@ import { promisify } from "node:util";
 // picks the FIRST available engine at first use and remembers the verdict:
 //
 //   gdi+       Windows: PowerShell System.Drawing, zero external deps
+//   sips       macOS: the OS image tool at /usr/bin/sips, zero external deps
 //   magick     ImageMagick 7 (`magick`) — the usual pick on Linux/docker
 //   convert    ImageMagick 6 (`convert`) — older distros ship this name
 //   ffmpeg     ffmpeg, as a last resort (fine quality, present almost everywhere)
@@ -16,7 +18,7 @@ import { promisify } from "node:util";
 
 const execFileP = promisify(execFile);
 
-export type VariantEngine = "gdi+" | "magick" | "convert" | "ffmpeg" | "none";
+export type VariantEngine = "gdi+" | "sips" | "magick" | "convert" | "ffmpeg" | "none";
 
 export interface VariantJob {
   /** absolute source path */
@@ -30,6 +32,31 @@ export interface VariantJob {
 }
 
 let cached: VariantEngine | null | undefined;
+
+const sipsWidths = new Map<string, number>();
+// R552 follow-up: the variant wave fires all jobs for one source at once,
+// and every sips job probes the SAME file's width. Without single-flight the
+// wave spawns one `sips -g pixelWidth` per job (all answering the same
+// number); the in-flight promise is shared so N concurrent probes cost one.
+const sipsWidthFlights = new Map<string, Promise<number>>();
+/** Exported for tests: the single-flight probe. */
+export async function sipsWidth(file: string): Promise<number> {
+  const hit = sipsWidths.get(file);
+  if (hit !== undefined) return hit;
+  let flight = sipsWidthFlights.get(file);
+  if (!flight) {
+    flight = (async () => {
+      const out = await execFileP("sips", ["-g", "pixelWidth", file], { timeout: 30_000 });
+      const width = Number(/pixelWidth:\s*(\d+)/.exec(String(out.stdout))?.[1] ?? 0);
+      if (sipsWidths.size > 500) sipsWidths.delete(sipsWidths.keys().next().value as string);
+      sipsWidths.set(file, width);
+      return width;
+    })();
+    sipsWidthFlights.set(file, flight);
+    flight.finally(() => sipsWidthFlights.delete(file)).catch(() => {});
+  }
+  return flight;
+}
 
 async function exists(name: string): Promise<boolean> {
   try {
@@ -45,6 +72,8 @@ export async function variantEngine(): Promise<VariantEngine | null> {
   if (cached !== undefined) return cached;
   if (process.platform === "win32") {
     cached = "gdi+";
+  } else if (process.platform === "darwin" && existsSync("/usr/bin/sips")) {
+    cached = "sips";
   } else if (await exists("magick")) {
     cached = "magick";
   } else if (await exists("convert")) {
@@ -87,6 +116,26 @@ function ffmpegArgs(j: VariantJob): string[] {
 
 async function runOne(engine: VariantEngine, j: VariantJob): Promise<void> {
   switch (engine) {
+    case "sips": {
+      // --resampleWidth upscales when the target is wider than the source, and
+      // the contract is shrink-only, so read the width first (memoized: three
+      // widths cost one probe).
+      const width = await sipsWidth(j.s);
+      if (!width || width <= j.w) return;
+      await execFileP(
+        "sips",
+        [
+          "--resampleWidth",
+          String(j.w),
+          ...(j.jpeg ? ["-s", "formatOptions", "82"] : []),
+          "--out",
+          j.d,
+          j.s,
+        ],
+        { timeout: 120_000 },
+      );
+      return;
+    }
     case "gdi+": {
       // The pre-R355 GDI+ script, one job per invocation (the old batch form
       // survives at the call site by looping jobs).
@@ -135,13 +184,17 @@ try {
  * Generate every missing variant with the host's engine. Returns the engine
  * name on success, null when this host has no engine at all (callers must
  * surface that — it is not "nothing to do").
+ *
+ * R552: the jobs are independent resizes of ONE source file, so they run as
+ * a wave — the old for..await chained three engine invocations per upload
+ * (400 -> 800 -> 1600), putting the last variant's landing time at the sum
+ * of all three. External engines are process spawns, so the parallelism is
+ * free (no shared in-process state to contend).
  */
 export async function generateVariants(jobs: VariantJob[]): Promise<VariantEngine | null> {
   const engine = await variantEngine();
   if (!engine) return null;
-  for (const j of jobs) {
-    await runOne(engine, j);
-  }
+  await Promise.all(jobs.map((j) => runOne(engine, j)));
   return engine;
 }
 

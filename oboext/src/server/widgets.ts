@@ -1,5 +1,5 @@
 // Widget service — ported from lib/widgets/registry.ts + lib/services/widgets.ts.
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { memoQuery, invalidatePrefix, SIDEBAR_TTL } from "./cache.js";
 import {
@@ -307,7 +307,7 @@ export async function listWidgets(themeSlug = THEME_SLUG): Promise<Widget[]> {
 
 export async function createWidget(user: SessionUser | null, input: WidgetInput): Promise<Widget> {
   requireCap(user, "settings:manage");
-  if (!getWidgetType(input.type)) throw new ServiceError("未知的小工具类型", 422);
+  if (!getWidgetType(input.type)) throw new ServiceError("未知的小工具类型", 422, "api.widget_unknown_type");
   const themeSlug = input.themeSlug || THEME_SLUG;
   const [maxRow] = await db
     .select({ max: sql<number>`coalesce(max(${widgets.order}),0)` })
@@ -336,7 +336,7 @@ export async function updateWidget(
 ): Promise<Widget> {
   requireCap(user, "settings:manage");
   const [existing] = await db.select().from(widgets).where(eq(widgets.id, id));
-  if (!existing) throw new ServiceError("小工具不存在", 404);
+  if (!existing) throw new ServiceError("小工具不存在", 404, "api.widget_missing");
   const [row] = await db
     .update(widgets)
     .set({
@@ -355,7 +355,7 @@ export async function updateWidget(
 export async function deleteWidget(user: SessionUser | null, id: number): Promise<{ id: number }> {
   requireCap(user, "settings:manage");
   const [existing] = await db.select({ id: widgets.id }).from(widgets).where(eq(widgets.id, id));
-  if (!existing) throw new ServiceError("小工具不存在", 404);
+  if (!existing) throw new ServiceError("小工具不存在", 404, "api.widget_missing");
   await db.delete(widgets).where(eq(widgets.id, id));
   invalidatePrefix("widget:");
   return { id };
@@ -364,8 +364,14 @@ export async function deleteWidget(user: SessionUser | null, id: number): Promis
 /** Persist a new ordering for one area in a single pass. */
 export async function reorderWidgets(user: SessionUser | null, ids: number[]): Promise<void> {
   requireCap(user, "settings:manage");
-  for (let i = 0; i < ids.length; i++) {
-    await db.update(widgets).set({ order: i + 1 }).where(eq(widgets.id, ids[i]));
+  if (ids.length) {
+    const cases = sql.join(
+      ids.map((id, i) => sql`when ${widgets.id} = ${id} then ${i + 1}`),
+      sql` `,
+    );
+    await db.execute(
+      sql`update ${widgets} set "order" = case ${cases} else "order" end where ${inArray(widgets.id, ids)}`,
+    );
   }
   invalidatePrefix("widget:");
 }

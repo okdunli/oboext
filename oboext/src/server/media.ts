@@ -4,7 +4,7 @@ import { db } from "./db.js";
 import { media as mediaTable, posts, pages, type Media } from "./schema.js";
 import type { SessionUser } from "./auth.js";
 import { can, requireCap, requireUser, ServiceError } from "./admin.js";
-import { uploadFile, deleteFile, uploadsAbsPath, sniffMime, mimeFor } from "./storage.js";
+import { uploadBuffer, deleteFile, uploadsAbsPath, uploadExists, invalidateUploadExists, sniffMime, mimeFor, UPLOADS_DIR } from "./storage.js";
 import fs from "node:fs";
 import path from "node:path";
 import { invalidateVariantCache } from "./render.js";
@@ -171,7 +171,7 @@ export async function regenerateMediaVariants(userIn: SessionUser | null, id: nu
   // button, and on an engineless host it could only ever "succeed" while
   // producing nothing.
   const engine = await variantEngine();
-  if (!engine) throw new ServiceError("当前部署环境无法生成图片变体（需要 Windows/GDI+、ImageMagick 或 ffmpeg）", 501);
+  if (!engine) throw new ServiceError("当前部署环境无法生成图片变体（需要 Windows/GDI+、macOS/sips、ImageMagick 或 ffmpeg）", 501);
   const abs = uploadsAbsPath(existing.url);
   if (!abs) throw new ServiceError("无法定位文件", 400);
   await generateImageVariants(abs);
@@ -223,7 +223,7 @@ export async function listMedia(
   limit = 50,
   offset = 0,
   filter: { q?: string; type?: string; tag?: string } = {},
-): Promise<{ items: Media[]; total: number }> {
+): Promise<{ items: Media[]; total: number; totalSize: number }> {
   // R264: `media:read` existed in the capability matrix with ZERO consumers
   // (grep found only its declarations). The gate here was requireUser — i.e.
   // "is signed in" — so a plain reader (subscriber) could list the media
@@ -250,15 +250,37 @@ export async function listMedia(
   if (tag) conds.push(sql`${mediaTable.tags} ILIKE ${"%" + ilikeEscape(tag) + "%"} ESCAPE '\\'`);
   // an always-true predicate keeps the two queries identical in shape
   const where: SQL = conds.length ? and(...conds)! : sql`true`;
-  const rows = await db
-    .select()
-    .from(mediaTable)
-    .where(where)
-    .orderBy(asc(mediaTable.sortOrder), desc(mediaTable.createdAt))
-    .limit(n)
-    .offset(off);
-  const [c] = await db.select({ n: sql<number>`count(*)` }).from(mediaTable).where(where);
-  return { items: rows, total: Number(c?.n ?? 0) };
+  // R554: the row window, the filtered count and the library size sum are
+  // mutually independent — one wave (the same shape adminListPosts has run
+  // since R163). The admin media grid used to pay three serial round trips
+  // on every load.
+  const [rows, [c], [sz]] = await Promise.all([
+    db
+      .select()
+      .from(mediaTable)
+      .where(where)
+      .orderBy(asc(mediaTable.sortOrder), desc(mediaTable.createdAt))
+      .limit(n)
+      .offset(off),
+    db.select({ n: sql<number>`count(*)` }).from(mediaTable).where(where),
+    // The size card is library-wide by design (unfiltered) — same key the
+    // grid has always shown.
+    db.select({ n: sql<number>`coalesce(sum(${mediaTable.size}), 0)::bigint` }).from(mediaTable),
+  ]);
+  // The admin grid paints one card per row; using the stored original meant a
+  // library of phone photos pushed tens of MB for thumbnails (the upload cap
+  // is 25MB). The 400px variant sits beside every image uploaded since
+  // variants shipped; older rows and non-jpg/png formats fall back.
+  const items = rows.map((row) =>
+    String(row.mimeType ?? "").startsWith("image/")
+      ? (() => {
+          const thumbUrl = variantUrl(row.url, 400);
+          const abs = uploadsAbsPath(thumbUrl);
+          return abs && uploadExists(thumbUrl) ? { ...row, thumbUrl } : row;
+        })()
+      : row,
+  );
+  return { items, total: Number(c?.n ?? 0), totalSize: Number(sz?.n ?? 0) };
 }
 
 export async function getMedia(id: number): Promise<Media> {
@@ -275,14 +297,29 @@ export async function createMediaFromFile(
   const user = requireUser(userIn);
   if (!can(user.role, "media:upload")) throw new ServiceError("无权上传媒体", 403);
   assertMediaTypeAllowed(file.name);
-  if (file.size > MEDIA_MAX_BYTES) {
+  // A file whose extension claims a common image format must actually BE one:
+  // sniffMime reads the magic number, which a client cannot fake. Catches the
+  // text-file-named-.jpg that would land in the library as a broken image and
+  // fail variant generation silently. (.ico/.bmp are not sniffable — skipped.)
+  // R556: read the bytes ONCE. The sniff (image extensions), the size check
+  // and the write all consume this one buffer — the old shape read
+  // file.arrayBuffer() here AND again inside uploadBuffer, two full copies of
+  // a file whose cap is 25 MB.
+  const buffer = Buffer.from(await file.arrayBuffer());
+  if (/\.(jpe?g|png|gif|webp|avif)$/.test(path.extname(file.name || "").toLowerCase())) {
+    const sniffed = sniffMime(buffer);
+    if (!sniffed) {
+      throw new ServiceError("文件内容与扩展名不符（不是有效的图片）", 422, "api.media_not_image");
+    }
+  }
+  if (buffer.length > MEDIA_MAX_BYTES) {
     throw new ServiceError(
       `文件过大（上限 ${Math.floor(MEDIA_MAX_BYTES / 1024 / 1024)}MB）`,
       413,
       "api.media_too_large",
     );
   }
-  const result = await uploadFile(file, "media");
+  const result = await uploadBuffer(buffer, file.name, "media");
   // F2e: fire-and-forget responsive variants (.w400/.w800/.w1600 beside the
   // original, same PowerShell pipeline as tools/make-variants.mjs). The
   // upload responds immediately; the render cache for the URL drops its
@@ -305,6 +342,74 @@ export async function createMediaFromFile(
     })
     .returning();
   return row;
+}
+
+/**
+ * Re-register uploads that exist on disk but have no media row.
+ *
+ * The realistic way this state arises is an异常恢复: the DB rolls back to a
+ * snapshot (damaged-directory sweep, a restore) while content/uploads is
+ * untouched on disk — the files survive, the rows that made them visible in
+ * the library do not. Until re-registered, an editor cannot see, tag or
+ * re-embed those files anywhere (the library reads the table, not the disk).
+ *
+ * Responsive variants (.w400.jpg …) are skipped — they are derivatives of an
+ * original and regenerate on demand. Files whose filename already has a row
+ * are skipped, so the pass is idempotent.
+ */
+export async function syncOrphanUploads(
+  userIn: SessionUser | null,
+): Promise<{ registered: { id: number; filename: string; url: string }[]; skipped: number }> {
+  const user = requireUser(userIn);
+  if (!can(user.role, "content:update:any")) throw new ServiceError("仅编辑/管理员可扫描媒体", 403);
+  const dir = path.join(UPLOADS_DIR, "media");
+  let names: string[] = [];
+  try {
+    names = (await fs.promises.readdir(dir)).filter((n) => !n.startsWith("."));
+  } catch {
+    return { registered: [], skipped: 0 };
+  }
+  // Variants carry a .wNNNN segment before the extension: the original of
+  // "x.w400.jpg" is "x.jpg", which the scan registers on its own pass.
+  const originals = names.filter((n) => !/\.w\d{2,4}\.[a-z0-9]+$/i.test(n));
+  const existing = new Set(
+    (await db.select({ filename: mediaTable.filename }).from(mediaTable)).map((r) => r.filename),
+  );
+  const orphans = originals.filter((n) => !existing.has(n));
+  const registered: { id: number; filename: string; url: string }[] = [];
+  for (const name of orphans) {
+    const abs = path.join(dir, name);
+    try {
+      const stat = await fs.promises.stat(abs);
+      if (!stat.isFile()) continue;
+      const fh = await fs.promises.open(abs, "r");
+      let head: Buffer;
+      try {
+        head = Buffer.alloc(32);
+        const { bytesRead } = await fh.read(head, 0, 32, 0);
+        head = head.subarray(0, bytesRead);
+      } finally {
+        await fh.close();
+      }
+      const url = `/uploads/media/${encodeURIComponent(name)}`;
+      const [row] = await db
+        .insert(mediaTable)
+        .values({
+          filename: name,
+          url,
+          mimeType: sniffMime(head) || mimeFor(name),
+          size: stat.size,
+          alt: name,
+          uploadedById: user.id,
+        })
+        .returning();
+      registered.push({ id: row.id, filename: row.filename, url: row.url });
+    } catch (err) {
+      log.warn("[media] sync skipped " + name + ":", (err as Error)?.message);
+    }
+  }
+  if (registered.length) recordAdminAction(user, "media.sync", { count: registered.length });
+  return { registered, skipped: originals.length - orphans.length };
 }
 
 function canManage(user: SessionUser, existing: Media): void {
@@ -387,19 +492,31 @@ export async function tagMediaMany(
   const wantedArr = parseTags(wanted);
   const updated: number[] = [];
   const skipped: number[] = [];
-  for (const id of ids) {
-    try {
-      const existing = await getMedia(id);
-      canManage(user, existing);
-      const next =
-        mode === "replace"
-          ? wanted
-          : normalizeTags([...parseTags(existing.tags), ...wantedArr].join(","));
-      await db.update(mediaTable).set({ tags: next }).where(eq(mediaTable.id, id));
-      updated.push(id);
-    } catch {
-      skipped.push(id);
-    }
+  if (ids.length) {
+    const rows = await db
+      .select()
+      .from(mediaTable)
+      .where(inArray(mediaTable.id, ids));
+    const present = new Map(rows.map((r) => [r.id, r]));
+    const uniqueIds = [...new Set(ids)];
+    const outcomes = await Promise.all(
+      uniqueIds.map(async (id) => {
+        const existing = present.get(id);
+        if (!existing) return { id, ok: false as const };
+        try {
+          canManage(user, existing);
+          const next =
+            mode === "replace"
+              ? wanted
+              : normalizeTags([...parseTags(existing.tags), ...wantedArr].join(","));
+          await db.update(mediaTable).set({ tags: next }).where(eq(mediaTable.id, id));
+          return { id, ok: true as const };
+        } catch {
+          return { id, ok: false as const };
+        }
+      }),
+    );
+    for (const o of outcomes) (o.ok ? updated : skipped).push(o.id);
   }
   return { updated, skipped };
 }
@@ -473,13 +590,29 @@ export async function regenerateAllVariants(
   let checked = 0;
   let regenerated = 0;
   let failed = 0;
+  const engine = await variantEngine();
   for (const m of rows) {
     if (!/\.(jpe?g|png)$/i.test(m.url)) continue;
     checked++;
     try {
-      const before = await getMediaVariants(user, m.id);
-      if (!before.missing.length) continue;
-      await regenerateMediaVariants(user, m.id);
+      const abs = uploadsAbsPath(m.url);
+      if (!abs) throw new ServiceError("无法定位文件", 400);
+      const ext = path.extname(abs);
+      const base = abs.slice(0, -ext.length);
+      const missing: number[] = [];
+      for (const width of VARIANT_WIDTHS) {
+        try {
+          const st = await fs.promises.stat(`${base}.w${width}${ext}`);
+          if (st.isFile()) continue;
+        } catch { /* not generated yet */ }
+        missing.push(width);
+      }
+      if (!missing.length) continue;
+      // A clear refusal beats a silent no-op: the same 501 the single-item
+      // retry button throws on an engineless host.
+      if (!engine) throw new ServiceError("当前部署环境无法生成图片变体（需要 Windows/GDI+、macOS/sips、ImageMagick 或 ffmpeg）", 501);
+      await generateImageVariants(abs);
+      invalidateVariantCache(m.url);
       regenerated++;
     } catch {
       failed++;
@@ -509,18 +642,31 @@ export async function replaceMediaFile(
   if (!abs) throw new ServiceError("无法定位原文件", 400);
   const buffer = Buffer.from(await file.arrayBuffer());
   await fs.promises.writeFile(abs, buffer);
-  // the picture changed, so every cached variant of it is now wrong
-  await removeVariants(abs);
-  invalidateVariantCache(existing.url);
-  if (/\.(jpe?g|png)$/i.test(abs)) scheduleVariantGeneration(abs, existing.url);
-  const [row] = await db
-    .update(mediaTable)
-    .set({
-      mimeType: sniffMime(buffer) || mimeFor(existing.url) || existing.mimeType,
-      size: buffer.length,
-    })
-    .where(eq(mediaTable.id, id))
-    .returning();
+  // same bytes-new contract as the variant caches below: a URL memoized
+  // `false` (file was missing) must re-stat once the bytes are back
+  invalidateUploadExists(existing.url);
+  // R555: the row update reads only the buffered bytes — it has NO dependency
+  // on the variant cleanup — so the two run as one wave. The old shape made
+  // the admin wait for three unlinks before the row reflected the new file.
+  // Order inside the variant arm is preserved: the stale .wNNN files must be
+  // gone BEFORE the regeneration is scheduled, or the generator would skip
+  // widths whose files are the OLD picture's thumbnails.
+  const [, [row]] = await Promise.all([
+    (async () => {
+      // the picture changed, so every cached variant of it is now wrong
+      await removeVariants(abs);
+      invalidateVariantCache(existing.url);
+      if (/\.(jpe?g|png)$/i.test(abs)) scheduleVariantGeneration(abs, existing.url);
+    })(),
+    db
+      .update(mediaTable)
+      .set({
+        mimeType: sniffMime(buffer) || mimeFor(existing.url) || existing.mimeType,
+        size: buffer.length,
+      })
+      .where(eq(mediaTable.id, id))
+      .returning(),
+  ]);
   return row;
 }
 
@@ -604,14 +750,36 @@ export async function deleteMediaMany(
       }
     }
   }
-  for (const id of ids) {
-    if (block.has(id)) continue;
-    try {
-      await deleteMedia(user, id);
-      deleted.push(id);
-    } catch {
-      skipped.push(id);
+  const targets = [...new Set(ids)].filter((id) => !block.has(id));
+  if (targets.length) {
+    const rows = await db
+      .select()
+      .from(mediaTable)
+      .where(inArray(mediaTable.id, targets));
+    const present = new Map(rows.map((r) => [r.id, r]));
+    const outcomes = await Promise.all(
+      targets.map(async (id) => {
+        const row = present.get(id);
+        if (!row) return { id, ok: false as const };
+        try {
+          canManage(user, row);
+          await deleteFile(row.url).catch(() => {});
+          const abs = uploadsAbsPath(row.url);
+          if (abs && /\.(jpe?g|png)$/i.test(abs)) await removeVariants(abs);
+          return { id, ok: true as const };
+        } catch {
+          return { id, ok: false as const };
+        }
+      }),
+    );
+    const cleaned = outcomes.filter((o) => o.ok).map((o) => o.id);
+    if (cleaned.length) {
+      await Promise.all([
+        db.delete(mediaTable).where(inArray(mediaTable.id, cleaned)),
+        ...cleaned.map((id) => recordAdminAction(user, "media.delete", { id })),
+      ]);
     }
+    for (const o of outcomes) (o.ok ? deleted : skipped).push(o.id);
   }
   // deleteMedia already logged one media.delete per row; this bulk line is the
   // "one selection, one intent" record an operator can actually search by.

@@ -508,6 +508,14 @@ async function tunePersistence(client: any): Promise<void> {
     ["wal_keep_size", "64MB"],
     ["max_wal_size", "64MB"],
     ["full_page_writes", "on"],
+    // The planner's search choices ride the trigram indexes (0034); stale
+    // statistics made it intersect the status index with them - every
+    // published row enumerated for nothing (measured 9.4ms vs 0.8ms on the
+    // same 20k-row query after ANALYZE). autovacuum's 10% threshold means a
+    // small site can go days between analyses, so the bar is a fraction of
+    // that and a rebuild picks it up on the next boot.
+    ["autovacuum_analyze_scale_factor", "0.02"],
+    ["autovacuum_naptime", "30s"],
   ];
   const applied: string[] = [];
   const rejected: string[] = [];
@@ -1020,7 +1028,7 @@ async function resyncSequences(): Promise<void> {
 
 // R200: backfill body_plain for existing rows (the column ships empty from the
 // migration). Pure SQL jsonb projection mirrors blocksToPlainText in
-// render.ts — heading/paragraph/quote/code/list/image caption — so no content
+// plain-text.ts — heading/paragraph/quote/code/list/html/image — so no content
 // crosses the wire. Idempotent: only NULL rows with a non-empty body are
 // touched, so it is safe to run on every boot and no-ops once caught up.
 async function backfillPostBodyPlain(): Promise<void> {
@@ -1036,9 +1044,10 @@ async function backfillPostBodyPlain(): Promise<void> {
           WHEN 'list' THEN (
             SELECT string_agg(elem, ' ') FROM jsonb_array_elements_text(b->'items') AS t(elem)
           )
-          WHEN 'image' THEN coalesce(b->>'caption', b->>'alt')
+          WHEN 'image' THEN coalesce(b->>'alt', b->>'caption')
+          WHEN 'html' THEN btrim(regexp_replace(regexp_replace(b->>'html', '<[^>]+>', ' ', 'g'), '\s+', ' ', 'g'))
           ELSE NULL
-        END, E'\n'
+        END, ' '
       )
       FROM jsonb_array_elements(content) AS e(b)
     )

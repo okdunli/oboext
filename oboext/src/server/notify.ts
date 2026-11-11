@@ -1,9 +1,8 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { and, desc, eq, isNull } from "drizzle-orm";
 import { db, ensureMigrations } from "./db.js";
-import { verifyCodes } from "./schema.js";
 import { getOption, setOption } from "./options.js";
 import { getSettings } from "./queries.js";
+import { invalidate, memoStrict } from "./cache.js";
 import {
   issueCode,
   invalidateLatestCode,
@@ -145,9 +144,12 @@ function mergeWebhook(cur: WebhookCfg, raw: Partial<WebhookCfg> | undefined): We
   };
 }
 
+const NOTIFY_SETTINGS_MEMO_KEY = "notify:settings";
+
 export async function getNotifySettings(): Promise<NotifySettings> {
+  return memoStrict(NOTIFY_SETTINGS_MEMO_KEY, 5_000, async () => {
   const stored = (await getOption<Partial<NotifySettings>>(OPTION_KEY, {})) ?? {};
-  return {
+  const merged: NotifySettings = {
     smtp: { ...DEFAULT_SETTINGS.smtp, ...(stored.smtp ?? {}) },
     email: {
       ...DEFAULT_SETTINGS.email,
@@ -164,8 +166,9 @@ export async function getNotifySettings(): Promise<NotifySettings> {
     register: { ...DEFAULT_SETTINGS.register, ...(stored.register ?? {}) },
     login: { ...DEFAULT_SETTINGS.login, ...(stored.login ?? {}) },
   };
+  return merged;
+  });
 }
-
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 
 export async function saveNotifySettings(input: DeepPartial<NotifySettings>): Promise<NotifySettings> {
@@ -280,6 +283,7 @@ export async function saveNotifySettings(input: DeepPartial<NotifySettings>): Pr
     },
   };
   await setOption(OPTION_KEY, next);
+  invalidate(NOTIFY_SETTINGS_MEMO_KEY);
   return next;
 }
 
@@ -579,9 +583,9 @@ export async function sendVerificationCode(input: {
   locale?: Locale;
 }): Promise<{ resendAfter: number }> {
   await ensureMigrations();
-  const code = await issueCode(input);
+  // The code write and the settings read are independent: issue together.
+  const [code, settings] = await Promise.all([issueCode(input), getSettings()]);
   try {
-    const settings = await getSettings();
     const siteName = settings.siteTitle || "Oboext";
     if (input.channel === "email") {
       const { subject, text, html } = renderVerificationEmail(
@@ -618,25 +622,4 @@ export async function sendTestMessage(channel: CodeChannel, target: string): Pro
 
     await deliverViaSms(target, "888888");
   }
-}
-
-export async function peekLatestLiveCode(
-  channel: CodeChannel,
-  target: string,
-  purpose: CodePurpose,
-): Promise<{ createdAt: Date; expiresAt: Date } | null> {
-  const [row] = await db
-    .select({ createdAt: verifyCodes.createdAt, expiresAt: verifyCodes.expiresAt })
-    .from(verifyCodes)
-    .where(
-      and(
-        eq(verifyCodes.target, target),
-        eq(verifyCodes.channel, channel),
-        eq(verifyCodes.purpose, purpose),
-        isNull(verifyCodes.consumedAt),
-      ),
-    )
-    .orderBy(desc(verifyCodes.id))
-    .limit(1);
-  return row ?? null;
 }

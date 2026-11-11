@@ -29,8 +29,15 @@ function dosStamp(d: Date): { time: number; date: number } {
   return { time, date };
 }
 
-/** Minimal STORE-only zip writer — enough for our own backup reader. */
-export function zipStore(entries: { name: string; data: Buffer }[]): Buffer {
+/**
+ * Minimal zip writer for our own backup reader. Uploads stay stored (they are
+ * already-compressed binaries), but text payloads - the database dump above
+ * all - are deflated: the same dump is ~10x smaller, and on a real site it is
+ * the only part of the archive that is not already compressed.
+ */
+export function zipStore(
+  entries: { name: string; data: Buffer; deflate?: boolean }[],
+): Buffer {
   const stamp = dosStamp(new Date());
   const locals: Buffer[] = [];
   const centrals: Buffer[] = [];
@@ -38,35 +45,38 @@ export function zipStore(entries: { name: string; data: Buffer }[]): Buffer {
   for (const e of entries) {
     const name = Buffer.from(e.name, "utf8");
     const crc = zlib.crc32(e.data) >>> 0;
+    const packed = e.deflate ? zlib.deflateRawSync(e.data, { level: 6 }) : null;
+    const method = packed && packed.length < e.data.length ? 8 : 0;
+    const body = method === 8 ? packed! : e.data;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(LOCAL_SIG, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(FLAG_UTF8, 6);
-    local.writeUInt16LE(0, 8); // store
+    local.writeUInt16LE(method, 8);
     local.writeUInt16LE(stamp.time, 10);
     local.writeUInt16LE(stamp.date, 12);
     local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(e.data.length, 18);
+    local.writeUInt32LE(body.length, 18);
     local.writeUInt32LE(e.data.length, 22);
     local.writeUInt16LE(name.length, 26);
     local.writeUInt16LE(0, 28);
-    locals.push(local, name, e.data);
+    locals.push(local, name, body);
 
     const central = Buffer.alloc(46);
     central.writeUInt32LE(CD_SIG, 0);
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(FLAG_UTF8, 8);
-    central.writeUInt16LE(0, 10);
+    central.writeUInt16LE(method, 10);
     central.writeUInt16LE(stamp.time, 12);
     central.writeUInt16LE(stamp.date, 14);
     central.writeUInt32LE(crc, 16);
-    central.writeUInt32LE(e.data.length, 20);
+    central.writeUInt32LE(body.length, 20);
     central.writeUInt32LE(e.data.length, 24);
     central.writeUInt16LE(name.length, 28);
     central.writeUInt32LE(offset, 42);
     centrals.push(central, name);
-    offset += 30 + name.length + e.data.length;
+    offset += 30 + name.length + body.length;
   }
   const cd = Buffer.concat(centrals);
   const eocd = Buffer.alloc(22);
@@ -78,20 +88,20 @@ export function zipStore(entries: { name: string; data: Buffer }[]): Buffer {
   return Buffer.concat([...locals, cd, eocd]);
 }
 
-function walkUploads(root: string, rel = ""): { name: string; data: Buffer }[] {
+async function walkUploads(root: string, rel = ""): Promise<{ name: string; data: Buffer }[]> {
   const out: { name: string; data: Buffer }[] = [];
   const dir = path.join(root, rel);
   let items: fs.Dirent[];
   try {
-    items = fs.readdirSync(dir, { withFileTypes: true });
+    items = await fs.promises.readdir(dir, { withFileTypes: true });
   } catch {
     return out; // no uploads directory: an empty set, not an error
   }
   for (const it of items) {
     const childRel = rel ? rel + "/" + it.name : it.name;
-    if (it.isDirectory()) out.push(...walkUploads(root, childRel));
+    if (it.isDirectory()) out.push(...(await walkUploads(root, childRel)));
     else if (it.isFile()) {
-      out.push({ name: "uploads/" + childRel, data: fs.readFileSync(path.join(root, childRel)) });
+      out.push({ name: "uploads/" + childRel, data: await fs.promises.readFile(path.join(root, childRel)) });
     }
   }
   return out;
@@ -101,8 +111,8 @@ function walkUploads(root: string, rel = ""): { name: string; data: Buffer }[] {
 export async function buildFullBackupZip(): Promise<Buffer> {
   const db = await buildDatabaseBackup();
   const entries = [
-    { name: "database.json", data: Buffer.from(JSON.stringify(db), "utf8") },
-    ...walkUploads(UPLOADS_DIR),
+    { name: "database.json", data: Buffer.from(JSON.stringify(db), "utf8"), deflate: true },
+    ...(await walkUploads(UPLOADS_DIR)),
   ];
   return zipStore(entries);
 }
@@ -132,7 +142,7 @@ export async function restoreFullBackupZip(
     const target = path.resolve(root, rel);
     if (!target.startsWith(root + path.sep)) continue;
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, e.data);
+    await fs.promises.writeFile(target, e.data);
     files++;
   }
   return { restored: result.restored, files };

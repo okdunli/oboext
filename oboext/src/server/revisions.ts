@@ -3,7 +3,7 @@
 // layer) so every entry point — admin editor PUT, the server-side autosave
 // and restore itself — leaves history behind. Retention is capped per
 // target (OBOEXT_REVISION_KEEP, default 30).
-import { and, desc, eq, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, lt, notInArray } from "drizzle-orm";
 import { db } from "./db.js";
 import { contentRevisions, type Block } from "./schema.js";
 import type { SessionUser } from "./auth.js";
@@ -76,18 +76,23 @@ export async function snapshotRevision(
   }
 }
 
-async function pruneRevisions(kind: RevisionKind, targetId: number): Promise<void> {
-  const ids = (
-    await db
-      .select({ id: contentRevisions.id })
-      .from(contentRevisions)
-      .where(and(eq(contentRevisions.kind, kind), eq(contentRevisions.targetId, targetId)))
-      .orderBy(desc(contentRevisions.id))
-  ).map((r) => r.id);
-  const stale = pruneIds(ids, revisionKeep());
-  if (stale.length) {
-    await db.delete(contentRevisions).where(inArray(contentRevisions.id, stale));
-  }
+async function pruneRevisions(kind: RevisionKind, targetId: number): Promise<void>
+{
+  const staleSq = db
+    .select({ id: contentRevisions.id })
+    .from(contentRevisions)
+    .where(and(eq(contentRevisions.kind, kind), eq(contentRevisions.targetId, targetId)))
+    .orderBy(desc(contentRevisions.id))
+    .limit(revisionKeep());
+  await db
+    .delete(contentRevisions)
+    .where(
+      and(
+        eq(contentRevisions.kind, kind),
+        eq(contentRevisions.targetId, targetId),
+        notInArray(contentRevisions.id, staleSq),
+      ),
+    );
 }
 
 async function gateTarget(user: SessionUser, kind: RevisionKind, targetId: number) {
@@ -143,9 +148,9 @@ export async function restoreRevision(
   targetId: number,
   revisionId: number,
 ) {
+  await gateTarget(user, kind, targetId); // 401/403 + 404 + ownership
   const rev = await getRevision(user, kind, revisionId);
   if (rev.targetId !== targetId) throw new ServiceError("版本不存在", 404);
-  await gateTarget(user, kind, targetId); // 404 + ownership
   const patch = {
     title: rev.title,
     excerpt: rev.excerpt ?? "",

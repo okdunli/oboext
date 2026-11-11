@@ -13,11 +13,12 @@ import {
   sql,
 } from "drizzle-orm";
 import { db } from "./db.js";
+import { DEFAULT_LOCALE, type Locale } from "./i18n.js";
 import { pages as pagesTable, type Block, type Page } from "./schema.js";
 import type { SessionUser } from "./auth.js";
-import { can, requireCap, requireUser, ServiceError, slugify } from "./admin.js";
-import { blocksToPlainText } from "./admin.js";
-import { getPageMetas, setPageMetas } from "./metas.js";
+import { can, requireCap, requireUser, ServiceError, slugify, normBlocks } from "./admin.js";
+import { blocksToPlainText } from "./plain-text.js";
+import { getPageMetas, setPageMetas, cleanMetas } from "./metas.js";
 import { getPermalinkConfig, pageUrlFor } from "./links.js";
 import { captureRename } from "./redirects.js";
 import { invalidateContentCaches, memoQuery, SIDEBAR_TTL } from "./cache.js";
@@ -45,6 +46,10 @@ export type PageInput = {
   parentId?: number | null;
   /** Menu weight: lower sorts first in public page listings. */
   order?: number;
+  /** 0045: the page's content language (the i18n catalog vocabulary). */
+  locale?: Locale;
+  /** 0046: the page this row translates (the original keeps NULL). */
+  translationOf?: number | null;
   publishedAt?: string | null;
   metas?: { key: string; value: string }[];
 };
@@ -80,18 +85,37 @@ type ValidatedPage = {
   commentStatus?: "open" | "closed";
   parentId?: number | null;
   order?: number;
+  locale?: Locale;
+  translationOf?: number | null;
   metas?: { key: string; value: string }[];
 };
 
 /** Mirror of pageInputSchema; throws ServiceError(422) on bad input. */
 function validate(input: Partial<PageInput>): ValidatedPage {
   const out: ValidatedPage = {};
+  if (input.locale !== undefined) {
+    const loc = String(input.locale);
+    if (loc !== "zh-CN" && loc !== "en") throw new ServiceError("内容语言不合法", 422);
+    out.locale = loc;
+  }
+  // Shape-only here: existence and the opposite-locale rule live in
+  // resolvePageTranslationOf, which needs the row's final locale. An empty
+  // string is the form's "unset" (an untouched number input).
+  if (input.translationOf !== undefined) {
+    const raw = input.translationOf as unknown;
+    const n = raw === null || raw === "" || raw === undefined ? null : Number(raw);
+    if (n !== null && (!Number.isInteger(n) || n <= 0))
+      throw new ServiceError("非法的翻译目标", 422);
+    out.translationOf = n;
+  }
   if (input.title !== undefined) {
     const title = String(input.title ?? "").trim();
     if (!title) throw new ServiceError("标题不能为空", 422);
     if (title.length > 300) throw new ServiceError("标题过长", 422);
     out.title = title;
   }
+  if (input.slug !== undefined && input.slug !== null && typeof input.slug !== "string")
+    throw new ServiceError("别名格式不正确", 422);
   if (input.slug !== undefined) {
     const s = String(input.slug ?? "").slice(0, 200);
     if (s) out.slug = s;
@@ -102,8 +126,10 @@ function validate(input: Partial<PageInput>): ValidatedPage {
     out.excerpt = s;
   }
   if (input.content !== undefined) {
-    if (!Array.isArray(input.content)) throw new ServiceError("正文区块格式不正确", 422);
-    out.content = input.content;
+    // Same shape guard the posts path uses: a malformed block would render
+    // an empty page (unknown type) or 500 it (a list block with non-string
+    // items) on every read.
+    out.content = normBlocks(input.content);
   }
   // Form payloads can carry "" for an untouched enum field; the typed input
   // says union, runtime says string — normalize both sides.
@@ -199,12 +225,22 @@ export async function hydrate(row: Page): Promise<PageView> {
 // the posts table, so pages get their own; publishedAt is nullable on both).
 const publishedPageVisible = or(isNull(pagesTable.publishedAt), lte(pagesTable.publishedAt, sql`now()`));
 
+// No locale argument: pages_slug_idx is unique on slug alone, so one slug
+// names at most one row — a locale filter could only hide that row, turning
+// the nav's /en/pages/* links and a merged canonical target into 404s while
+// the row exists. Detail resolves across trees, exactly as post detail does.
 export async function getPublishedPageRow(slug: string): Promise<Page | null> {
   return memoQuery<Page | null>(`pg:${slug}`, SIDEBAR_TTL, async () => {
     const [row] = await db
       .select()
       .from(pagesTable)
-      .where(and(eq(pagesTable.slug, slug), eq(pagesTable.status, "published"), publishedPageVisible))
+      .where(
+        and(
+          eq(pagesTable.slug, slug),
+          eq(pagesTable.status, "published"),
+          publishedPageVisible,
+        ),
+      )
       .limit(1);
     return row ?? null;
   });
@@ -231,12 +267,18 @@ export async function backfillPageBodies(limit = 500): Promise<number> {
     .where(isNull(pagesTable.bodyPlain))
     .limit(limit);
   let fixed = 0;
-  for (const row of rows) {
-    await db
-      .update(pagesTable)
-      .set({ bodyPlain: blocksToPlainText((row.content ?? []) as Block[]) })
-      .where(eq(pagesTable.id, row.id));
-    fixed++;
+  const CHUNK = 25;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    await Promise.all(
+      chunk.map((row) =>
+        db
+          .update(pagesTable)
+          .set({ bodyPlain: blocksToPlainText((row.content ?? []) as Block[]) })
+          .where(eq(pagesTable.id, row.id)),
+      ),
+    );
+    fixed += chunk.length;
   }
   return fixed;
 }
@@ -260,14 +302,16 @@ export function backfillPageBodiesOnce(): Promise<number> {
 export async function searchPublishedPages(
   q: string,
   limit = 5,
+  locale?: Locale,
 ): Promise<{ id: number; title: string; url: string; excerpt: string | null; featuredImage?: string | null }[]> {
   // Same ceiling the post window uses: a caller-supplied number must never
   // turn into an unbounded scan (the popover asks for 5, the redirect asks 2).
   limit = Math.min(Math.max(Math.trunc(limit) || 5, 1), 20);
   const terms = searchTerms(q);
   if (!terms.length) return [];
-  const cfg = await getPermalinkConfig();
-  const rows = await db
+  // The permalink config and the row query are independent: issue them
+  // together (drizzle's query builder is thenable, so it rides the wave).
+  const rowsQ = db
     .select({
       id: pagesTable.id,
       title: pagesTable.title,
@@ -281,6 +325,9 @@ export async function searchPublishedPages(
       and(
         eq(pagesTable.status, "published"),
         publishedPageVisible,
+        // 0045: the search is scoped to the reader's language tree - an /en
+        // reader must not see a Chinese page in the results.
+        locale ? eq(pagesTable.locale, locale) : undefined,
         or(
           ...terms.map(
             (t) =>
@@ -294,6 +341,7 @@ export async function searchPublishedPages(
     // between identical queries.
     .orderBy(asc(pagesTable.order), desc(pagesTable.updatedAt), desc(pagesTable.id))
     .limit(limit);
+  const [cfg, rows] = await Promise.all([getPermalinkConfig(), rowsQ]);
   return rows.map((r) => ({
     id: r.id,
     title: r.title,
@@ -303,16 +351,14 @@ export async function searchPublishedPages(
   }));
 }
 
-/** Published page by stored slug (null when missing/unpublished), fully
- *  hydrated (metas + url). The detail loader uses getPublishedPageRow +
- *  hydrate directly so the metas read rides its wave. */
-export async function getPublishedPage(slug: string): Promise<PageView | null> {
-  const row = await getPublishedPageRow(slug);
-  return row ? hydrate(row) : null;
-}
-
 /** Public GET /api/pages parity: guests see published pages only. */
-export async function listPublishedPages(f: { limit?: number; offset?: number; windowCap?: number } = {}): Promise<{
+export async function listPublishedPages(f: {
+  limit?: number;
+  offset?: number;
+  windowCap?: number;
+  /** 0045: the content language filter (the pages.locale column). */
+  locale?: Locale;
+} = {}): Promise<{
   items: (Page & { url: string })[];
   total: number;
 }> {
@@ -320,7 +366,11 @@ export async function listPublishedPages(f: { limit?: number; offset?: number; w
   // clamp through the shared helper (NaN limit used to reach .limit(NaN)).
   // R247: windowCap raises the ceiling for the sitemap/page directory only.
   const { limit, offset } = normalizeWindow(f, 20, f.windowCap);
-  const where = and(eq(pagesTable.status, "published"), publishedPageVisible);
+  const where = and(
+    eq(pagesTable.status, "published"),
+    publishedPageVisible,
+    f.locale ? eq(pagesTable.locale, f.locale) : undefined,
+  );
   const rows = await db
     .select()
     .from(pagesTable)
@@ -357,7 +407,13 @@ export async function getPublishedPageById(id: number): Promise<PageView | null>
 export async function adminListPages(
   user: SessionUser | null,
   f: { status?: string; limit?: number; offset?: number; after?: string; sort?: string } = {},
-): Promise<{ items: (Page & { url: string })[]; total: number; nextCursor?: string }> {
+): Promise<{
+  items: (Page & { url: string })[];
+  total: number;
+  nextCursor?: string;
+  /** R544: the translation-pair rows for the window (the "↔ slug" column). */
+  pairRows: { id: number; slug: string; locale: string; translationOf: number | null }[];
+}> {
   requireCap(user, "content:read");
   // R158: same shared clamp (admin route, but a bad ?limit must 200 not 500).
   const { limit, offset } = normalizeWindow(f, 50);
@@ -409,10 +465,27 @@ export async function adminListPages(
     db.select({ n: sql<number>`count(*)` }).from(pagesTable).where(where),
     getPermalinkConfig(),
   ]);
+  // R544: the translation-pair rows (the admin list's "↔ slug" column, 0046)
+  // depend only on the row ids, so they run as the SAME parallel pair the
+  // posts list uses (R543) instead of a second serial query in adminPages.
+  const rowIds = rows.map((r) => r.page.id);
+  const pairRows = rowIds.length
+    ? await db
+        .select({ id: pagesTable.id, slug: pagesTable.slug, locale: pagesTable.locale, translationOf: pagesTable.translationOf })
+        .from(pagesTable)
+        .where(or(inArray(pagesTable.id, rowIds), inArray(pagesTable.translationOf, rowIds)))
+    : [];
   const items = rows.map((r) => ({ ...r.page, url: pageUrlFor(cfg, r.page) }));
-  const out: { items: typeof items; total: number; nextCursor?: string } = {
+  const out: {
+    items: typeof items;
+    total: number;
+    nextCursor?: string;
+    /** R544: the pair rows for the window (the "↔ slug" column's data). */
+    pairRows: { id: number; slug: string; locale: string; translationOf: number | null }[];
+  } = {
     items,
     total: Number(totalRows[0]?.n ?? 0),
+    pairRows,
   };
   if (!byOrder && rows.length === limit) {
     const last = rows[rows.length - 1];
@@ -422,15 +495,46 @@ export async function adminListPages(
 }
 
 /** Editor read: any status, custom fields as an editable {key,value} array. */
+/**
+ * R594: page-side twin of adminPostView (admin.ts, R571). The create/update
+ * tails already hold the stored row (insert/update .returning()) and often the
+ * metas they just wrote — handing them in skips the redundant row re-SELECT
+ * (and the metas leg) that adminGetPage would pay. The translation-original
+ * probe stays (keyed on row.translationOf, in hand). adminGetPage delegates
+ * here so the editor payload has ONE source of truth. Capability/ownership
+ * checks stay with the callers.
+ */
+async function adminPageView(
+  user: SessionUser | null,
+  row: Page,
+  known: { metas?: Record<string, string> } = {},
+) {
+  const [metas, cfg, originalRows] = await Promise.all([
+    known.metas != null ? Promise.resolve(known.metas) : getPageMetas(row.id),
+    getPermalinkConfig(),
+    row.translationOf
+      ? db.select({ id: pagesTable.id, title: pagesTable.title, locale: pagesTable.locale }).from(pagesTable).where(eq(pagesTable.id, row.translationOf))
+      : Promise.resolve([] as { id: number; title: string; locale: string }[]),
+  ]);
+  const original = originalRows[0] ?? null;
+  const v: PageView = { ...row, url: pageUrlFor(cfg, row), metas };
+  return {
+    ...v,
+    metaList: Object.entries(metas).map(([key, value]) => ({ key, value })),
+    translationOriginal: original
+      ? { id: original.id, title: original.title, editHref: "/admin/pages/" + original.id, locale: original.locale }
+      : null,
+  };
+}
+
 export async function adminGetPage(
   user: SessionUser | null,
   id: number,
-): Promise<PageView & { metaList: { key: string; value: string }[] }> {
+): Promise<PageView & { metaList: { key: string; value: string }[]; translationOriginal: { id: number; title: string; editHref: string; locale: string } | null }> {
   requireCap(user, "content:read");
   const [row] = await db.select().from(pagesTable).where(eq(pagesTable.id, id));
   if (!row) throw new ServiceError("页面不存在", 404);
-  const v = await hydrate(row);
-  return { ...v, metaList: Object.entries(v.metas).map(([key, value]) => ({ key, value })) };
+  return adminPageView(user, row);
 }
 
 function requirePageManager(user: SessionUser | null): SessionUser {
@@ -442,14 +546,38 @@ function requirePageManager(user: SessionUser | null): SessionUser {
   return u;
 }
 
+/** 0046: same pairing contract as posts (admin.ts resolveTranslationOf). */
+async function resolvePageTranslationOf(
+  locale: string,
+  translationOf: number | null | undefined,
+): Promise<number | null | undefined> {
+  if (translationOf === undefined) return undefined;
+  if (translationOf === null) return null;
+  if (locale === DEFAULT_LOCALE) throw new ServiceError("默认语言页面自身即原文，不能指向翻译", 422);
+  const [target] = await db
+    .select({ locale: pagesTable.locale })
+    .from(pagesTable)
+    .where(eq(pagesTable.id, translationOf));
+  if (!target) throw new ServiceError("翻译目标不存在", 404);
+  if (target.locale === locale) throw new ServiceError("翻译目标必须属于另一种语言", 422);
+  return translationOf;
+}
+
 export async function createPage(user: SessionUser | null, raw: Partial<PageInput>) {
   requirePageManager(user);
   const input = validate(raw);
   if (!input.title) throw new ServiceError("标题不能为空", 422);
   const content = input.content ?? [];
   const base = slugify(input.slug || input.title);
-  const slug = await uniquePageSlug(base, null);
   const status = input.status ?? "draft";
+  const selfLocale = input.locale ?? "zh-CN";
+  // R545 pattern (posts save path) applied to pages: the slug check and the
+  // translationOf resolution are independent reads — one wave instead of two
+  // serial awaits on every page creation.
+  const [slug, translationOf] = await Promise.all([
+    uniquePageSlug(base, null),
+    resolvePageTranslationOf(selfLocale, input.translationOf),
+  ]);
   const excerpt =
     input.excerpt || excerptFrom(blocksToPlainText(content));
 
@@ -472,6 +600,8 @@ export async function createPage(user: SessionUser | null, raw: Partial<PageInpu
       commentStatus: input.commentStatus ?? "open",
       parentId: input.parentId ?? null,
       order: input.order ?? 0,
+      locale: selfLocale,
+      translationOf: translationOf ?? null,
       publishedAt: input.publishedAt
         ? new Date(input.publishedAt)
         : status === "published"
@@ -479,10 +609,16 @@ export async function createPage(user: SessionUser | null, raw: Partial<PageInpu
           : null,
     })
     .returning();
-  if (input.metas) await setPageMetas(row.id, input.metas);
-  await snapshotRevision("page", row.id, null, row);
+  await Promise.all([
+    input.metas ? setPageMetas(row.id, input.metas) : Promise.resolve(),
+    snapshotRevision("page", row.id, null, row),
+  ]);
   invalidateContentCaches();
-  return adminGetPage(user, row.id);
+  return adminPageView(user, row, {
+    metas: input.metas
+      ? Object.fromEntries(cleanMetas(input.metas).map((m) => [m.key, m.value]))
+      : {},
+  });
 }
 
 async function uniquePageSlug(base: string, ignoreSlug: string | null): Promise<string> {
@@ -509,11 +645,16 @@ export async function updatePage(user: SessionUser | null, id: number, raw: Part
   if (!existing) throw new ServiceError("页面不存在", 404);
   await snapshotRevision("page", id, null, existing);
 
-  let slug = existing.slug;
-  if (input.slug && input.slug !== existing.slug) {
-    slug = await uniquePageSlug(slugify(input.slug), existing.slug);
-  }
   const content = input.content ?? (existing.content as Block[]);
+  const selfLocale = input.locale ?? existing.locale;
+  // R546: the rename's slug check and the translationOf resolution are
+  // independent reads — one wave, same shape the post save runs (R545).
+  const [slug, translationOf] = await Promise.all([
+    input.slug && input.slug !== existing.slug
+      ? uniquePageSlug(slugify(input.slug), existing.slug)
+      : Promise.resolve(existing.slug),
+    resolvePageTranslationOf(selfLocale, input.translationOf),
+  ]);
   let publishedAt = existing.publishedAt;
   if (input.publishedAt !== undefined) {
     publishedAt = input.publishedAt ? new Date(input.publishedAt) : null;
@@ -521,7 +662,7 @@ export async function updatePage(user: SessionUser | null, id: number, raw: Part
     publishedAt = new Date();
   }
 
-  await db
+  const updated = await db
     .update(pagesTable)
     .set({
       title: input.title ?? existing.title,
@@ -543,10 +684,14 @@ export async function updatePage(user: SessionUser | null, id: number, raw: Part
       commentStatus: input.commentStatus ?? existing.commentStatus,
       parentId: input.parentId !== undefined ? input.parentId : existing.parentId,
       order: input.order !== undefined ? input.order : existing.order,
+      locale: input.locale !== undefined ? input.locale : existing.locale,
+      translationOf: translationOf !== undefined ? translationOf : existing.translationOf,
       publishedAt,
       updatedAt: new Date(),
     })
-    .where(eq(pagesTable.id, id));
+    .where(eq(pagesTable.id, id))
+    .returning();
+  const fresh = updated[0];
 
   // R193: same contract as updatePost — a page's URL is its slug, so a rename
   // has to claim the old path or the links to it start answering 404.
@@ -557,7 +702,11 @@ export async function updatePage(user: SessionUser | null, id: number, raw: Part
 
   if (input.metas) await setPageMetas(id, input.metas);
   invalidateContentCaches();
-  return adminGetPage(user, id);
+  return adminPageView(user, fresh, {
+    metas: input.metas
+      ? Object.fromEntries(cleanMetas(input.metas).map((m) => [m.key, m.value]))
+      : undefined,
+  });
 }
 
 export async function deletePage(user: SessionUser | null, id: number): Promise<{ id: number }> {

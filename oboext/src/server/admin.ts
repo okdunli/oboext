@@ -1,6 +1,6 @@
 // Admin service layer + Web API helpers — ported from the original app (lib/services/{posts,comments,taxonomies,settings,users,dashboard}.ts).
 import { and, asc, desc, eq, getTableColumns, gt, inArray, lt, or, sql } from "drizzle-orm";
-import { db, ensureMigrations } from "./db.js";
+import { db, ensureMigrations , rawQuery } from "./db.js";
 import { invalidateContentCaches } from "./cache.js";
 import {
   posts,
@@ -26,7 +26,8 @@ import {
   listTags as allTags,
   ilikeEscape,
 } from "./queries.js";
-import { getPostMetas, setPostMetas } from "./metas.js";
+import { getPostMetas, setPostMetas, cleanMetas } from "./metas.js";
+import { blocksToPlainText } from "./plain-text.js";
 import { pinyinSlug as pinyinSlugOf } from "./pinyin.js";
 import { getPermalinkConfig, postUrlFor, categoryUrlFor, tagUrlFor } from "./links.js";
 import { captureRename } from "./redirects.js";
@@ -40,6 +41,7 @@ import { decodeCursor, encodeCursor } from "./cursor.js";
 import { v, parseOrThrow } from "./validate.js";
 import { recordAdminAction } from "./security-events.js";
 import { emitAdminEvent } from "./realtime.js";
+import { notifyCommentVisible } from "./comment-notify.js";
 import { DEFAULT_LOCALE } from "./i18n.js";
 const log = createLogger("admin");
 
@@ -149,6 +151,21 @@ export function requireCap(user: SessionUser | null, cap: Capability): SessionUs
  * suit; without it every message stays Chinese, which is what the admin
  * and member-center surfaces want.
  */
+/** Every API answer carries the two headers a body needs even when it is not
+ *  HTML: nosniff (an engine that sniffs application/json could parse it as a
+ *  document) and no-referrer (API URLs carry ids and tokens in the query; a
+ *  redirect must not hand them to a third party). Document responses get
+ *  these from the page policy instead. */
+function withApiHeaders(res: Response): Response {
+  try {
+    res.headers.set("x-content-type-options", "nosniff");
+    res.headers.set("referrer-policy", "no-referrer");
+  } catch {
+    /* a locked-down Response keeps its own headers */
+  }
+  return res;
+}
+
 export async function apiGate(
   fn: () => Promise<Response | unknown>,
   t?: (key: string, vars?: Record<string, string | number>) => string,
@@ -156,17 +173,16 @@ export async function apiGate(
   try {
     await ensureMigrations();
     const out = await fn();
-    if (out instanceof Response) return out;
-    return jsonOk(out ?? null);
+    return withApiHeaders(out instanceof Response ? out : jsonOk(out ?? null));
   } catch (e) {
     if (e instanceof ServiceError) {
       const msg = t && e.key ? t(e.key, e.params) : e.message;
-      return jsonFail(msg, e.status);
+      return withApiHeaders(jsonFail(msg, e.status));
     }
     log.error("[admin api]", e);
     const detail =
       process.env.DEBUG_API_ERRORS === "true" && e instanceof Error ? `: ${e.message}` : "";
-    return jsonFail((t ? t("api.err_internal") : "服务器内部错误") + detail, 500);
+    return withApiHeaders(jsonFail((t ? t("api.err_internal") : "服务器内部错误") + detail, 500));
   }
 }
 
@@ -198,31 +214,6 @@ function uniqueSlug(base: string, taken: Set<string>): string {
 function excerptFrom(text: string, max = 160): string {
   const clean = text.replace(/\s+/g, " ").trim();
   return clean.length > max ? clean.slice(0, max).trimEnd() + "…" : clean;
-}
-
-export function blocksToPlainText(blocks: Block[] | null | undefined): string {
-  if (!blocks) return "";
-  return blocks
-    .map((b) => {
-      switch (b.type) {
-        case "heading":
-        case "paragraph":
-        case "quote":
-          return "text" in b ? b.text : "";
-        case "image":
-          return b.alt || b.caption || "";
-        case "code":
-          return b.code;
-        case "list":
-          return b.items.join(" ");
-        case "html":
-          return b.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-        default:
-          return "";
-      }
-    })
-    .filter(Boolean)
-    .join(" ");
 }
 
 async function takenSlugs(base: string): Promise<Set<string>> {
@@ -290,14 +281,20 @@ async function attachTaxonomyIds(ids: number[]) {
 }
 
 async function setTaxonomies(postId: number, categoryIds: number[], tagIds: number[]) {
-  await db.delete(postCategories).where(eq(postCategories.postId, postId));
-  await db.delete(postTags).where(eq(postTags.postId, postId));
-  if (categoryIds.length)
-    await db
-      .insert(postCategories)
-      .values(categoryIds.map((categoryId) => ({ postId, categoryId })));
-  if (tagIds.length)
-    await db.insert(postTags).values(tagIds.map((tagId) => ({ postId, tagId })));
+  await Promise.all([
+    db.delete(postCategories).where(eq(postCategories.postId, postId)),
+    db.delete(postTags).where(eq(postTags.postId, postId)),
+  ]);
+  await Promise.all([
+    categoryIds.length
+      ? db
+          .insert(postCategories)
+          .values(categoryIds.map((categoryId) => ({ postId, categoryId })))
+      : Promise.resolve(),
+    tagIds.length
+      ? db.insert(postTags).values(tagIds.map((tagId) => ({ postId, tagId })))
+      : Promise.resolve(),
+  ]);
 }
 
 export type PostListFilter = {
@@ -399,7 +396,21 @@ export async function adminListPosts(user: SessionUser, f: PostListFilter = {}) 
     tagRowsP,
     cfgP,
   ]);
-  const tax = await attachTaxonomyIds(rows.map((r) => r.post.id));
+  // R543: the taxonomy ids and the translation-pair rows both depend only on
+  // the row ids, so they run as ONE parallel pair instead of two serial legs.
+  // The pair rows serve the admin list's "↔ slug" column (R273) — moving the
+  // query here (from adminPosts) removes one serial DB round trip from every
+  // admin posts load.
+  const rowIds = rows.map((r) => r.post.id);
+  const [tax, postPairRows] = await Promise.all([
+    attachTaxonomyIds(rowIds),
+    rowIds.length
+      ? db
+          .select({ id: posts.id, slug: posts.slug, locale: posts.locale, translationOf: posts.translationOf })
+          .from(posts)
+          .where(or(inArray(posts.id, rowIds), inArray(posts.translationOf, rowIds)))
+      : Promise.resolve([] as { id: number; slug: string; locale: string; translationOf: number | null }[]),
+  ]);
   const catName = new Map(catRows.map((c) => [c.id, c]));
   const tagName = new Map(tagRows.map((t) => [t.id, t]));
 
@@ -410,9 +421,16 @@ export async function adminListPosts(user: SessionUser, f: PostListFilter = {}) 
     categories: (tax.cats[r.post.id] ?? []).map((id) => catName.get(id)).filter(Boolean),
     tags: (tax.tags[r.post.id] ?? []).map((id) => tagName.get(id)).filter(Boolean),
   }));
-  const out: { items: typeof items; total: number; nextCursor?: string } = {
+  const out: {
+    items: typeof items;
+    total: number;
+    nextCursor?: string;
+    /** R543: the pair rows for the window (the "↔ slug" column's data). */
+    pairRows: { id: number; slug: string; locale: string; translationOf: number | null }[];
+  } = {
     items,
     total: Number(totalRows?.n ?? 0),
+    pairRows: postPairRows,
   };
   // A full page means there may be more rows; the cursor points at the last
   // row's own (updated_at, id), which is the exact resume point. A short page
@@ -424,17 +442,28 @@ export async function adminListPosts(user: SessionUser, f: PostListFilter = {}) 
   return out;
 }
 
-export async function adminGetPost(user: SessionUser, id: number) {
-  requireCap(user, "content:read");
-  const [row] = await db.select().from(posts).where(eq(posts.id, id));
-  if (!row) throw new ServiceError("文章不存在", 404);
-  if (!canModifyContent(user.role, row.authorId, user.id))
-    throw new ServiceError("权限不足", 403);
+/**
+ * R571: shared view assembler for the admin post editor payload. Every field
+ * here matches adminGetPost byte-for-byte — the function exists so createPost
+ * and updatePost can hand in the row they ALREADY hold (from insert/update
+ * .returning()) plus the taxonomy/metas they JUST wrote, instead of paying a
+ * redundant row SELECT + taxonomy/metas wave legs through adminGetPost. The
+ * permalink-config and translation-original legs stay (the URL and the pairing
+ * echo cannot be derived from the write path's data alone); the permalink read
+ * is memoized, and the original SELECT only runs when the row actually has a
+ * translationOf. Capability/ownership checks stay with the callers.
+ */
+async function adminPostView(
+  user: SessionUser,
+  row: typeof posts.$inferSelect,
+  known: { categoryIds?: number[]; tagIds?: number[]; metas?: Record<string, string> } = {},
+) {
   const [tax, metas, cfg, originalRows] = await Promise.all([
-    attachTaxonomyIds([id]),
-    getPostMetas(id),
+    known.categoryIds != null && known.tagIds != null
+      ? Promise.resolve({ cats: { [row.id]: known.categoryIds }, tags: { [row.id]: known.tagIds } })
+      : attachTaxonomyIds([row.id]),
+    known.metas != null ? Promise.resolve(known.metas) : getPostMetas(row.id),
     getPermalinkConfig(),
-    // R283: the edit page shows the ORIGINAL's title + a link, not a bare id.
     row.translationOf
       ? db.select({ id: posts.id, title: posts.title, slug: posts.slug, locale: posts.locale }).from(posts).where(eq(posts.id, row.translationOf))
       : Promise.resolve([] as { id: number; title: string; slug: string; locale: string }[]),
@@ -443,8 +472,8 @@ export async function adminGetPost(user: SessionUser, id: number) {
   return {
     ...row,
     url: postUrlFor(cfg, row),
-    categoryIds: tax.cats[id] ?? [],
-    tagIds: tax.tags[id] ?? [],
+    categoryIds: tax.cats[row.id] ?? [],
+    tagIds: tax.tags[row.id] ?? [],
     metas,
 
     metaList: Object.entries(metas).map(([key, value]) => ({ key, value })),
@@ -453,6 +482,15 @@ export async function adminGetPost(user: SessionUser, id: number) {
       ? { id: original.id, title: original.title, editHref: "/admin/posts/" + original.id, locale: original.locale }
       : null,
   };
+}
+
+export async function adminGetPost(user: SessionUser, id: number) {
+  requireCap(user, "content:read");
+  const [row] = await db.select().from(posts).where(eq(posts.id, id));
+  if (!row) throw new ServiceError("文章不存在", 404);
+  if (!canModifyContent(user.role, row.authorId, user.id))
+    throw new ServiceError("权限不足", 403);
+  return adminPostView(user, row);
 }
 
 type PostInput = {
@@ -508,23 +546,60 @@ function clean(v: string | null | undefined): string | null {
 
 function normIds(v: unknown): number[] {
   return Array.isArray(v)
-    ? v.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0)
+    ? [...new Set(v.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))]
     : [];
 }
 
 const POST_STATUSES = ["draft", "published", "archived"] as const;
 
-function normBlocks(v: unknown): Block[] {
+export function normBlocks(v: unknown): Block[] {
   if (!Array.isArray(v)) throw new ServiceError("内容格式不正确", 422);
   if (v.length > 2000) throw new ServiceError("内容块数量过多", 422);
-  for (const b of v) {
+  return v.map((b, i) => {
     if (b === null || typeof b !== "object" || Array.isArray(b))
       throw new ServiceError("内容块格式不正确", 422);
-  }
-  return v as Block[];
+    const o = b as Record<string, unknown>;
+    const what = `第 ${i + 1} 个内容块`;
+    // Only the shapes the renderer or the text pipeline would crash on are
+    // refused; an empty paragraph/quote text is a legitimate mid-edit state
+    // (autosave sends it) and renders as an empty element.
+    switch (o.type) {
+      case "heading":
+        if (typeof o.text !== "string") throw new ServiceError(`${what}：标题缺少文本`, 422);
+        if (!Number.isInteger(o.level) || (o.level as number) < 1 || (o.level as number) > 4)
+          throw new ServiceError(`${what}：标题层级必须是 1-4`, 422);
+        return b;
+      case "paragraph":
+      case "quote":
+        if (typeof o.text !== "string") throw new ServiceError(`${what}：缺少文本`, 422);
+        return b;
+      case "image":
+        if (typeof o.url !== "string" || !o.url.trim())
+          throw new ServiceError(`${what}：图片缺少地址`, 422);
+        return b;
+      case "code":
+        if (typeof o.code !== "string") throw new ServiceError(`${what}：代码块缺少内容`, 422);
+        return b;
+      case "list":
+        if (!Array.isArray(o.items) || o.items.some((s) => typeof s !== "string"))
+          throw new ServiceError(`${what}：列表条目必须是字符串数组`, 422);
+        return b;
+      case "html":
+        if (typeof o.html !== "string") throw new ServiceError(`${what}：HTML 块缺少内容`, 422);
+        return b;
+      case "divider":
+        return b;
+      default:
+        throw new ServiceError(`${what}：未知的内容类型`, 422);
+    }
+  }) as Block[];
 }
 
 function checkPostShape(input: Partial<PostInput>): void {
+  if (input.title !== undefined && typeof input.title !== "string")
+    throw new ServiceError("标题格式不正确", 422);
+  if (input.content !== undefined && !Array.isArray(input.content))
+    throw new ServiceError("正文区块格式不正确", 422);
   if (input.title !== undefined && String(input.title).trim().length > 200)
     throw new ServiceError("标题长度不能超过 200 个字符", 422);
   if (input.slug != null && String(input.slug).length > 100)
@@ -581,13 +656,13 @@ async function resolveTranslationOf(locale: string, translationOf: number | null
 }
 
 export async function createPost(user: SessionUser, input: PostInput) {  requireCap(user, "content:create");
-  const title = (input.title || "").trim();
+  // A non-string title used to reach `.trim()` and 500; validation now refuses
+  // the shape at the trust boundary (checkPostShape below).
+  const title = String(input.title ?? "").trim();
   if (!title) throw new ServiceError("标题不能为空", 422);
   checkPostShape(input);
   const content = Array.isArray(input.content) ? normBlocks(input.content) : [];
   const slugBase = slugify(input.slug || title);
-  const slug = uniqueSlug(slugBase, await takenSlugs(slugBase));
-  const tails = await uniqueLinkTails(title);
   const authorId =
     (user.role === "admin" || user.role === "editor") && input.authorId
       ? Number(input.authorId)
@@ -598,22 +673,37 @@ export async function createPost(user: SessionUser, input: PostInput) {  require
   // R273: a paired translation must point ACROSS locales, and a default-locale
   // row is its own original (the column stays NULL for it).
   const locale = (input.locale ?? "zh-CN") as string;
-  let translationOf = await resolveTranslationOf(locale, input.translationOf);
-  // R282: auto-pairing. When a new NON-default post's requested slug collides
-  // with an existing post in the OPPOSITE locale, the author almost certainly
-  // translated it (same slug, other language) — link the pair automatically
-  // unless the input named an explicit translationOf. The slug keeps its
-  // `-2` uniquifier (URLs must stay distinct); only the pairing follows.
+  // R543 (posts list) pattern applied to the save path: the slug check, the
+  // pinyin/initial tails, the explicit translationOf resolution and the
+  // auto-pair candidate probe are mutually independent reads — ONE wave
+  // instead of four serial awaits on every post creation.
+  const [taken, tails, translationOfResolved, autoPairRows] = await Promise.all([
+    takenSlugs(slugBase),
+    uniqueLinkTails(title),
+    resolveTranslationOf(locale, input.translationOf),
+    // R282: auto-pairing. When a new NON-default post's requested slug
+    // collides with an existing post in the OPPOSITE locale, the author
+    // almost certainly translated it (same slug, other language). The probe
+    // rides the wave; the decision below stays sequential (it needs `slug`,
+    // which the taken set determines).
+    locale !== DEFAULT_LOCALE && !input.translationOf
+      ? db
+          .select({ id: posts.id, slug: posts.slug })
+          .from(posts)
+          .where(and(eq(posts.slug, slugBase), eq(posts.locale, DEFAULT_LOCALE)))
+      : Promise.resolve([] as { id: number; slug: string }[]),
+  ]);
+  const slug = uniqueSlug(slugBase, taken);
+  let translationOf = translationOfResolved;
+  // The slug keeps its `-2` uniquifier (URLs must stay distinct); only the
+  // pairing follows.
   let autoPairNote: string | undefined;
   if (
     translationOf == null &&
     locale !== DEFAULT_LOCALE &&
     !input.translationOf
   ) {
-    const [candidate] = await db
-      .select({ id: posts.id, slug: posts.slug })
-      .from(posts)
-      .where(and(eq(posts.slug, slugBase), eq(posts.locale, DEFAULT_LOCALE)));
+    const candidate = autoPairRows[0];
     if (candidate && slug !== slugBase) {
       translationOf = candidate.id;
       autoPairNote = `已自动关联原文「${candidate.slug}」（同别名、中文原文）`;
@@ -652,16 +742,26 @@ export async function createPost(user: SessionUser, input: PostInput) {  require
       translationOf,
     })
     .returning();
-  await setTaxonomies(row.id, normIds(input.categoryIds), normIds(input.tagIds));
-  if (input.metas) await setPostMetas(row.id, normMetas(input.metas));
-  await snapshotRevision("post", row.id, authorId, row);
+  await Promise.all([
+    setTaxonomies(row.id, normIds(input.categoryIds), normIds(input.tagIds)),
+    input.metas ? setPostMetas(row.id, normMetas(input.metas)) : Promise.resolve(),
+    snapshotRevision("post", row.id, authorId, row),
+  ]);
   invalidateContentCaches();
   // post.published: the outbound Webmention sender (and anything else that
   // wants "this just went live") listens here. doAction never awaits - the
   // handler is fire-and-forget by contract.
   if (row.status === "published") doAction(HOOKS.postPublished, { post: row });
   // R282: surface the auto-pair so the editor's UI can toast it.
-  const created = await adminGetPost(user, row.id);
+  const created = await adminPostView(user, row, {
+    categoryIds: normIds(input.categoryIds),
+    tagIds: normIds(input.tagIds),
+    // Mirror setPostMetas' own cleanMetas pass (trim/slice/dedupe keys) so the
+    // in-memory map is exactly what getPostMetas would read back.
+    metas: input.metas
+      ? Object.fromEntries(cleanMetas(normMetas(input.metas)).map((m) => [m.key, m.value]))
+      : {},
+  });
   return autoPairNote ? { ...created, autoPairNote } : created;
 }
 
@@ -669,25 +769,33 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
   const existing = await adminGetPost(user, id); // 404 + ownership
   checkPostShape(input);
   await snapshotRevision("post", id, user.id, existing);
-  let slug = existing.slug;
-  if (input.slug && input.slug !== existing.slug) {
-    const base = slugify(input.slug);
-    const taken = await takenSlugs(base);
-    taken.delete(existing.slug);
-    slug = uniqueSlug(base, taken);
-  }
   const content = input.content ?? (existing.content as Block[]);
   // Re-derive the romanised tails only when the title changes; otherwise the
   // columns are left out of the SET entirely, so a row keeps its values (NULL
   // included — pre-pinyin rows never had them).
   const nextTitle = input.title ?? existing.title;
-  const tails =
-    input.title !== undefined && input.title !== existing.title
-      ? await uniqueLinkTails(nextTitle, {
+  const slugChanges = !!input.slug && input.slug !== existing.slug;
+  const titleChanges = input.title !== undefined && input.title !== existing.title;
+  const [taken, tails, translationOf] = await Promise.all([
+    slugChanges
+      ? takenSlugs(slugify(input.slug!))
+      : Promise.resolve(null as Set<string> | null),
+    titleChanges
+      ? uniqueLinkTails(nextTitle, {
           pinyin: existing.pinyinSlug,
           initial: existing.initialSlug,
         })
-      : null;
+      : Promise.resolve(null),
+    input.translationOf !== undefined
+      ? resolveTranslationOf(input.locale ?? existing.locale, input.translationOf)
+      : Promise.resolve(existing.translationOf),
+  ]);
+  let slug = existing.slug;
+  if (slugChanges && taken) {
+    const base = slugify(input.slug!);
+    taken.delete(existing.slug);
+    slug = uniqueSlug(base, taken);
+  }
   let publishedAt = existing.publishedAt;
   if (input.publishedAt) publishedAt = new Date(input.publishedAt);
   else if (input.status === "published" && !existing.publishedAt) publishedAt = new Date();
@@ -697,7 +805,7 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
       ? Number(input.authorId)
       : existing.authorId;
 
-  await db
+  const updated = await db
     .update(posts)
     .set({
       title: input.title ?? existing.title,
@@ -729,27 +837,27 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
       pinned: input.pinned !== undefined ? input.pinned : existing.pinned,
       template: input.template !== undefined ? clean(input.template) : existing.template,
       locale: input.locale ?? existing.locale,
-      translationOf:
-        input.translationOf !== undefined
-          ? await resolveTranslationOf(input.locale ?? existing.locale, input.translationOf)
-          : existing.translationOf,
+      translationOf,
       updatedAt: new Date(),
     })
-    .where(eq(posts.id, id));
+    .where(eq(posts.id, id))
+    .returning();
+  const fresh = updated[0];
 
   // R193: a post's public URL is derived from its slug, never stored, so a
   // rename is otherwise a silent delete of every link that already points at
   // the old one — including the ones search engines have indexed. Claim the
   // old path here and point it at the new one (permanent: a rename is not a
   // temporary move). Never blocks or fails the save; captureRename swallows.
+  const postWriteWave: Promise<unknown>[] = [];
   if (slug !== existing.slug) {
     const cfg = await getPermalinkConfig();
-    await captureRename(postUrlFor(cfg, existing), postUrlFor(cfg, { ...existing, slug }));
+    postWriteWave.push(captureRename(postUrlFor(cfg, existing), postUrlFor(cfg, { ...existing, slug })));
   }
-
   if (input.categoryIds || input.tagIds)
-    await setTaxonomies(id, normIds(input.categoryIds), normIds(input.tagIds));
-  if (input.metas !== undefined) await setPostMetas(id, normMetas(input.metas));
+    postWriteWave.push(setTaxonomies(id, normIds(input.categoryIds), normIds(input.tagIds)));
+  if (input.metas !== undefined) postWriteWave.push(setPostMetas(id, normMetas(input.metas)));
+  if (postWriteWave.length) await Promise.all(postWriteWave);
   invalidateContentCaches();
   // post.published fires on the TRANSITION only (draft -> published), not on
   // every save of an already-live post: an editor fixing a typo must not
@@ -757,20 +865,28 @@ export async function updatePost(user: SessionUser, id: number, input: Partial<P
   // reconstructed because the sender needs the STORED body (and its id/slug),
   // which the patch may not have carried.
   if (existing.status !== "published") {
-    const [fresh] = await db.select().from(posts).where(eq(posts.id, id));
     if (fresh && fresh.status === "published") doAction(HOOKS.postPublished, { post: fresh });
   }
-  return adminGetPost(user, id);
+  const taxTouched = !!(input.categoryIds || input.tagIds);
+  return adminPostView(user, fresh, {
+    categoryIds: taxTouched ? normIds(input.categoryIds) : undefined,
+    tagIds: taxTouched ? normIds(input.tagIds) : undefined,
+    metas: input.metas !== undefined
+      ? Object.fromEntries(cleanMetas(normMetas(input.metas)).map((m) => [m.key, m.value]))
+      : existing.metas,
+  });
 }
 
-export async function deletePost(user: SessionUser, id: number) {
-  const existing = await adminGetPost(user, id);
-  if (!canModifyContent(user.role, existing.authorId, user.id))
+export async function deletePost(user: SessionUser | null, id: number) {
+  const u = requireUser(user);
+  const [row] = await db.select({ authorId: posts.authorId }).from(posts).where(eq(posts.id, id));
+  if (!row) throw new ServiceError("文章不存在", 404);
+  if (!canModifyContent(u.role, row.authorId, u.id))
     throw new ServiceError("权限不足", 403);
   // hard delete like the original; comments have no FK and are left behind
   await db.delete(posts).where(eq(posts.id, id));
   invalidateContentCaches();
-  await recordAdminAction(user, "posts.delete", { id });
+  await recordAdminAction(u, "posts.delete", { id });
   return { id };
 }
 
@@ -795,7 +911,7 @@ export async function bulkPosts(
   // 401 for guests; per-row ownership filtering still applies below.
   const u = requireUser(user);
   const rows = await db
-    .select({ id: posts.id, authorId: posts.authorId })
+    .select({ id: posts.id, authorId: posts.authorId, status: posts.status })
     .from(posts)
     .where(inArray(posts.id, ids));
   const allowed = rows.filter((p) => canModifyContent(u.role, p.authorId, u.id));
@@ -805,17 +921,7 @@ export async function bulkPosts(
   // UPDATE, which is the only moment the "was it already live?" answer exists.
   let justPublished: typeof allowed = [];
   if (action === "publish") {
-    const live = new Set(
-      (
-        await db
-          .select({ id: posts.id, status: posts.status })
-          .from(posts)
-          .where(inArray(posts.id, allowedIds))
-      )
-        .filter((r) => r.status === "published")
-        .map((r) => r.id),
-    );
-    justPublished = allowed.filter((p) => !live.has(p.id));
+    justPublished = allowed.filter((p) => p.status !== "published");
   }
   if (action === "delete") {
     await db.delete(posts).where(inArray(posts.id, allowedIds));
@@ -905,7 +1011,11 @@ export async function adminListComments(
     ...c,
     postTitle: titles.get(`${c.postType}:${c.postId}`) ?? "（已删除）",
   }));
-  const out: { items: typeof items; total: number; nextCursor?: string } = {
+  const out: {
+    items: typeof items;
+    total: number;
+    nextCursor?: string;
+  } = {
     items,
     total: Number(totalRows?.n ?? 0),
   };
@@ -937,8 +1047,15 @@ export async function publicListComments(
     parentId: q.parent ? Number(q.parent) : undefined,
     status: isMod ? status : "published",
     order: scoped ? "asc" : "desc",
+    requireVisibleParent: !isMod,
   });
-  return { items, total };
+  // A public thread read is anonymous: the page renders name, link and text,
+  // never the address. Only the moderator table shows it, so it must not be in
+  // the JSON an anonymous caller can fetch for every comment on the site.
+  return {
+    items: isMod ? items : items.map(({ authorEmail: _drop, ...rest }) => rest),
+    total,
+  };
 }
 
 function normHost(h: string): string {
@@ -958,11 +1075,12 @@ async function assertNotImpersonation(input: {
   authorUrl?: string | null;
   siteHost?: string | null;
 }) {
-  const settings = await getSettings();
-  const admins = await db
-    .select({ name: users.name, email: users.email })
-    .from(users)
-    .where(eq(users.role, "admin"));
+  // Two independent reads: issue them together (one round trip per public
+  // comment submit instead of two).
+  const [settings, admins] = await Promise.all([
+    getSettings(),
+    db.select({ name: users.name, email: users.email }).from(users).where(eq(users.role, "admin")),
+  ]);
   const names = new Set<string>();
   const emails = new Set<string>();
   for (const v of [settings.siteTitle, settings.tagline]) {
@@ -1054,70 +1172,104 @@ export function linkFloodStatus(
 export async function createPublicComment(input: PublicCommentInput) {
   const postType = input.postType ?? "post";
   const t = postType === "page" ? pages : posts;
-  const [parent] = await db
-    .select({ commentStatus: t.commentStatus, title: t.title })
-    .from(t)
-    .where(eq(t.id, input.postId));
-  if (!parent) throw new ServiceError("内容不存在", 404, "api.comment_missing");
-
-  // A reply must point at a real comment ON THE SAME content. The route coerces
-  // parentId with Number(), which yields NaN for junk (NaN ?? null stays NaN and
-  // would be written to an integer column), and nothing stopped a parentId from
-  // another post - orphaning the reply into the wrong thread. Validate at the
-  // trust boundary: positive integer, and the parent exists for this post+type.
-  let parentId: number | null = null;
+  // R548: the comment submit's four preamble reads — the content row, the
+  // parent comment (when replying), the site settings and the submitter's
+  // role — are ALL keyed by input alone, so they run as ONE wave. The gates
+  // below consume the results; none of them needs another leg's RESULT.
+  // (The post row is one exception handled at the call site: nothing gates
+  // on it, it only feeds the notification.)
+  const [parentRows, parentCommentRows, settings, roleRows] = await Promise.all([
+    db
+      .select({
+        commentStatus: t.commentStatus,
+        title: t.title,
+        status: t.status,
+        publishedAt: t.publishedAt,
+      })
+      .from(t)
+      .where(eq(t.id, input.postId)),
+    // A reply must point at a real comment ON THE SAME content. The route
+    // coerces parentId with Number(), which yields NaN for junk (NaN ?? null
+    // stays NaN and would be written to an integer column), and nothing
+    // stopped a parentId from another post - orphaning the reply into the
+    // wrong thread. Validate at the trust boundary: positive integer, and the
+    // parent exists for this post+type.
+    input.parentId != null
+      ? db
+          .select({ id: comments.id })
+          .from(comments)
+          .where(
+            and(
+              eq(comments.id, input.parentId),
+              eq(comments.postId, input.postId),
+              eq(comments.postType, postType),
+            ),
+          )
+          .limit(1)
+      : Promise.resolve([] as { id: number }[]),
+    getSettings(),
+    input.user
+      ? db.select({ role: users.role, name: users.name, email: users.email }).from(users).where(eq(users.id, input.user.id))
+      : Promise.resolve([] as { role: string; name: string; email: string }[]),
+  ]);
+  if (!parentRows[0]) throw new ServiceError("内容不存在", 404, "api.comment_missing");
+  const parent = parentRows[0];
   if (input.parentId != null) {
     if (!Number.isInteger(input.parentId) || input.parentId < 1) {
       throw new ServiceError("父评论不存在", 422, "api.comment_missing");
     }
-    const [pc] = await db
-      .select({ id: comments.id })
-      .from(comments)
-      .where(
-        and(
-          eq(comments.id, input.parentId),
-          eq(comments.postId, input.postId),
-          eq(comments.postType, postType),
-        ),
-      )
-      .limit(1);
-    if (!pc) throw new ServiceError("父评论不存在", 422, "api.comment_missing");
-    parentId = input.parentId;
+    if (!parentCommentRows[0]) throw new ServiceError("父评论不存在", 422, "api.comment_missing");
   }
-
-  const settings = await getSettings();
+  let parentId: number | null = input.parentId != null ? input.parentId : null;
   let isStaff = false;
   if (input.user) {
-    const [u] = await db
-      .select({ role: users.role })
-      .from(users)
-      .where(eq(users.id, input.user.id));
-    isStaff = Boolean(u && u.role !== "subscriber");
+    isStaff = Boolean(roleRows[0] && roleRows[0].role !== "subscriber");
   }
   if (!settings.commentsEnabled && !isStaff)
     throw new ServiceError("评论已关闭", 403, "api.comment_closed");
+  // Visibility gate: the page for a draft, archived or not-yet-due post is
+  // 404 to the public, so its comment API must 404 the same way - otherwise
+  // a direct POST collects comments on content no visitor can see. Staff keep
+  // the preview workflow.
+  if (!isStaff) {
+    const visible =
+      parent.status === "published" &&
+      (!parent.publishedAt || new Date(parent.publishedAt) <= new Date());
+    if (!visible) throw new ServiceError("内容不存在", 404, "api.comment_missing");
+  }
   if (parent.commentStatus === "closed" && !isStaff)
     throw new ServiceError("本文评论已关闭", 403, "api.comment_post_closed");
 
-  const content = (input.content || "").trim();
+  // Postgres rejects a NUL inside a text parameter, which used to reach the
+  // insert and answer 500 on a public endpoint. Strip C0 controls (keeping the
+  // line breaks and tabs people actually type) at the trust boundary.
+  const clean = (v: unknown) =>
+    String(v ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+  const content = clean(input.content).trim();
   if (!content) throw new ServiceError("评论内容不能为空", 422, "api.comment_empty");
   if (content.length > 5000) throw new ServiceError("评论内容过长", 422, "api.comment_too_long");
 
-  let authorName = input.authorName?.trim() || "匿名";
-  let authorEmail = input.authorEmail ?? null;
-  let authorUrl = input.authorUrl ?? null;
+  let authorName = clean(input.authorName).trim() || "匿名";
+  let authorEmail = input.authorEmail == null ? null : clean(input.authorEmail);
+  let authorUrl = input.authorUrl == null ? null : clean(input.authorUrl);
+  // A link field is a link: only http(s) may be stored. The renderer already
+  // drops other schemes (safeCommentUrl), but storing a javascript: string in
+  // the database is a hazard for every future consumer.
+  if (authorUrl && /^[a-z][a-z0-9+.-]*:/i.test(authorUrl) && !/^https?:\/\//i.test(authorUrl))
+    throw new ServiceError("链接格式不正确", 422, "api.comment_url_invalid");
+  // A guest-supplied address that is not an address is stored and then used as
+  // a Gravatar key / admin contact point. Signed-in authors skip this: their
+  // address below comes from the users row, not from the form.
+  if (!input.user && authorEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authorEmail))
+    throw new ServiceError("邮箱格式不正确", 422, "api.email_invalid");
   let userId: number | null = null;
   // R147: did the identity below come from the DB (logged-in override) rather
   // than from guest-submitted fields? Only then may the blocklist check step
   // aside - see the branch comments.
   let identityFromDb = false;
 
-  // logged-in identity overrides submitted guest fields (no impersonation)
   if (input.user) {
-    const [u] = await db
-      .select({ name: users.name, email: users.email })
-      .from(users)
-      .where(eq(users.id, input.user.id));
+    const u = roleRows[0];
     if (u) {
       authorName = u.name;
       authorEmail = u.email;
@@ -1168,17 +1320,50 @@ export async function createPublicComment(input: PublicCommentInput) {
   // submissions from this IP in a window and refuse past a generous, env-tunable
   // cap - high enough that a shared NAT never trips it, low enough to stop a
   // flood. Staff are exempt (trusted, and bulk curation must not stall).
-  if (input.ip && !isStaff) {
+  // R547: the flood guards are two independent COUNT reads over the same
+  // table — the rate cap and the repeat check run as ONE wave (the same
+  // read-preamble pattern the post/page saves use, R545/R546), so a guest
+  // submission pays one round trip for both instead of two serial ones.
+  // The VERDICTS stay sequential: the rate cap is checked first (its 429 is
+  // the more accurate answer for a flood), then the duplicate verdict.
+  const guardsOn = !!input.ip && !isStaff;
+  const [recent, dupe] = await Promise.all([
+    guardsOn
+      ? db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(comments)
+          .where(
+            and(
+              eq(comments.ip, input.ip!),
+              gt(comments.createdAt, new Date(Date.now() - (Math.max(1, Number(process.env.OBOEXT_COMMENT_RATE_WINDOW_MIN) || 10)) * 60_000)),
+            ),
+          )
+      : Promise.resolve([{ n: 0 }]),
+    guardsOn && !input.viaWebmention
+      ? db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(comments)
+          .where(
+            and(
+              eq(comments.ip, input.ip!),
+              gt(comments.createdAt, new Date(Date.now() - 30 * 60_000)),
+              sql`regexp_replace(coalesce(${comments.content}, ''), '\s+', ' ', 'g') = ${content.replace(/\s+/g, " ").trim()}`,
+            ),
+          )
+      : Promise.resolve([{ n: 0 }]),
+  ]);
+  {
     const max = Math.max(1, Number(process.env.OBOEXT_COMMENT_RATE_MAX) || 20);
-    const windowMin = Math.max(1, Number(process.env.OBOEXT_COMMENT_RATE_WINDOW_MIN) || 10);
-    const windowMs = windowMin * 60_000;
-    const [recent] = await db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(comments)
-      .where(and(eq(comments.ip, input.ip), gt(comments.createdAt, new Date(Date.now() - windowMs))));
-    if ((recent?.n ?? 0) >= max) {
+    if ((recent?.[0]?.n ?? 0) >= max) {
       throw new ServiceError("评论过于频繁，请稍后再试", 429, "api.comment_rate_limited");
     }
+  }
+  // Repeat guard: the rate cap above still lets 20 identical posts through in
+  // ten minutes. Same text (whitespace-normalised) from the same IP inside the
+  // window is a flood, not a conversation. Webmentions carry their own
+  // verification; staff may legitimately post the same line twice.
+  if ((dupe?.[0]?.n ?? 0) > 0) {
+    throw new ServiceError("请勿重复提交相同内容", 429, "api.comment_duplicate");
   }
 
   const haystack = [content, authorName, authorEmail ?? "", authorUrl ?? ""].join("\n");
@@ -1224,7 +1409,7 @@ export async function createPublicComment(input: PublicCommentInput) {
   // A published submission changes what the post page renders (comment list +
   // count) — drop the content caches so it shows up on the next render, not a
   // TTL later. Pending/spam don't render, nothing to drop.
-  if (status === "published") invalidateContentCaches();
+  if (status === "published") invalidateContentCaches(false);
   // Notification etc. plugins (comment.created); pending comments fire too.
   doAction(HOOKS.commentCreated, {
     comment,
@@ -1235,6 +1420,14 @@ export async function createPublicComment(input: PublicCommentInput) {
   });
   emitAdminEvent("comment");
   return { comment, isPublic: status === "published" };
+}
+
+/** R270's comment→mention verdict map, as a function so the parallel leg
+ *  above can consult it inline. */
+function stateToMention(status: string): "accepted" | "rejected" | null {
+  if (status === "published") return "accepted";
+  if (status === "spam") return "rejected";
+  return null;
 }
 
 export async function updateComment(
@@ -1256,26 +1449,41 @@ export async function updateComment(
   const set: Record<string, unknown> = {};
   if (patch.status !== undefined) set.status = patch.status;
   if (patch.content !== undefined) set.content = patch.content;
-  await db.update(comments).set(set).where(eq(comments.id, id));
-  if (patch.status && patch.status !== existing.status) {
-    if (patch.status === "published" && existing.status !== "published")
-      await bumpCommentCount(existing.postType, existing.postId, 1);
-    if (existing.status === "published" && patch.status !== "published")
-      await bumpCommentCount(existing.postType, existing.postId, -1);
+  // R549: the UPDATE .returning() hands back the stored row, so the follow-up
+  // SELECT is gone; the count bump and the webmention sync depend only on the
+  // TRANSITION (computable from existing + patch before the write) and run as
+  // one parallel wave with the UPDATE itself. The notification stays
+  // fire-and-forget (its queue contract) and consumes the returned row.
+  const statusTransition =
+    patch.status !== undefined && patch.status !== existing.status;
+  const [row] = await db
+    .update(comments)
+    .set(set)
+    .where(eq(comments.id, id))
+    .returning();
+  await Promise.all([
+    statusTransition && patch.status === "published"
+      ? bumpCommentCount(existing.postType, existing.postId, 1)
+      : Promise.resolve(),
+    statusTransition && existing.status === "published"
+      ? bumpCommentCount(existing.postType, existing.postId, -1)
+      : Promise.resolve(),
+    // R270: keep the provenance pair honest in BOTH directions — the inbox's
+    // status follows the verdict the moderator just recorded (comment→mention).
+    // published=accepted, anything else (pending/spam)=rejected; a mention row
+    // is never "pending" once it has a comment, so pending maps to nothing.
+    // The verdict rides the returning row.
+    (stateToMention(row.status)
+      ? db.update(webmentions).set({ status: stateToMention(row.status)! }).where(eq(webmentions.commentId, id))
+      : Promise.resolve()),
+  ]);
+  // The moderation twin of createComment's notification: a pending comment
+  // that just became visible mails the author exactly once.
+  if (statusTransition && patch.status === "published") {
+    notifyCommentVisible(row, existing.postType, existing.postId);
   }
-  const [row] = await db.select().from(comments).where(eq(comments.id, id));
-  invalidateContentCaches();
+  invalidateContentCaches(false);
   emitAdminEvent("comment");
-  // R270: keep the provenance pair honest in BOTH directions — if this comment
-  // came from a webmention, the inbox's status follows the verdict the
-  // moderator just recorded here (comment→mention). published=accepted,
-  // anything else (pending/spam)=rejected; a mention row is never "pending"
-  // once it has a comment, so pending maps to nothing.
-  const stateToMention: Record<string, string | null> = { published: "accepted", spam: "rejected", pending: null };
-  const mentionStatus = stateToMention[row.status] ?? null;
-  if (mentionStatus) {
-    await db.update(webmentions).set({ status: mentionStatus }).where(eq(webmentions.commentId, id));
-  }
   return row;
 }
 
@@ -1284,13 +1492,16 @@ export async function deleteComment(user: SessionUser | null, id: number) {
   if (!can(u.role, "content:delete:any")) throw new ServiceError("权限不足", 403);
   const [existing] = await db.select().from(comments).where(eq(comments.id, id));
   if (!existing) throw new ServiceError("评论不存在", 404);
-  if (existing.status === "published")
-    await bumpCommentCount(existing.postType, existing.postId, -1);
-  await db.delete(comments).where(eq(comments.id, id));
-  // R270: a deleted provenance comment leaves the mention row pointing at a
-  // ghost commentId. Reset it so the inbox row survives as its own record.
-  await db.update(webmentions).set({ commentId: null }).where(eq(webmentions.commentId, id));
-  invalidateContentCaches();
+  await Promise.all([
+    existing.status === "published"
+      ? bumpCommentCount(existing.postType, existing.postId, -1)
+      : Promise.resolve(),
+    db.delete(comments).where(eq(comments.id, id)),
+    // R270: a deleted provenance comment leaves the mention row pointing at a
+    // ghost commentId. Reset it so the inbox row survives as its own record.
+    db.update(webmentions).set({ commentId: null }).where(eq(webmentions.commentId, id)),
+  ]);
+  invalidateContentCaches(false);
   emitAdminEvent("comment");
   return { id };
 }
@@ -1310,7 +1521,7 @@ export async function setCommentsStatus(
   // bulk UPDATE, then the comment-count deltas folded per (postType, postId) so
   // a whole thread's worth of changes is a single increment.
   const rows = await db
-    .select({ id: comments.id, status: comments.status, postType: comments.postType, postId: comments.postId })
+    .select({ id: comments.id, status: comments.status, postType: comments.postType, postId: comments.postId, parentId: comments.parentId, authorName: comments.authorName, authorEmail: comments.authorEmail, content: comments.content })
     .from(comments)
     .where(inArray(comments.id, ids));
   const present = rows.map((r) => r.id);
@@ -1332,6 +1543,15 @@ export async function setCommentsStatus(
       return bumpCommentCount(postType, Number(idStr), d);
     }),
   );
+
+  // The moderation twin of createComment's notification: bulk-approved rows
+  // mail their authors, one fire-and-forget per newly visible comment.
+  if (status === "published") {
+    for (const r of rows) {
+      if (r.status === "published") continue;
+      notifyCommentVisible(r, r.postType, r.postId);
+    }
+  }
   await recordAdminAction(u, "comments.bulk_status", { ids: present, status });
   emitAdminEvent("comment");
   // R270: same provenance rule as updateComment — bulk verdicts on webmention
@@ -1342,6 +1562,7 @@ export async function setCommentsStatus(
       .set({ status: status === "published" ? "accepted" : "rejected" })
       .where(inArray(webmentions.commentId, present));
   }
+  invalidateContentCaches(false);
   return present;
 }
 
@@ -1375,6 +1596,10 @@ export async function deleteComments(user: SessionUser | null, ids: number[]) {
   // R270: bulk delete detaches provenance mentions too (same rule as
   // deleteComment) — the inbox row survives with its commentId reset.
   await db.update(webmentions).set({ commentId: null }).where(inArray(webmentions.commentId, present));
+  // The single-row path invalidated here; the bulk path did not, so the post
+  // page and the comment feeds kept the deleted rows (and the old count) until
+  // the TTL expired.
+  invalidateContentCaches();
   return present;
 }
 
@@ -1439,7 +1664,7 @@ export async function updateCategory(
     taken.delete(existing.slug);
     slug = uniqueSlug(base, taken);
   }
-  await db
+  const updated = await db
     .update(categories)
     .set({
       name: input.name ?? existing.name,
@@ -1449,14 +1674,15 @@ export async function updateCategory(
       icon: input.icon !== undefined ? cleanOpt(input.icon) : existing.icon,
       parentId: input.parentId !== undefined ? input.parentId : existing.parentId,
     })
-    .where(eq(categories.id, id));
+    .where(eq(categories.id, id))
+    .returning();
   // R193: an archive URL is its term slug too, so a renamed category orphans
   // every link to its archive in the same way a renamed post does.
   if (slug !== existing.slug) {
     const cfg = await getPermalinkConfig();
     await captureRename(categoryUrlFor(cfg, existing), categoryUrlFor(cfg, { ...existing, slug }));
   }
-  const [row] = await db.select().from(categories).where(eq(categories.id, id));
+  const [row] = updated;
   invalidateContentCaches();
   return row;
 }
@@ -1480,8 +1706,10 @@ export async function bulkDeleteCategories(user: SessionUser, ids: number[]) {
   requireCap(user, "taxonomy:manage");
   const set = Array.from(new Set((ids || []).filter((n) => Number.isInteger(n) && n > 0)));
   if (!set.length) return { deleted: 0 };
-  await db.delete(postCategories).where(inArray(postCategories.categoryId, set));
-  await db.update(categories).set({ parentId: null }).where(inArray(categories.parentId, set));
+  await Promise.all([
+    db.delete(postCategories).where(inArray(postCategories.categoryId, set)),
+    db.update(categories).set({ parentId: null }).where(inArray(categories.parentId, set)),
+  ]);
   await db.delete(categories).where(inArray(categories.id, set));
   invalidateContentCaches();
   await recordAdminAction(user, "taxonomy.bulk_delete", { kind: "category", ids: set });
@@ -1535,15 +1763,16 @@ export async function updateTag(user: SessionUser, id: number, input: Partial<{ 
     taken.delete(existing.slug);
     slug = uniqueSlug(base, taken);
   }
-  await db
+  const updated = await db
     .update(tags)
     .set({ name: input.name ?? existing.name, slug })
-    .where(eq(tags.id, id));
+    .where(eq(tags.id, id))
+    .returning();
   if (slug !== existing.slug) {
     const cfg = await getPermalinkConfig();
     await captureRename(tagUrlFor(cfg, existing), tagUrlFor(cfg, { ...existing, slug }));
   }
-  const [row] = await db.select().from(tags).where(eq(tags.id, id));
+  const [row] = updated;
   invalidateContentCaches();
   return row;
 }
@@ -1605,7 +1834,6 @@ export async function updateSettings(user: SessionUser, input: Record<string, un
       throw new ServiceError("该主题的前台模板尚未适配，暂不能启用", 422);
     }
   }
-  await db.insert(siteSettings).values({ id: 1 }).onConflictDoNothing();
   const set: Record<string, unknown> = { updatedAt: new Date() };
   for (const k of SETTINGS_FIELDS.str) if (k in input && typeof input[k] === "string") set[k] = input[k];
   for (const k of SETTINGS_FIELDS.num)
@@ -1619,9 +1847,9 @@ export async function updateSettings(user: SessionUser, input: Record<string, un
   for (const k of SETTINGS_FIELDS.json)
     if (k in input && (typeof input[k] === "object" || Array.isArray(input[k]))) set[k] = input[k];
   const [row] = await db
-    .update(siteSettings)
-    .set(set)
-    .where(eq(siteSettings.id, 1))
+    .insert(siteSettings)
+    .values({ id: 1, ...set })
+    .onConflictDoUpdate({ target: siteSettings.id, set })
     .returning();
   invalidateSettings();
   // R151: site settings are SITE-WIDE derived data - the title rides every
@@ -1682,8 +1910,22 @@ function publicUser(u: any) {
 
 export async function adminListUsers(user: SessionUser) {
   requireCap(user, "users:read");
-  const rows = await db.select().from(users).orderBy(desc(users.createdAt));
-  return rows.map(publicUser);
+  // Two independent reads: issue them together instead of serially — one
+  // round trip saved on every admin users-page view (same wave pattern the
+  // other list loaders use).
+  const [rows, states] = await Promise.all([
+    db.select().from(users).orderBy(desc(users.createdAt)),
+    rawQuery<{ key: string; value: unknown }>(
+      `select key, value from options where key like 'twofa:user:%'`,
+    ),
+  ]);
+  const enabled = new Set<number>();
+  for (const r of states) {
+    const id = Number(r.key.slice("twofa:user:".length));
+    const v = typeof r.value === "string" ? JSON.parse(r.value) : r.value;
+    if (Number.isInteger(id) && v?.enabled) enabled.add(id);
+  }
+  return rows.map((u) => ({ ...publicUser(u), twoFaEnabled: enabled.has(u.id) }));
 }
 
 export async function createUser(

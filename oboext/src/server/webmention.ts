@@ -21,6 +21,7 @@ import { createPublicComment } from "./admin.js";
 import { getPermalinkConfig, postUrlFor, resolveSitePath } from "./links.js";
 import { splitLocalePath } from "./i18n.js";
 import { resolveOrigin } from "./site-origin.js";
+import { clientIp } from "./auth.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("webmention");
@@ -566,12 +567,6 @@ const receiveHits = new Map<string, number[]>();
 const MAX_ACTIVE = 4;
 let activeJobs = 0;
 
-/** Test seam / warm-up: drop the rate-limit window and the in-flight counter. */
-export function resetReceiveState(): void {
-  receiveHits.clear();
-  activeJobs = 0;
-}
-
 export function allowReceive(ip: string): boolean {
   // No address (a bare unit-test Request, a proxy without forwarding headers)
   // is not rate-limited: an empty key would put every anonymous caller in one
@@ -733,8 +728,7 @@ export async function handleReceiveRequest(
     return textResponse(400, "source and target are the same URL");
   }
 
-  const ip = (request.headers.get("x-forwarded-for") || "").split(",")[0]!.trim() ||
-    (request.headers.get("x-real-ip") || "").trim();
+  const ip = clientIp(request) || "";
   if (!allowReceive(ip)) return textResponse(429, "too many webmentions; retry later");
 
   let id: number | null = null;

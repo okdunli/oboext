@@ -33,14 +33,6 @@ node_modules/
 # local scratch: dev-server logs, one-off probe *.log
 tmp/
 .vfy/
-# diagnostic scratch dir (HTML snapshots, throwaway probe scripts, temp dbs)
-.probe/
-
-# ============================================================
-# dev / test only — NEVER part of the user-facing program.
-# Kept on disk locally (so `npm test` still works), excluded
-# from the GitHub upload so the repo ships a clean program.
-# ============================================================
 
 # test infrastructure — 100% developer-side; the build / deploy /
 # runtime never import these. Unit tests + smoke live in scripts/,

@@ -1,0 +1,32 @@
+name: CI
+
+# The gates a local machine may not have: npm install -> regenerate the
+# build-time entry tables (tools/gen.mjs writes the gitignored
+# plugin-entries.ts / theme-entries.ts that tsc imports) -> typecheck -> the
+# full app build -> the Go single-binary compile (the embed needs dist/, so
+# the build step is what turns `pattern all:dist: no matching files found`
+# into a green run) -> the publish tarball still packs. The test suite in
+# scripts/ never ships to git on purpose, so it is not run here.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run gen
+      - run: npx tsc --noEmit
+      - run: npm run build
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: npm run build:go
+      - run: npm pack --dry-run

@@ -29,6 +29,7 @@
  */
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { apiMsg } from "./api-msg.mjs";
 
 const SERVER_DIR = path
   .resolve(path.dirname(fileURLToPath(import.meta.url)), "src", "server")
@@ -72,18 +73,18 @@ function __rvLoad(key, payload) {
 // code is super-admin trusted, so script-src allows 'unsafe-inline' on the
 // public site; the hash-token policy never covered an emitted script anyway
 // (every route is csr=false, so the framework ships no inline bundle).
-// Admin pages ship NO plugin HTML and only external /public/admin.js, so
-// they keep a strict policy — but WITHOUT overriding script-src entirely:
-// R244's realtime wiring made /admin, /admin/dashboard and /admin/comments
-// client-JS routes (a $store(...) subscription + refresh()), and the split
-// bundle boots them from an INLINE <script type="module"> bootstrap. A
-// route-declared script-src overrides the framework's hash policy wholesale
-// (pageHeaders merge is last-write-wins), which would reject that bootstrap
-// and silently kill the whole client bundle on those pages. So admin pages
-// omit script-src from their header export and let the framework's
-// 'sha256-<bootstrap>' policy stand; every other directive stays app-owned.
-// The three pages load no external scripts beyond 'self', so the framework
-// default is exactly the strictness the old override wanted to keep.
+// Admin pages ship the same shape: external /public/*.js plus — on the
+// client-JS routes (editors force csr=true; R244's realtime wiring made
+// /admin, /admin/dashboard and /admin/comments interactive) — an INLINE
+// module bootstrap the framework's build-time hash cannot cover from a
+// route-declared header (the pageHeaders merge is last-write-wins per
+// HEADER, so a route CSP replaces the framework's hash policy wholesale —
+// the old comment claimed the hash policy would "stand" for admin pages
+// that omit script-src; measured against dist/headers.json it does not:
+// the served admin CSP had no script-src and no default-src, i.e. scripts
+// were unrestricted from ANY host). Declaring script-src 'self'
+// 'unsafe-inline' explicitly is the honest strictness: external scripts
+// only from the app itself, inline only what the build emitted.
 const SCRIPT_HOSTS =
   "https://giscus.app https://utteranc.es https://cdn.jsdelivr.net https://*.disqus.com";
 const CSP_COMMON =
@@ -91,18 +92,19 @@ const CSP_COMMON =
   "img-src 'self' data: https://picsum.photos https://fastly.picsum.photos https://www.gravatar.com https://cn.gravatar.com https://cravatar.cn https://weavatar.com https://seccdn.libravatar.org https://q1.qlogo.cn https://*.disquscdn.com; " +
   "font-src 'self' data:; connect-src 'self' https:; frame-src https://giscus.app https://*.disqus.com; " +
   "form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'";
-const cspHeadersFor = (admin) =>
-  admin
-    ? `export const headers = {
-  "Content-Security-Policy": ${JSON.stringify(CSP_COMMON)},
-};
-`
-    : `export const headers = {
+const cspHeadersFor = () => {
+  const extra = `  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "geolocation=(), microphone=(), camera=(), payment=()",
+`;
+  return `export const headers = {
   "Content-Security-Policy":
     "script-src 'self' 'unsafe-inline' ${SCRIPT_HOSTS}; " +
     ${JSON.stringify(CSP_COMMON)},
-};
+${extra}};
 `;
+};
 
 const SCRIPT_RE = /<script\b[^>]*>([\s\S]*?)<\/script>/i;
 
@@ -114,6 +116,46 @@ function isServerOnly(filePath) {
 export default [
   {
     name: "oboext",
+    // Runtime: API error bodies are written in Chinese at every call site
+    // (the strings double as stable ids), so the English rendering happens
+    // here at the response edge - one place, no translator threaded through
+    // 46 route files. Only non-GET JSON bodies with a top-level `error`
+    // string are rewritten; other bodies are replayed byte-for-byte.
+    onResponse(ctx, res) {
+      try {
+        // The full-comment view (?comments=all) duplicates its post: keep it
+        // out of the index with the header Google honors, no template churn.
+        if ((res.headers.get("content-type") || "").includes("text/html")) {
+          const q = new URL(ctx.url, "http://x").searchParams;
+          if (q.get("comments") === "all") {
+            const h = new Headers(res.headers);
+            h.set("x-robots-tag", "noindex, follow");
+            return new Response(res.body, { status: res.status, headers: h });
+          }
+        }
+        const m = ctx.method;
+        if (m === "GET" || m === "HEAD") return res;
+        if (!(res.headers.get("content-type") || "").includes("application/json")) return res;
+        return res.text().then((text) => {
+          try {
+            const j = JSON.parse(text);
+            if (j && typeof j === "object" && !Array.isArray(j) && typeof j.error === "string" && j.error) {
+              j.error = apiMsg(j.error, ctx);
+              return new Response(JSON.stringify(j), {
+                status: res.status,
+                headers: res.headers,
+              });
+            }
+          } catch {
+            /* not a plain error envelope - keep the bytes we just read */
+          }
+          // res.text() consumed the body; the runtime reads it again to send.
+          return new Response(text, { status: res.status, headers: res.headers });
+        });
+      } catch {
+        return res;
+      }
+    },
     transform(code, filePath) {
       // 3. @server/* -> absolute source path (server-only modules)
       code = code.replace(/@server\/([a-z0-9-]+)/g, (_, name) => `${SERVER_DIR}/${name}.js`);
@@ -124,7 +166,7 @@ export default [
       const m = code.match(SCRIPT_RE);
       if (!m) return code;
       const body = m[1];
-      const cspHeaders = cspHeadersFor(filePath.replace(/\\/g, "/").includes("/pages/admin/"));
+      const cspHeaders = cspHeadersFor();
       const injected = `${PREAMBLE}\n${cspHeaders}\n${body}`;
       // Functional replacement, NOT a replacement string: `injected` carries
       // the page's own script verbatim, and a replacement STRING expands

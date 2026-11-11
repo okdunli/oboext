@@ -643,8 +643,6 @@
 .dfm-list .df-menu-link.is-current { background: var(--df-tint-strong); }
 
 .df-menu-list-foot { font-size: .8125rem; }
-.df-menu-list-foot .df-menu-link { color: var(--muted); }
-.df-menu-list-foot .df-menu-link:hover { color: var(--text); }
 
 /* The nested list, when a menu item has children. */
 .df-menu-sub {
@@ -691,5 +689,472 @@
   .df-menu-ic {
     transition-duration: .01ms !important;
     animation-duration: .01ms !important;
+  }
+}
+/* Code copy: the button sits in the block's top-right corner. Hidden until
+   hover/focus on pointers, always visible on touch (no hover to reveal it). */
+pre[data-lang].has-copy { position: relative; }
+pre[data-lang] .code-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 3px 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted, #9aa3b2);
+  background: var(--surface, #161922);
+  border: 1px solid var(--border, #262b36);
+  border-radius: 7px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s ease, color .15s ease, border-color .15s ease;
+}
+pre[data-lang]:hover .code-copy,
+pre[data-lang] .code-copy:focus-visible { opacity: 1; }
+pre[data-lang] .code-copy:hover { color: var(--text, #e8eaf0); border-color: var(--accent, #7c8cff); }
+pre[data-lang] .code-copy.is-done { color: var(--accent, #7c8cff); border-color: var(--accent, #7c8cff); }
+@media (hover: none) { pre[data-lang] .code-copy { opacity: 1; } }
+
+/* Guest comment captcha (opt-in by env): drawn svg on the left, answer on the
+   right; clicking the drawing swaps it for a fresh challenge. */
+.comment-captcha { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.comment-captcha .comment-captcha-svg { display: inline-flex; min-width: 120px; min-height: 44px; cursor: pointer; border-radius: 8px; overflow: hidden; background: #eef2f7; }
+.comment-captcha .comment-captcha-svg:empty { display: none; }
+.comment-captcha .comment-field { max-width: 140px; }
+
+/* Post like: the heart fills when the visitor has liked; the count follows. */
+.df-like-btn.is-liked { color: var(--accent, #7c8cff); border-color: var(--accent, #7c8cff); }
+.df-like-btn.is-liked svg { fill: currentColor; }
+
+/* Comment cap note: the list stops at the newest 200, and the page says so. */
+.sf-comment-cap { margin: 14px 0 0; font-size: 13px; color: var(--muted, #9aa3b2); }
+
+/* ------------------------------------------------------------------ */
+/* Comment list — visual styling for the builtin comment section.     */
+/* The HTML uses Tailwind utility classes for layout; the theme owns   */
+/* the visual identity (colors, spacing, borders, typography).        */
+/* ------------------------------------------------------------------ */
+
+.comment-list,
+.comment-list ol {
+  list-style: none;
+  margin: 1.25rem 0 0;
+  padding: 0;
+}
+
+/* Each top-level comment is a card - the same surface/border/radius language
+   as every other block on the page (related posts, sidebar, the form itself),
+   not a bare hairline row. */
+.comment-list > li {
+  padding: 1rem 1.125rem;
+  margin-bottom: .75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.comment-list > li:last-child {
+  margin-bottom: 0;
+}
+
+/* Nested replies keep the thread line but float inside the parent card. */
+.comment-list .comment-list {
+  margin-top: .75rem;
+  padding-left: .875rem;
+  border-left: 2px solid var(--border);
+}
+
+.comment-list .comment-list > li {
+  border: none;
+  background: none;
+  padding: .625rem 0 .25rem;
+  margin-bottom: .25rem;
+}
+
+.comment-list .comment-list > li:last-child {
+  margin-bottom: 0;
+}
+
+.comment-list .wrapper {
+  display: flex;
+  gap: .75rem;
+  align-items: flex-start;
+}
+
+.comment-list .avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  position: relative;
+}
+
+.comment-list .avatar .highlight {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.comment-list .info {
+  gap: .5rem;
+}
+
+.comment-list .info + span,
+.comment-list .info ~ span {
+  margin-left: .25rem;
+}
+
+.comment-list .name {
+  font-weight: 600;
+  font-size: .875rem;
+  color: var(--text);
+}
+
+.comment-list .name span {
+  color: var(--text);
+}
+
+.comment-list .date {
+  font-size: .75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.comment-list .content {
+  margin-top: .375rem;
+  font-size: .875rem;
+  line-height: 1.6;
+  color: var(--text);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.comment-list .reply {
+  cursor: pointer;
+  color: var(--muted);
+  transition: color .15s ease;
+}
+
+.comment-list .reply:hover {
+  color: var(--accent);
+}
+
+.comment-list .sf-clike {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------ */
+/* Comment form — one card in the theme's surface language.      */
+/* ------------------------------------------------------------ */
+
+[data-comment-form] {
+  margin-top: 1.5rem;
+  padding: 1.25rem 1.25rem 1.125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* The program baseline wraps the textarea in .comment-form .input and gives it
+   its own border + background; the theme owns the card, so flatten the wrapper. */
+[data-comment-form] .input {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+
+/* Signed-in identity row: avatar chip + name/email, divided from the
+   editor below. Without this the row rendered as bare text. */
+[data-comment-form] .sf-comment-me {
+  display: flex;
+  align-items: center;
+  gap: .625rem;
+  padding-bottom: .875rem;
+  margin-bottom: .875rem;
+  border-bottom: 1px solid var(--border);
+}
+
+[data-comment-form] .sf-comment-me-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: .8125rem;
+  font-weight: 700;
+}
+
+[data-comment-form] .sf-comment-me-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+[data-comment-form] .sf-comment-me-name {
+  font-size: .8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+[data-comment-form] .sf-comment-me-email {
+  font-size: .75rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-comment-form] .guest-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .625rem;
+  margin-bottom: .625rem;
+}
+
+[data-comment-form] .guest-info .item {
+  position: relative;
+  flex: 1;
+  min-width: 140px;
+}
+
+[data-comment-form] .guest-info .item i {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+[data-comment-form] .comment-field {
+  width: 100%;
+  padding: .5625rem .75rem;
+  padding-right: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: .875rem;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+[data-comment-form] .comment-field:focus,
+[data-comment-form] textarea[name="content"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+[data-comment-form] .comment-field::placeholder,
+[data-comment-form] textarea[name="content"]::placeholder {
+  color: var(--muted);
+}
+
+[data-comment-form] textarea[name="content"] {
+  width: 100%;
+  min-height: 96px;
+  padding: .6875rem .8125rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: .875rem;
+  line-height: 1.65;
+  resize: vertical;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+[data-comment-form] .sf-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .625rem;
+  margin-top: .625rem;
+}
+
+/* The emoji trigger is a real ghost button, not a bare glyph. */
+[data-comment-form] .funcs {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+[data-comment-form] .funcs [data-comment-emoji] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease;
+}
+
+[data-comment-form] .funcs [data-comment-emoji]:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+[data-comment-form] .form-actions {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+/* Action buttons share the site's pill language (menu CTA, tag chips). */
+[data-comment-form] .btn-submit,
+[data-comment-form] .cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: .375rem;
+  padding: .5rem 1.125rem;
+  border-radius: 999px;
+  font-size: .8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter .15s ease, color .15s ease, border-color .15s ease;
+}
+
+[data-comment-form] .btn-submit {
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+[data-comment-form] .btn-submit:hover {
+  filter: brightness(1.08);
+}
+
+[data-comment-form] .btn-submit:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+[data-comment-form] .cancel {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+}
+
+[data-comment-form] .cancel:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+/* Empty / closed comment state — matches the site's standard empty box. */
+.sf-comment-close {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  font-size: .875rem;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+[data-comment-form] [data-comment-notice] {
+  margin-top: .5rem;
+  font-size: .8125rem;
+  padding: .5rem .75rem;
+  border-radius: 10px;
+}
+
+/* The reply-mode form is the same box but with a smaller indent. */
+[data-comment-form][data-reply-mode] {
+  margin-left: 1rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Search: page hits — the same card language as the post results      */
+/* rendered by the list page right below them.                         */
+/* ------------------------------------------------------------------ */
+
+.sk-page-hits {
+  margin: 0 0 24px;
+}
+
+.sk-page-hits h2 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sk-page-hits ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.sk-page-hits li {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  transition: border-color .15s ease;
+}
+
+.sk-page-hits li:hover {
+  border-color: var(--accent);
+}
+
+.sk-page-hits li a {
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.sk-page-hits li a:hover {
+  color: var(--accent);
+}
+
+.sk-page-hits .hit-excerpt {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ===========================================================================
+   Reduced motion — the global backstop. The theme animates transforms,
+   shadows and background positions in ~33 places; the per-feature guard
+   above covers only the aside/card/search trio. Users who ask the OS for
+   reduced motion get every transition and keyframe flattened to an
+   instant, which also flattens the View Transition cross-fade the
+   framework's SPA navigation paints (BUG.md: two of the framework's three
+   startViewTransition sites skip the check — this is the Oboext-side
+   mitigation until that is fixed).
+   =========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

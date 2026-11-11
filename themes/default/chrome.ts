@@ -10,9 +10,10 @@ import {
   dfSearchIcon,
   esc,
   fmtDate,
+  siteYear,
+  isoDateAttr,
   lucideSvg,
   makeT,
-  themeCssContent,
   themeCssHref,
   tr,
 } from "../../oboext/src/server/theme-api.js";
@@ -160,11 +161,11 @@ function defaultMenuUl(
       const kids = it.children?.length
         ? `<ul class="df-menu-sub">` +
           (it.children || [])
-            .map((c) => `<li>${link(c, "hover:text-white")}</li>`)
+            .map((c) => `<li>${link(c, "hover:text-[var(--accent)]")}</li>`)
             .join("") +
           `</ul>`
         : "";
-      return `<li class="group relative">${link(it, "hover:text-white")}${kids}</li>`;
+      return `<li class="group relative">${link(it, "hover:text-[var(--accent)]")}${kids}</li>`;
     })
     .join("");
   return `<ul class="${cls}">${lis}</ul>`;
@@ -172,7 +173,7 @@ function defaultMenuUl(
 function defaultNav(settings: Record<string, any>, items: MenuItem[]): string {
   const title = esc(settings.siteTitle ?? "");
   const T: Translate = (k, v) => tr(settings, k, v);
-  const headingClass = "text-zinc-100";
+  const headingClass = "text-[var(--text)]";
   const brandLink =
     settings.logoUrl
       ? `<img src="${esc(settings.logoUrl)}" alt="${title}" class="h-7 w-auto">`
@@ -214,14 +215,16 @@ function defaultNav(settings: Record<string, any>, items: MenuItem[]): string {
     // absolutely-positioned overlay: absolute positioning depended on a
     // `relative` wrapper plus a pl-9 pad, and any ancestor that failed to
     // establish the containing block let the icon escape the field.
-    // The <kbd> advertises the "/" shortcut that theme-default.js binds, so the
+    // The <kbd> advertises the "/" shortcut that pjax.js (the theme runtime) binds, so the
     // affordance is visible before the visitor presses anything.
     searchField("df-suggest-header", T("search.placeholder_short"), T("search.aria"), "df-search-form") +
     mobileMenu +
     `</div></header>`;
 }
 function defaultFooter(settings: Record<string, any>, widgetsHtml: string): string {
-  const year = new Date().getFullYear();
+  // R533: the copyright year is the SITE's year - in the last hour of New
+  // Year's Eve the server's year and the site's year can differ.
+  const year = siteYear();
   const copy = esc(settings.footerText || `© ${year} ${settings.siteTitle}`);
   const menu = defaultMenuUl(
     (settings.footerMenu as MenuItem[]) || [],
@@ -275,7 +278,7 @@ function defaultPostCard(p: PostView, idx: number, t?: Translate): string {
     (p.excerpt ? `<p class="mt-2 line-clamp-3 flex-1 text-sm text-[var(--muted)]">${esc(p.excerpt)}</p>` : "") +
     `<div class="mt-4 flex flex-wrap items-center gap-3 text-xs text-[var(--muted)]">` +
     `<span class="df-meta-item">${lucideSvg("user", 13)}${author}</span>` +
-    `<span class="df-meta-item">${lucideSvg("calendar", 13)}${fmtDate(p.publishedAt)}</span>` +
+    `<span class="df-meta-item">${lucideSvg("calendar", 13)}<time itemprop="datePublished"${R.isoDateAttr(p.publishedAt)}>${fmtDate(p.publishedAt)}</time></span>` +
     comments +
     `</div></div></article>`;
 }
@@ -454,8 +457,8 @@ function defaultPager(page: number, totalPages: number, hrefFor: (p: number) => 
   const cell = (p: number) => {
     const active = p === page;
     return `<a href="${esc(hrefFor(p))}"${active ? ' aria-current="page"' : ""} class="min-w-9 rounded-lg border px-3 py-2 text-center text-sm transition ${active
-      ? "border-[var(--accent)] bg-[var(--accent)] text-white"
-      : "border-[var(--border)] text-zinc-300 hover:border-[var(--accent)] hover:text-[var(--accent)]"}">${p}</a>`;
+      ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-text,#fff)]"
+      : "border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"}">${p}</a>`;
   };
   const edge = (label: string, icon: string, p: number) =>
     `<a href="${esc(hrefFor(p))}" class="df-page-edge">${icon}${label}</a>`;
@@ -463,11 +466,11 @@ function defaultPager(page: number, totalPages: number, hrefFor: (p: number) => 
   if (page > 1) out += edge(L("pager.prev"), lucideSvg("chevron-left", 15), page - 1);
   if (start > 1) {
     out += cell(1);
-    if (start > 2) out += `<span class="px-1 text-zinc-500">…</span>`;
+    if (start > 2) out += `<span class="px-1 text-[var(--muted)]">…</span>`;
   }
   out += pages.map(cell).join("");
   if (end < totalPages) {
-    if (end < totalPages - 1) out += `<span class="px-1 text-zinc-500">…</span>`;
+    if (end < totalPages - 1) out += `<span class="px-1 text-[var(--muted)]">…</span>`;
     out += cell(totalPages);
   }
   if (page < totalPages) out += edge(L("pager.next"), lucideSvg("chevron-right", 15), page + 1);
@@ -481,12 +484,30 @@ function defaultBreadcrumb(items: { label: string; href?: string }[], t?: Transl
       const last = i === items.length - 1;
       const inner = c.href && !last
         ? `<a href="${esc(c.href)}" class="transition hover:text-[var(--accent)]">${esc(c.label)}</a>`
-        : `<span class="${last ? "text-zinc-300" : ""}">${esc(c.label)}</span>`;
-      return `<span class="df-meta-item">${inner}${last ? "" : lucideSvg("chevron-right", 12, "text-zinc-600")}</span>`;
+        : `<span class="${last ? "text-[var(--muted)]" : ""}">${esc(c.label)}</span>`;
+      return `<span class="df-meta-item">${inner}${last ? "" : lucideSvg("chevron-right", 12, "text-[var(--muted)]")}</span>`;
     })
     .join("");
   const aria = (t ?? makeT(DEFAULT_LOCALE))("crumb.aria");
-  return `<nav aria-label="${aria}" class="flex flex-wrap items-center gap-1 text-xs text-zinc-500">${spans}</nav>`;
+  // R537: the visible trail IS the BreadcrumbList — each crumb carries
+  // BreadcrumbList microdata so it agrees with the JSON-LD node of the same
+  // name (postHead for posts, the list view for listings). Crawlers read
+  // either shape and land on the same trail.
+  const parts = items
+    .map((c, i) => {
+      const last = i === items.length - 1;
+      const scope = ` itemscope itemtype="https://schema.org/BreadcrumbList"`;
+      const itemScope = ` itemscope itemtype="https://schema.org/ListItem"`;
+      const pos = `<meta itemprop="position" content="${i + 1}">`;
+      const name = `<span itemprop="name">${esc(c.label)}</span>`;
+      const inner =
+        c.href && !last
+          ? `<a itemprop="item" href="${esc(c.href)}" class="transition hover:text-[var(--accent)]">${name}</a>${pos}`
+          : `${name}${pos}`;
+      return `<span class="df-meta-item"${scope}><span${itemScope}>${inner}</span></span>`;
+    })
+    .join("");
+  return `<nav aria-label="${aria}" class="flex flex-wrap items-center gap-1 text-xs text-[var(--muted)]">${parts}</nav>`;
 }
 function defaultListPage(parts: ListParts): string {
   const T: Translate = (k, v) => tr(parts.settings, k, v);
@@ -495,11 +516,13 @@ function defaultListPage(parts: ListParts): string {
   const isBlog = parts.variant === "blog";
   const isCategory = parts.variant === "category";
   const isSearch = parts.variant === "search";
-  const isTerm = !isBlog && !isCategory && !isSearch;
+  const isAuthor = parts.variant === "author";
+  const isTerm = !isBlog && !isCategory && !isSearch && !isAuthor;
   const iconHtml = parts.titleIcon ? lucideSvg(parts.titleIcon, parts.variant === "search" ? 26 : 22, dfIconAccent()) : "";
   const crumbItems: { label: string; href?: string }[] = [{ label: T("crumb.home"), href: "/" }];
   if (isCategory) crumbItems.push({ label: T("crumb.category") });
   else if (isSearch) crumbItems.push({ label: T("crumb.search") });
+  else if (isAuthor) crumbItems.push({ label: T("crumb.author") });
   else if (isTerm) crumbItems.push({ label: T("crumb.tag") });
   else if (!isBlog) crumbItems.push({ label: T("crumb.page") });
   if (isSearch && (parts.query ?? "").trim()) {
@@ -510,20 +533,20 @@ function defaultListPage(parts: ListParts): string {
   const backLink =
     `<div class="mb-6">` +
     defaultBreadcrumb(crumbItems, T) +
-    `<h1 class="mt-2${isTerm ? "" : " flex items-center gap-2"} text-3xl font-bold text-zinc-100">` +
+    `<h1 class="mt-2${isTerm ? "" : " flex items-center gap-2"} text-3xl font-bold text-[var(--text)]">` +
     (isTerm ? "" : iconHtml) +
     esc(parts.title) +
     `</h1>` +
     (parts.titleDesc
-      ? `<p class="mt-2 text-sm text-zinc-400">${esc(parts.titleDesc)}</p>`
+      ? `<p class="mt-2 text-sm text-[var(--muted)]">${esc(parts.titleDesc)}</p>`
       : parts.sub
-        ? `<p class="mt-2 text-sm text-zinc-400">${esc(parts.sub)}</p>`
+        ? `<p class="mt-2 text-sm text-[var(--muted)]">${esc(parts.sub)}</p>`
         : "") +
     `</div>`;
   const headHtml = isBlog
     ? defaultBreadcrumb([{ label: T("crumb.home"), href: "/" }, { label: T("crumb.posts") }], T) +
       `<header class="mb-6 mt-3">` +
-      `<h1 class="text-3xl font-bold text-zinc-100">${esc(parts.title)}</h1>` +
+      `<h1 class="text-3xl font-bold text-[var(--text)]">${esc(parts.title)}</h1>` +
       (parts.sub ? `<p class="mt-1 text-sm text-[var(--muted)]">${esc(parts.sub)}</p>` : "") +
       `</header>`
     : backLink;
@@ -534,14 +557,16 @@ function defaultListPage(parts: ListParts): string {
     ? T("empty.category")
     : isSearch
       ? T("empty.search")
-      : isTerm
-        ? T("empty.tag")
-        : T("empty.posts");
+      : isAuthor
+        ? T("empty.author")
+        : isTerm
+          ? T("empty.tag")
+          : T("empty.posts");
   const listHtml = cards
     ? `<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">${cards}</div>`
     : isSearch && !(parts.query ?? "").trim()
       ? `<div class="grid grid-cols-1 gap-6 sm:grid-cols-2"></div>`
-      : `<p class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center text-zinc-400">${esc(emptyText)}</p>`;
+      : `<p class="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 text-center text-[var(--muted)]">${esc(emptyText)}</p>`;
   return `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><div>` +
     headHtml +
     (parts.extra || "") +
@@ -564,7 +589,12 @@ function defaultListPage(parts: ListParts): string {
  * `<head>` and therefore survives every swap. That file already documents this
  * class of bug; this entry is the second consumer of the same rule.
  */
-function defaultShareButtons(title: string, url: string, t?: Translate): string {
+function defaultShareButtons(
+  title: string,
+  url: string,
+  t?: Translate,
+  like?: { id: number; likes: number; liked: boolean },
+): string {
   const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
   // https, not http: on an HTTPS site an http:// share link is mixed content,
   // so the browser either blocks it or first loads it over plaintext, leaking
@@ -587,6 +617,13 @@ function defaultShareButtons(title: string, url: string, t?: Translate): string 
     // worth shipping an icon file for.
     `<a href="${esc(x)}" target="_blank" rel="noopener noreferrer" class="${btn}" aria-label="${L("post.x_aria")}">X</a>` +
     `<a href="${esc(mail)}" class="${btn}">${lucideSvg("mail", 13)}${L("post.email")}</a>` +
+    // The like API existed with no button anywhere in the default theme: the
+    // counts rendered, the endpoint answered, and nothing could call it.
+    (like
+      ? `<button type="button" data-post-like="${like.id}" aria-pressed="${like.liked ? "true" : "false"}"` +
+        ` title="${L("post.likes_tip")}" class="${btn} df-like-btn${like.liked ? " is-liked" : ""}">` +
+        `${lucideSvg("heart", 13)}<span data-like-count>${like.likes}</span></button>`
+      : "") +
     `</div>`;
 }
 /**
@@ -605,12 +642,24 @@ function defaultRelatedSection(posts: PostView[], t?: Translate): string {
   if (!posts.length) return "";
   const cards = posts.map((p) =>
     `<a href="${esc(p.url)}" class="group rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 transition hover:border-[var(--accent)]">` +
-    `<h3 class="line-clamp-2 font-medium text-zinc-100 transition group-hover:text-[var(--accent)]">${esc(p.title)}</h3>` +
+    `<h3 class="line-clamp-2 font-medium text-[var(--text)] transition group-hover:text-[var(--accent)]">${esc(p.title)}</h3>` +
     (p.publishedAt ? `<p class="mt-2 text-xs text-[var(--muted)]">${fmtDate(p.publishedAt)}</p>` : "") +
     `</a>`).join("");
   return `<section class="mt-10">` +
-    `<h2 class="mb-4 flex items-center gap-2 text-lg font-bold text-zinc-100">${lucideSvg("folder-open", 18, dfIconAccent())}${L("post.related")}</h2>` +
+    `<h2 class="mb-4 flex items-center gap-2 text-lg font-bold text-[var(--text)]">${lucideSvg("folder-open", 18, dfIconAccent())}${L("post.related")}</h2>` +
     `<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">${cards}</div></section>`;
+}
+
+// Same section heading + framing as related posts, so the comment area reads as
+// a first-class block instead of a bare form dropped under the article. The
+// shared renderer only emits the form/list/closed markup; the default theme
+// owns the heading and the container.
+function defaultCommentsSection(html: string, t?: Translate): string {
+  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
+  return `<section class="mt-10">` +
+    `<h2 class="mb-4 flex items-center gap-2 text-lg font-bold text-[var(--text)]">${lucideSvg("message-square", 18, dfIconAccent())}${L("comments.title")}</h2>` +
+    html +
+    `</section>`;
 }
 function defaultPostPage(parts: PostPageParts): string {
   const T: Translate = (k, v) => tr(parts.settings, k, v);
@@ -633,8 +682,17 @@ function defaultPostPage(parts: PostPageParts): string {
   const tocItems = [...parts.bodyHtml.matchAll(/<h([23])[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/h\1>/g)]
     .map((m) => ({ level: Number(m[1]), id: m[2], text: m[3].replace(/<[^>]*>/g, "").trim() }))
     .filter((h) => h.text);
+  // "Updated" earns its place only when the edit is a day or more after the
+  // publish date: every save bumps updatedAt, and a badge on a post published
+  // minutes ago reads as noise.
+  const updatedMs = p.updatedAt ? new Date(p.updatedAt).getTime() : NaN;
+  const publishedMs = p.publishedAt ? new Date(p.publishedAt).getTime() : NaN;
+  const showUpdated =
+    Number.isFinite(updatedMs) &&
+    Number.isFinite(publishedMs) &&
+    updatedMs - publishedMs > 24 * 3600 * 1000;
   const tocHtml =
-    tocItems.length >= 2
+    tocItems.length >= 1
       ? `<details class="df-toc mb-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-5 py-4">` +
         `<summary class="cursor-pointer text-sm font-semibold text-[var(--text)]">${T("post.toc")}</summary>` +
         `<ul class="mt-3 space-y-1.5 text-sm">` +
@@ -646,7 +704,10 @@ function defaultPostPage(parts: PostPageParts): string {
           .join("") +
         `</ul></details>`
       : "";
-  return `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><article id="post-body">` +
+  // R536: the article declares itself a schema.org BlogPosting in microdata,
+  // so the visible meta line below carries the same facts the JSON-LD
+  // (postHead / seo-schema) publishes - crawlers read either shape.
+  return `<div class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_300px]"><article id="post-body" itemscope itemtype="https://schema.org/BlogPosting">` +
     `<header class="mb-6">` +
     // No "back to home" link above the title. The header already carries the
     // site brand as a link to "/", so this was a second control to the same
@@ -656,19 +717,24 @@ function defaultPostPage(parts: PostPageParts): string {
     `<h1 class="text-3xl font-bold leading-tight text-[var(--text)]">${esc(p.title)}</h1>` +
     `<div class="mt-3 flex flex-wrap items-center gap-4 text-sm text-[var(--muted)]">` +
     `<span class="df-meta-item">${lucideSvg("user", 14)}${author}</span>` +
-    `<span class="df-meta-item">${lucideSvg("calendar", 14)}${fmtDate(p.publishedAt)}</span>` +
+    `<span class="df-meta-item">${lucideSvg("calendar", 14)}<time itemprop="datePublished"${R.isoDateAttr(p.publishedAt)}>${fmtDate(p.publishedAt)}</time></span>` +
     `<span class="df-meta-item" data-views-post="${p.id}">${lucideSvg("eye", 14)}<span data-views-count>${p.views}</span>${T("post.reads")}</span>` +
-    (p.commentsCount > 0 ? `<span class="df-meta-item">${lucideSvg("message-circle", 14)}${T("post.comments", { n: p.commentsCount })}</span>` : "") +
+    (p.commentsCount > 0 ? `<a href="#comments" class="df-meta-item" style="color:var(--muted);text-decoration:none">${lucideSvg("message-circle", 14)}${T("post.comments", { n: p.commentsCount })}</a>` : "") +
+    (showUpdated ? `<span class="df-meta-item">${lucideSvg("clock", 14)}${T("post.updated", { date: fmtDate(p.updatedAt) })}<meta itemprop="dateModified" content="${esc(p.updatedAt.toISOString())}"></span>` : "") +
     `</div>${meta}</header>` +
     (p.featuredImage ? `<img src="${esc(p.featuredImage)}" alt="${esc(p.title)}" class="mb-6 w-full rounded-2xl border border-[var(--border)] object-cover"${R.imgPerfAttrs(p.featuredImage, { high: true, srcset: true, sizes: R.IMG_SIZES_BODY })}>` : "") +
     tocHtml +
-    `<div class="prose-cms">${parts.bodyHtml}</div>` +
+    `<div class="prose-cms post-content">${parts.bodyHtml}</div>` +
     (tags || "") +
     (parts.pairLink || "") +
-    defaultShareButtons(p.title, parts.canonical || p.url, T) +
+    defaultShareButtons(p.title, parts.canonical || p.url, T, {
+      id: p.id,
+      likes: p.likes ?? 0,
+      liked: p.liked === true,
+    }) +
     defaultRelatedSection(parts.relatedTaxonomy || [], T) +
     (parts.postBottom || "") +
-    parts.commentsHtml +
+    defaultCommentsSection(parts.commentsHtml, T) +
     (parts.adjacentHtml || "") +
     `</article>` +
     `<div class="space-y-6">` +
@@ -679,20 +745,19 @@ function defaultPostPage(parts: PostPageParts): string {
     `</div></div>`;
 }
 function defaultPagePage(parts: PagePageParts): string {
+  const T: Translate = (k, v) => tr(parts.settings, k, v);
   const p = parts.page;
   return `<div class="mx-auto max-w-3xl"><article>` +
     `<h1 class="text-3xl font-bold leading-tight text-[var(--text)]">${esc(p.title)}</h1>` +
-    `<div class="prose-cms mt-8">${parts.bodyHtml}</div>` +
-    `</article>${parts.commentsHtml}</div>`;
+    `<div class="prose-cms post-content mt-8">${parts.bodyHtml}</div>` +
+    `</article>${defaultCommentsSection(parts.commentsHtml, T)}</div>`;
 }
 export const chrome: ThemeChrome = {
   slug: "default",
   cssHref: () => themeCssHref("default"),
-  // Inlined; see ThemeChrome.cssInline. This is the theme the measurement was
-  // taken on, and it is also the one whose CSS is assembled from three sources
-  // (the shared form baseline, the body utilities and two files) - so a single
-  // <link> was the only way to ship it, and the only thing on the critical path.
-  cssInline: () => themeCssContent("default"),
+  // Linked, not inlined: /theme-style/default?v=<hash> is served immutable for
+  // a year, so a reader who opens a second post reuses the bytes instead of
+  // re-downloading the whole stylesheet inside every document.
   bodyFix: () => defaultBodyFix,
   headExtra: () => "",
   nav: (settings, items) => defaultNav(settings, items),

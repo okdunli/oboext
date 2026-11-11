@@ -2,9 +2,11 @@
   "name": "Oboext Default",
   "slug": "default",
   "public": true,
-  "publicScripts": ["pjax.js"],
+  "publicScripts": [
+    "pjax.js"
+  ],
   "description": "Default blog theme with elegant typography",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "Oboext",
   "isDefault": true,
   "config": {
@@ -30,12 +32,30 @@
             "type": "select",
             "default": "indigo",
             "options": [
-              { "value": "indigo", "label": "靛蓝夜色（默认）" },
-              { "value": "thyuu", "label": "星度 · 暖金深空" },
-              { "value": "samsara", "label": "萨姆萨拉 · 玻璃金" },
-              { "value": "writer", "label": "写作者 · 暖纸白" },
-              { "value": "somnia", "label": "索姆尼亚 · 近白珊瑚" },
-              { "value": "vapor", "label": "蒸气 · 冷灰蓝" }
+              {
+                "value": "indigo",
+                "label": "靛蓝夜色（默认）"
+              },
+              {
+                "value": "thyuu",
+                "label": "星度 · 暖金深空"
+              },
+              {
+                "value": "samsara",
+                "label": "萨姆萨拉 · 玻璃金"
+              },
+              {
+                "value": "writer",
+                "label": "写作者 · 暖纸白"
+              },
+              {
+                "value": "somnia",
+                "label": "索姆尼亚 · 近白珊瑚"
+              },
+              {
+                "value": "vapor",
+                "label": "蒸气 · 冷灰蓝"
+              }
             ],
             "help": "深色：靛蓝夜色 / 星度 / 萨姆萨拉；浅色：写作者 / 索姆尼亚 / 蒸气。"
           },

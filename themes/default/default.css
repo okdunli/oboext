@@ -2288,7 +2288,7 @@ a.df-cat-pill:hover {
   gap: 4px;
   margin-right: 4px;
   font-size: 0.875rem;
-  color: #a1a1aa;
+  color: var(--muted);
 }
 .df-share-btn {
   display: inline-flex;
@@ -2298,7 +2298,7 @@ a.df-cat-pill:hover {
   border-radius: 9999px;
   padding: 6px 12px;
   font-size: 0.75rem;
-  color: #d4d4d8;
+  color: var(--muted);
   transition: border-color .15s, color .15s;
 }
 .df-share-btn:hover {
@@ -2323,7 +2323,7 @@ a.df-cat-pill:hover {
   border-radius: 8px;
   padding: 8px 12px;
   font-size: 0.875rem;
-  color: #d4d4d8;
+  color: var(--muted);
   transition: border-color .15s, color .15s;
 }
 .df-page-edge:hover {
@@ -2360,7 +2360,7 @@ a.df-cat-pill:hover {
   padding: 8px 12px;
   border-radius: 8px;
   font-size: 0.875rem;
-  color: #d4d4d8;
+  color: var(--text);
   transition: background-color .15s, color .15s;
 }
 .df-menu-ic {
@@ -2563,6 +2563,29 @@ a.df-cat-pill:hover {
 .prose-cms pre code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.9rem;
+}
+/* Syntax tokens (server-highlighted by hTokenize), tuned for the dark surface */
+.prose-cms .tok-k {
+  color: #c792ea;
+}
+.prose-cms .tok-s {
+  color: #7ee787;
+}
+.prose-cms .tok-c {
+  color: #71717a;
+  font-style: italic;
+}
+.prose-cms .tok-n {
+  color: #ffab70;
+}
+.prose-cms .tok-f {
+  color: #82aaff;
+}
+.prose-cms .tok-b {
+  color: #ffcb6b;
+}
+.prose-cms .tok-p {
+  color: #79b8ff;
 }
 .prose-cms .cms-figure {
   margin: 1rem 0;
@@ -3206,8 +3229,8 @@ html:not(.is-mac) *::-webkit-scrollbar-thumb{ background-color:#828c9666; }
   gap: 4px;
 }
 .df-menu-list-foot { font-size: .875rem; }
-.df-menu-list-foot .df-menu-link { color: #a1a1aa; }
-.df-menu-list-foot .df-menu-link:hover { color: #e4e4e7; }
+.df-menu-list-foot .df-menu-link { color: var(--muted); }
+.df-menu-list-foot .df-menu-link:hover { color: var(--text); }
 
 /* ===========================================================================
    Category rows — read as selectable options. The row was a bare flex line
@@ -3244,3 +3267,50 @@ html:not(.is-mac) *::-webkit-scrollbar-thumb{ background-color:#828c9666; }
    no-op. Scale it instead - that reads as feedback at every colour scheme. */
 .df-cat-ic { transition: transform .15s ease; }
 .df-cat:hover .df-cat-ic { transform: scale(1.12); }
+/* Print: the article is the document. Chrome, widgets and interactive
+   panels leave; text prints black on white with source URLs spelled out. */
+@media print {
+  header, footer, nav, aside, .df-aside, .df-share, .df-toc, .theme-glow,
+  #comments, details { display: none !important; }
+  body, .theme-root { background: #fff !important; color: #111 !important; }
+  main { max-width: 100% !important; padding: 0 !important; }
+  h1, h2, h3, .prose-cms, article { color: #111 !important; }
+  article a { color: #111 !important; text-decoration: underline; }
+  article a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.85em;
+    color: #555;
+    word-break: break-all;
+  }
+  .prose-cms pre {
+    background: #f6f6f6 !important;
+    border: 1px solid #ddd !important;
+  }
+  .prose-cms pre code, .prose-cms code,
+  .prose-cms .tok-k, .prose-cms .tok-s, .prose-cms .tok-c, .prose-cms .tok-n,
+  .prose-cms .tok-f, .prose-cms .tok-b, .prose-cms .tok-p {
+    color: #111 !important;
+    font-style: normal !important;
+  }
+  .prose-cms img, .prose-cms pre, .prose-cms blockquote, .prose-cms figure {
+    break-inside: avoid;
+  }
+}
+/* No-JS submit flash (?c= after the native comment POST) */
+.sf-comment-flash {
+  margin: 0 0 1rem;
+  padding: .6rem .9rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: .88rem;
+}
+.sf-comment-flash[data-comment-flash="invalid"],
+.sf-comment-flash[data-comment-flash="failed"] {
+  border-left-color: #f87171;
+}
+.sf-comment-flash[data-comment-flash="ok"] {
+  border-left-color: #4ade80;
+}

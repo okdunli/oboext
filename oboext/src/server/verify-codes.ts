@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, desc, eq, gt, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { verifyCodes } from "./schema.js";
 import { getSecret } from "./auth.js";
@@ -22,6 +22,22 @@ export interface IssueCodeInput {
   target: string;
   purpose: CodePurpose;
   ip?: string | null;
+}
+
+/**
+ * Delete codes that can no longer be redeemed: expired (TTL 10 min) or
+ * consumed. The table only ever had INSERTs before, so a site with active
+ * email/SMS login grew one row per code forever. An hour of grace past expiry
+ * keeps any in-flight verification readable; the prune rides the hourly
+ * retention pass, so it costs one DELETE per hour.
+ */
+export async function pruneVerifyCodes(): Promise<void> {
+  const cutoff = new Date(Date.now() - 60 * 60 * 1000);
+  await db
+    .delete(verifyCodes)
+    .where(
+      or(lt(verifyCodes.expiresAt, cutoff), isNotNull(verifyCodes.consumedAt)),
+    );
 }
 
 export async function issueCode(input: IssueCodeInput): Promise<string> {

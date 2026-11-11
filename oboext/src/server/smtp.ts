@@ -18,6 +18,12 @@ export interface SendMailInput {
   subject: string;
   text: string;
   html: string;
+  /** Reply-To address override (defaults to From). */
+  replyTo?: string;
+  /** HTTPS one-click unsubscribe target - emitted as List-Unsubscribe and
+   *  List-Unsubscribe-Post (RFC 8058), the headers Gmail/Outlook surface as
+   *  their own "unsubscribe" button. */
+  listUnsubscribe?: string;
 }
 
 const ADDR_RE = /<([^>]+)>/;
@@ -139,6 +145,13 @@ export async function sendSmtpMail(cfg: SmtpConfig, mail: SendMailInput): Promis
       "MIME-Version: 1.0",
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       "Date: " + new Date().toUTCString(),
+      ...(mail.replyTo ? [`Reply-To: ${mail.replyTo}`] : []),
+      ...(mail.listUnsubscribe
+        ? [
+            `List-Unsubscribe: <${mail.listUnsubscribe}>`,
+            "List-Unsubscribe-Post: List-Unsubscribe=One-Click",
+          ]
+        : []),
       "",
       "",
     ].join("\r\n");

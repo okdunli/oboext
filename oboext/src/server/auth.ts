@@ -248,6 +248,7 @@ export const LOGIN_EVENTS = {
   SUCCESS: "login.success",
   FAIL: "login.fail",
   LOCKED: "login.locked",
+  LOGIN_CHALLENGE: "login.challenge",
   RESET_REQUEST: "password.reset.request",
   RESET_DONE: "password.reset.done",
 } as const;
@@ -293,6 +294,28 @@ export async function assertLoginAllowed(account: string, ip: string | null): Pr
       const mins = Math.max(1, Math.ceil(remainMs / 60_000));
       throw new LoginThrottledError(`登录失败次数过多，请 ${mins} 分钟后再试`, mins);
     }
+  }
+}
+
+/** A successful login proves the password: the account's fail counter must
+ *  reset, or typos made BEFORE the success stay in the sliding window and the
+ *  next typo locks an account that just signed in cleanly. Per-account only -
+ *  the IP bucket keeps counting, so cross-account brute force from one host
+ *  is not refunded by a victim's own success. */
+export async function clearLoginFailures(account: string): Promise<void> {
+  if (!account) return;
+  try {
+    await db
+      .delete(securityEvents)
+      .where(
+        and(
+          eq(securityEvents.eventType, LOGIN_EVENTS.FAIL),
+          sql`lower(${securityEvents.account}) = lower(${account})`,
+        ),
+      );
+  } catch (e) {
+    // the audit write below must never be blocked by a cleanup failure
+    log.error("[security-events] fail-counter reset failed:", e);
   }
 }
 
@@ -392,6 +415,11 @@ export async function createFirstAdmin(input: {
   return { id: row.id, email: row.email, name: row.name, role: row.role };
 }
 
+/** The ONE client-IP definition (middleware and webmention route through it).
+ *  Reads the forwarding headers, which are client-writable - fine behind a
+ *  trusted proxy; the trusted socket peer lands in _middleware.rose's
+ *  remoteAddress preference once Rosezm ships clientAddress (framework
+ *  BUG.md 2026-11-03). */
 export function clientIp(req: Request): string | null {
   const fwd = req.headers.get("x-forwarded-for");
   return (

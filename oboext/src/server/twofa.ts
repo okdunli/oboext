@@ -36,12 +36,18 @@ export type TwoFaState = {
 const storeKey = (userId: number) => `twofa:user:${userId}`;
 
 export async function isTwoFactorPluginEnabled(): Promise<boolean> {
+  // 2FA is a core capability: TOTP lives in this module, the login flow
+  // consumes it, but the gate used to read a "two-factor" row in the plugins
+  // table that nothing ever created (no shipped plugin carries that slug) —
+  // so the endpoints answered 404 forever and no visitor could ever enroll.
+  // The plugins row is still honoured when present, for deployments that want
+  // a kill switch; absent means ON, not off.
   await ensureMigrations();
   const [row] = await db
     .select({ enabled: plugins.enabled })
     .from(plugins)
     .where(eq(plugins.slug, TWOFA_PLUGIN_SLUG));
-  return !!row?.enabled;
+  return row ? !!row.enabled : true;
 }
 
 export async function getTwoFaState(
@@ -152,6 +158,13 @@ export async function verifyTwoFaCode(
   state.recovery[idx] = { ...state.recovery[idx], usedAt: new Date().toISOString() };
   await setOption(storeKey(userId), state);
   return true;
+}
+
+// No password, no code: the operator escape hatch for a lost phone and lost
+// recovery codes. Authorisation lives in the API route (users:manage).
+export async function clearTwoFa(userId: number): Promise<void> {
+  await ensureMigrations();
+  await deleteOption(storeKey(userId));
 }
 
 export async function disableTwoFa(

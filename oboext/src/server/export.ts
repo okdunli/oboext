@@ -79,6 +79,8 @@ function entryMeta(e: Record<string, unknown>): string {
     jsonObject(e.formatMeta) ? `- 形式字段：${jsonObject(e.formatMeta)}` : null,
     e.template ? `- 模板：${oneLine(e.template)}` : null,
     e.parentSlug ? `- 父页面：${oneLine(e.parentSlug)}` : null,
+    e.translationOfSlug ? `- 翻译原文：${oneLine(e.translationOfSlug)}` : null,
+    e.locale ? `- 内容语言：${oneLine(e.locale)}` : null,
     typeof e.order === "number" ? `- 排序：${e.order}` : null,
     jsonObject(e.metas ?? e.metaList) ? `- 自定义字段：${jsonObject(e.metas ?? e.metaList)}` : null,
   ].filter((l): l is string => l !== null);
@@ -197,12 +199,17 @@ export async function buildExportData(
     const rows = await paginate((offset) => adminListPages(user, { limit: 100, offset }), 100);
     // Hierarchy is exported by slug: the numeric parentId means nothing in the
     // receiving install. A parent outside this export simply has no link.
+    // 0046: the translation pair travels the same way — the translation row
+    // carries translationOfSlug, the original stays bare.
     const slugById = new Map(rows.map((p) => [p.id, p.slug]));
     data.pages = await Promise.all(
       rows.map(async (p) => {
         const detail = await adminGetPage(user, p.id);
         const parentSlug = detail.parentId ? slugById.get(detail.parentId) : undefined;
-        return parentSlug ? { ...detail, parentSlug } : detail;
+        const pair = detail.translationOf
+          ? { translationOf: undefined, translationOfSlug: slugById.get(detail.translationOf) }
+          : {};
+        return { ...detail, ...(parentSlug ? { parentSlug } : {}), ...pair };
       }),
     );
   }
@@ -471,6 +478,10 @@ export function exportToWxr(data: Record<string, unknown>, opts: { siteUrl: stri
     // WordPress has no "archived"; the status marker keeps the distinction for
     // an Oboext → Oboext move while WordPress still sees a private post.
     if (status !== "published" && status !== "draft") meta.push(metaPair("oboext_status", status));
+    // 0046: the content language and the translation pair travel as postmeta
+    // — WordPress has no native concept, so the importer reads them back.
+    if (p.locale) meta.push(metaPair("oboext_locale", p.locale));
+    if (p.translationOfSlug) meta.push(metaPair("oboext_translation_of", p.translationOfSlug));
     for (const [key, value] of entryMetas(p)) meta.push(metaPair(key, value));
 
     const parent = type === "page" && p.parentId ? pageWpIds.get(Number(p.parentId)) ?? 0 : 0;

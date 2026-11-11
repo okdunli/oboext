@@ -24,6 +24,7 @@ import type { Block } from "./schema.js";
 import type { SessionUser } from "./auth.js";
 import { hashPassword } from "./auth.js";
 import { ServiceError } from "./errors.js";
+import { normalizeLocale, type Locale } from "./i18n.js";
 import { createLogger } from "./logger.js";
 import { createCategory, createPost, createTag, slugify, updatePost } from "./admin.js";
 import { createPage, updatePage } from "./pages.js";
@@ -83,7 +84,7 @@ export type NormalizedItem = {
   /** Parent page referenced by slug: the only key that survives a cross-site move. */
   parentSlug?: string;
   /** R276: content language (i18n LOCALES); rides the item verbatim. */
-  locale?: string;
+  locale?: Locale;
   /** R276: the original's slug (export rewrites the id). Resolved in a second pass. */
   translationOfSlug?: string;
   /** WordPress `wp:is_sticky` / front-matter `sticky`: pin to the top of lists. */
@@ -282,7 +283,7 @@ export function markdownBodyToBlocks(body: string): Block[] {
   return blocks;
 }
 
-const META_RE = /^[-*]\s*(别名|状态|摘要|分类|标签|发布时间|创建时间|更新时间|封面|评论状态|文章形式|形式字段|模板|父页面|排序|自定义字段|SEO\s*(?:标题|描述|关键词))\s*[：:]\s*(.*)$/;
+const META_RE = /^[-*]\s*(别名|状态|摘要|分类|标签|发布时间|创建时间|更新时间|封面|评论状态|文章形式|形式字段|模板|父页面|翻译原文|内容语言|排序|自定义字段|SEO\s*(?:标题|描述|关键词))\s*[：:]\s*(.*)$/;
 
 // export.ts joins names with 、; a hand-edited file may use any common separator.
 function splitTermNames(raw: string): string[] {
@@ -473,6 +474,10 @@ function applyMarkdownMeta(item: Record<string, unknown>, meta: Record<string, s
   if (meta["模板"]) item.template = meta["模板"];
   if (meta["排序"]) item.order = meta["排序"];
   if (meta["父页面"]) item.parentSlug = meta["父页面"];
+  // 0046: the translation pair and the content language travel as meta
+  // lines, so a Markdown export/import round trip keeps the pairing.
+  if (meta["翻译原文"]) item.translationOfSlug = meta["翻译原文"];
+  if (meta["内容语言"]) item.locale = meta["内容语言"];
   for (const [label, field] of [
     ["自定义字段", "metas"],
     ["形式字段", "formatMeta"],
@@ -897,7 +902,7 @@ const WXR_META_EXCLUDE = /^(?:rank_math_|aioseo_|aios_)/i;
 function wxrCustomMeta(meta: Map<string, string>): { key: string; value: string }[] {
   const out: { key: string; value: string }[] = [];
   for (const [key, value] of meta) {
-    if (!key || key.startsWith("_") || key === "oboext_status" || WXR_META_EXCLUDE.test(key)) continue;
+    if (!key || key.startsWith("_") || key === "oboext_status" || key === "oboext_locale" || key === "oboext_translation_of" || WXR_META_EXCLUDE.test(key)) continue;
     const k = key.trim().slice(0, 100);
     if (k) out.push({ key: k, value });
   }
@@ -1009,6 +1014,13 @@ export function parseWxrImport(text: string): { posts: unknown[]; pages: unknown
       ...(format ? { format } : {}),
       ...(pinned !== undefined ? { pinned } : {}),
       ...(customMeta.length ? { metas: customMeta } : {}),
+      // 0046: the content language and the translation pair ride the
+      // postmeta markers the exporter writes (WordPress has no native
+      // concept, so the round trip needs them explicitly).
+      ...(meta.get("oboext_locale") ? { locale: meta.get("oboext_locale")!.trim() } : {}),
+      ...(meta.get("oboext_translation_of")
+        ? { translationOfSlug: meta.get("oboext_translation_of")!.trim() }
+        : {}),
       ...(comments.length ? { comments } : {}),
       ...(creator ? { creator } : {}),
       ...(creatorEmail ? { creatorEmail } : {}),
@@ -1172,10 +1184,6 @@ export function parseMarkdownImportSections(text: string): { posts: unknown[]; p
     return { posts: [item], pages: [] };
   }
   return { posts: posts.map(sectionToItem), pages: pages.map(sectionToItem) };
-}
-
-export function parseMarkdownImport(text: string): unknown[] {
-  return parseMarkdownImportSections(text).posts;
 }
 
 const BUNDLE_MARKDOWN_RE = /\.(?:md|markdown|mdown|mkd|txt)$/i;
@@ -1473,6 +1481,20 @@ export function normalizeItem(raw: unknown): NormalizedResult {
     if (!parentSlug) return { ok: false, reason: "父页面别名无法生成" };
     if (parentSlug === slug) parentSlug = undefined;
   }
+  // R276/0046: the content language rides the item (export writes zh-CN/en;
+  // foreign dialects like en_US normalize through the shared helper). An
+  // unrecognizable tag keeps the default rather than failing the item.
+  const locale = normalizeLocale(o.locale) ?? undefined;
+  // R276/0046: the translation pair travels as the original's slug (the
+  // export rewrites the numeric id away). A self-reference is dropped.
+  let translationOfSlug: string | undefined;
+  const rawPair = str(o.translationOfSlug).trim();
+  if (rawPair.length > 200) return { ok: false, reason: "翻译原文别名长度不能超过 200 个字符" };
+  if (rawPair) {
+    translationOfSlug = slugify(rawPair);
+    if (!translationOfSlug) return { ok: false, reason: "翻译原文别名无法生成" };
+    if (translationOfSlug === slug) translationOfSlug = undefined;
+  }
   if (o.metaError) return { ok: false, reason: str(o.metaError) };
   // Authorship travels as a name, never as the source database's numeric id.
   // An over-long byline is truncated rather than rejected: users.name caps at
@@ -1504,6 +1526,8 @@ export function normalizeItem(raw: unknown): NormalizedResult {
       ...(order !== undefined ? { order } : {}),
       ...(pinned !== undefined ? { pinned } : {}),
       ...(parentSlug ? { parentSlug } : {}),
+      ...(translationOfSlug ? { translationOfSlug } : {}),
+      ...(locale ? { locale } : {}),
       ...(comments.length ? { comments } : {}),
       ...(creator ? { creator } : {}),
       ...(creatorEmail ? { creatorEmail } : {}),
@@ -1674,11 +1698,17 @@ async function appendComments(
       .insert(commentsTable)
       .values(rows)
       .returning({ id: commentsTable.id });
-    for (const [index, comment] of list.entries()) {
-      const parentId = comment.parentIndex != null ? inserted[comment.parentIndex]?.id : undefined;
-      const id = inserted[index]?.id;
-      if (parentId == null || id == null) continue;
-      await rawQuery(`UPDATE comments SET parent_id = $1 WHERE id = $2`, [parentId, id]);
+    const links = list
+      .map((comment, index) => ({
+        id: inserted[index]?.id,
+        parentId: comment.parentIndex != null ? inserted[comment.parentIndex]?.id : undefined,
+      }))
+      .filter((l): l is { id: number; parentId: number } => l.id != null && l.parentId != null);
+    if (links.length) {
+      const cases = links.map((l) => `when id = ${l.id} then ${l.parentId}`).join(" ");
+      await rawQuery(
+        `UPDATE comments SET parent_id = CASE ${cases} ELSE parent_id END WHERE id IN (${links.map((l) => l.id).join(",")})`,
+      );
     }
     // Derived count, recomputed instead of incremented: self-healing and one
     // statement regardless of how many comments the file carried.
@@ -1798,20 +1828,30 @@ async function applyKind(
   // later in the file (or is absent entirely). The slug -> id map is seeded
   // with the live pages so a partial export still resolves existing parents.
   const linksParents = kind === "page" && plan.valid.some((i) => i.parentSlug);
-  const pageIds = linksParents ? await loadExistingSlugs("page") : new Map<string, number>();
+  const pageIds =
+    linksParents || (kind === "page" && plan.valid.some((i) => i.translationOfSlug))
+      ? await loadExistingSlugs("page")
+      : new Map<string, number>();
   const pendingParents: { id: number; parentSlug: string }[] = [];
   // R276: translation pairs resolve in the same two-pass shape — a file may
   // list the en twin before its zh original, so pairing waits for pass two.
-  const linksTranslations = kind === "post" && plan.valid.some((i) => i.translationOfSlug);
-  const postIds = linksTranslations ? await loadExistingSlugs("post") : new Map<string, number>();
+  // 0046: pages pair through the same mechanism (pageIds doubles as the
+  // slug→id map whenever either link kind needs it).
+  const linksTranslations = plan.valid.some((i) => i.translationOfSlug);
+  const postIds =
+    linksTranslations && kind === "post"
+      ? await loadExistingSlugs("post")
+      : new Map<string, number>();
   const pendingTranslations: { id: number; originalSlug: string }[] = [];
   for (const rawItem of plan.valid) {
     const { parentSlug, comments: itemComments, creator, creatorEmail, translationOfSlug, ...item } = rawItem;
     const hit = plan.conflicts.find((c) => c.slug === item.slug);
     try {
       if (hit && policy === "skip") {
-        // A skipped page can still be the parent of a page that is created.
-        if (linksParents) pageIds.set(item.slug, hit.existingId);
+        // A skipped page can still be the parent of a page that is created,
+        // or the original a translation in this file pairs to.
+        if (linksParents || (kind === "page" && linksTranslations))
+          pageIds.set(item.slug, hit.existingId);
         skipped++;
         continue;
       }
@@ -1844,6 +1884,8 @@ async function applyKind(
           pageIds.set(item.slug, hit.existingId);
           if (linksParents && parentSlug && knownParent == null)
             pendingParents.push({ id: hit.existingId, parentSlug });
+          if (linksTranslations && translationOfSlug)
+            pendingTranslations.push({ id: hit.existingId, originalSlug: translationOfSlug });
         }
         updated++;
       } else if (kind === "post") {
@@ -1860,10 +1902,12 @@ async function applyKind(
         const row = await createPage(user, input);
         created++;
         commentsImported += await appendComments(itemComments ?? [], row.id, kind, item.title, errors);
-        if (linksParents) {
+        if (linksParents || (kind === "page" && linksTranslations)) {
           pageIds.set(item.slug, row.id);
           if (parentSlug && knownParent == null)
             pendingParents.push({ id: row.id, parentSlug });
+          if (linksTranslations && translationOfSlug)
+            pendingTranslations.push({ id: row.id, originalSlug: translationOfSlug });
         }
       }
     } catch (e) {
@@ -1889,13 +1933,15 @@ async function applyKind(
   // or to a row the site already had. A slug that resolved to the item itself
   // is self-pairing — rejected here rather than surfacing the 422.
   for (const { id, originalSlug } of pendingTranslations) {
-    const originalId = postIds.get(originalSlug);
+    const originalId =
+      kind === "post" ? postIds.get(originalSlug) : pageIds.get(originalSlug);
     if (!originalId || originalId === id) {
       errors.push(`翻译关联 ${originalSlug}：原文不存在于本文件或本站`);
       continue;
     }
     try {
-      await updatePost(user, id, { translationOf: originalId });
+      if (kind === "post") await updatePost(user, id, { translationOf: originalId });
+      else await updatePage(user, id, { translationOf: originalId });
     } catch (e) {
       const msg = e instanceof ServiceError ? e.message : String(e);
       errors.push(`翻译关联 ${originalSlug}：${msg}`);

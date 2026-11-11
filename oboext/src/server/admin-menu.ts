@@ -5,6 +5,7 @@ import { admIcon } from "./icons.js";
 import type { Role } from "./schema.js";
 import { applyAsyncFilters, HOOKS, hasHookOwner } from "./hooks.js";
 import { ensurePluginsLoaded, listPlugins } from "./plugins.js";
+import { pluginNameKey } from "./i18n.js";
 
 export const ADMIN_HOME_DEFAULT = "/admin";
 const OPTION_HIDDEN = "adminMenuHidden";
@@ -184,7 +185,7 @@ export type AdminMenuExtras = {
 
   pluginNav: AdminMenuItem[];
   /** Enabled plugins shipping an admin panel get an automatic entry. */
-  pluginPanels: { slug: string; name: string }[];
+  pluginPanels: { slug: string; name: string; label?: string }[];
   /** Hook-claimed top-level groups (same section id merges). */
   pluginSections: AdminMenuSection[];
 };
@@ -211,7 +212,10 @@ export async function collectAdminMenuExtras(): Promise<AdminMenuExtras> {
   ]);
   const pluginPanels = pluginList
     .filter((p) => p.enabled && hasHookOwner(HOOKS.adminPanel, p.slug))
-    .map((p) => ({ slug: p.slug, name: p.name }));
+    // R531: a first-party plugin names itself in the catalog; the marker is
+    // resolved per request by menuLabelText, so the sidebar speaks the
+    // request's language. A plugin without a key keeps its manifest name.
+    .map((p) => ({ slug: p.slug, name: p.name, label: pluginNameKey(p.slug) ? `@${pluginNameKey(p.slug)}` : p.name }));
 
   const pluginNav: AdminMenuItem[] = [];
   const sectionMap = new Map<string, AdminMenuSection>();
@@ -272,7 +276,7 @@ export function buildAdminMenuGroups(extras: AdminMenuExtras = EMPTY_EXTRAS): Me
       children: [
         ...pluginPanels.map<MenuLeaf>((p) => ({
           href: `/admin/plugins/${p.slug}`,
-          label: p.name,
+          label: p.label ?? p.name,
           glyph: "plug",
           hook: true,
         })),

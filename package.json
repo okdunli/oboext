@@ -1,6 +1,6 @@
 {
   "name": "oboext",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "license": "MIT",
   "description": "Fast & lightweight self-hosted dynamic content management system engine with tiny footprint, built-in admin panel and smooth content editing.",
   "type": "module",
@@ -9,10 +9,16 @@
     "dist",
     "themes",
     "plugins",
-    "public",
-    "content",
     "db",
-    "tools",
+    "tools/build.mjs",
+    "tools/serve.mjs",
+    "tools/gen.mjs",
+    "tools/make-sums.mjs",
+    "tools/benchmark-routes.mjs",
+    "tools/deploy-automation.mjs",
+    "tools/build-svg-sprite.mjs",
+    "tools/export-native.mts",
+    "tools/export-style.mts",
     "index.js",
     "main.go",
     "go.mod",
@@ -27,24 +33,23 @@
     "build": "node tools/build.mjs build",
     "preview": "node tools/serve.mjs preview",
     "build:go": "go build -o oboext-server .",
-    "optimize": "node tools/build-svg-sprite.mjs && node tools/database-optimizer.mjs && node tools/performance-monitor.mjs",
+    "optimize": "node tools/build-svg-sprite.mjs",
     "deploy": "node tools/deploy-automation.mjs",
-    "analyze": "node tools/performance-monitor.mjs",
-    "db-optimize": "node tools/database-optimizer.mjs"
+    "analyze": "node tools/benchmark-routes.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
+    "bcryptjs": "^2.4.3",
     "drizzle-orm": "^0.45.3",
     "esbuild": "^0.24.0",
     "graphql": "^17.0.2",
+    "jose": "^5.10.0",
     "postgres": "^3.4.9",
-    "rosezm": "^0.2.0"
+    "rosezm": "^0.2.2"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.0.0",
-    "bcryptjs": "^2.4.3",
-    "jose": "^5.10.0",
     "tsx": "^4.7.0",
     "typescript": "^5.6.0"
   }

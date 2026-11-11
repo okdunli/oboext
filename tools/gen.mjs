@@ -160,11 +160,12 @@ if (!chrome) {
 // The default avatar is a PROGRAM asset: it ships in oboext/public and is only
 // seeded from the chrome theme on a fresh tree where it is absent, so the
 // program stands alone with no themes installed.
-for (const name of ['avatar.png', 'avatar@2x.png']) {
+for (const name of ['avatar.png', 'avatar-180.png', 'avatar-192.png', 'avatar-512.png']) {
   const dest = join(PUBLIC, name);
   if (existsSync(dest)) continue;
   const src = chrome ? join(THEMES, chrome.slug, 'assets', name) : null;
   if (src && existsSync(src)) copyFileSync(src, dest);
+  else if (name !== 'avatar.png') continue; // the sized variants are optional
   else console.warn(`[gen] WARN: no source for public/${name} (theme-less tree?)`);
 }
 

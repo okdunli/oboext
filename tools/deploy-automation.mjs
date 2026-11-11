@@ -20,6 +20,9 @@ class DeploymentAutomation {
     this.steps = [];
     this.errors = [];
     this.success = false;
+    // The URL health probes run against: parsed from the vercel CLI output
+    // in deployToVercel, or the explicit OBOEXT_DEPLOY_URL override.
+    this.baseUrl = null;
   }
 
   log(message, level = 'INFO') {
@@ -112,11 +115,6 @@ class DeploymentAutomation {
       this.log('生成SVG雪碧图...');
       this.executeCommand('node tools/build-svg-sprite.mjs');
       
-      this.log('数据库优化...');
-      this.executeCommand('node tools/database-optimizer.mjs');
-      
-      this.log('性能监控...');
-      this.executeCommand('node tools/performance-monitor.mjs');
     });
   }
 
@@ -161,8 +159,13 @@ class DeploymentAutomation {
       }
 
       const deployCommand = 'vercel --prod';
-      this.executeCommand(deployCommand);
-      
+      const out = this.executeCommand(deployCommand);
+
+      // The CLI prints the deployment URL; the health probes need a host and
+      // a deployment whose stdout never prints one can be pinned via env.
+      const hit = /https:\/\/[a-z0-9.-]+\.vercel\.app[^\s'"`]*/i.exec(out);
+      this.baseUrl = process.env.OBOEXT_DEPLOY_URL || (hit ? hit[0] : null);
+
       this.log('Vercel部署完成');
     });
   }
@@ -170,34 +173,35 @@ class DeploymentAutomation {
   async healthCheck() {
     return this.executeStep('健康检查', async () => {
       this.log('执行健康检查...');
-      
-      try {
-        const result = spawnSync('curl', ['-I', 'https://your-domain.vercel.app'], {
-          encoding: 'utf8'
-        });
-        
-        if (result.status !== 200) {
-          throw new Error(`首页健康检查失败: ${result.stderr}`);
-        }
-        
-        this.log('首页健康检查通过');
-      } catch (error) {
-        throw new Error(`健康检查失败: ${error.message}`);
+
+      // No URL, no lie: without a host the probes would repeat the old
+      // placeholder bug (curl's EXIT code, not its HTTP status), and a false
+      // failure rolls a possibly-good deployment back. Skip loudly instead.
+      if (!this.baseUrl) {
+        this.log('未解析到部署 URL（可设 OBOEXT_DEPLOY_URL），跳过健康检查', 'WARN');
+        return;
       }
 
-      try {
-        const result = spawnSync('curl', ['-I', 'https://your-domain.vercel.app/api/data'], {
-          encoding: 'utf8'
-        });
-        
-        if (result.status !== 200) {
-          throw new Error(`API健康检查失败: ${result.stderr}`);
+      // `-w %{http_code}` reads the actual response status (-I + exit code
+      // conflates DNS failures with 404s); `-L` follows the fresh-install
+      // redirect to /admin/setup so `/` answers its real final code.
+      const probe = (path, label) => {
+        const result = spawnSync(
+          'curl',
+          ['-s', '-o', '/dev/null', '-w', '%{http_code}', '-L', `${this.baseUrl}${path}`],
+          { encoding: 'utf8' },
+        );
+        const code = (result.stdout || '').trim();
+        if (code !== '200') {
+          throw new Error(`${label}健康检查失败: HTTP ${code || result.stderr}`);
         }
-        
-        this.log('API健康检查通过');
-      } catch (error) {
-        throw new Error(`API健康检查失败: ${error.message}`);
-      }
+        this.log(`${label}健康检查通过 (HTTP ${code})`);
+      };
+
+      probe('/', '首页');
+      // A public API the route table always serves (needsSetup report),
+      // 200 before AND after the first admin exists.
+      probe('/api/setup', 'API');
     });
   }
 

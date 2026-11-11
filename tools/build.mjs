@@ -34,12 +34,21 @@ import {
   symlinkSync,
   readdirSync,
 } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
+import { createRequire } from 'module';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const STAGE = join(tmpdir(), 'oboext-stage');
+
+// The Rosezm CLI lives inside the rosezm package, whose exports map hides its
+// root. Resolve through an exported subpath and walk back up, so the CLI is
+// found whether the rosezm package sits in the project's node_modules or
+// was hoisted into the parent's by npm.
+const require = createRequire(import.meta.url);
+const ROZEZM_PKG = resolve(dirname(require.resolve('rosezm/compiler')), '..');
+const ROZEZM_CLI = join(ROZEZM_PKG, 'dist-cli', 'rosezm.mjs');
 
 // NOTE: the deployment entrypoint is the root index.js, which loads
 // dist/prod.mjs and dispatches each request into the http.Server it exports.
@@ -112,9 +121,14 @@ mkdirSync(STAGE, { recursive: true });
 // self-contained. `seed` is intentionally NOT linked - it holds only the demo
 // fixture (seed-source.json) and nothing on the asset or build path reads it,
 // so an absent seed/ cannot fail the build.
-for (const name of ['node_modules', 'themes', 'plugins']) {
+for (const name of ['themes', 'plugins']) {
   if (existsSync(join(ROOT, name))) junction(join(ROOT, name), join(STAGE, name));
 }
+// The stage needs a node_modules with both the rosezm package and the app's
+// own dependencies. npm hoists them next to the installed package, so the
+// directory that holds the rosezm package is the one to link - the project's
+// own node_modules does not exist in that layout at all.
+junction(dirname(ROZEZM_PKG), join(STAGE, 'node_modules'));
 for (const name of ['package.json', 'tsconfig.json']) {
   cpSync(join(ROOT, name), join(STAGE, name));
 }
@@ -132,7 +146,7 @@ if (r.status !== 0) process.exit(r.status ?? 1);
 // cluster it never used and failed migrations - the "retention did not start:
 // Can't find meta/_journal.json file" lines in the build log.
 process.env.rosezm_BUILDING = '1';
-r = run([join(STAGE, 'node_modules', 'rosezm', 'dist-cli', 'rosezm.mjs'), 'build', 'oboext'], STAGE);
+r = run([ROZEZM_CLI, 'build', 'oboext'], STAGE);
 if (r.status !== 0) process.exit(r.status ?? 1);
 
 // 3) mirror finished artifacts back into the vault project
@@ -184,14 +198,14 @@ retry('deploy-root public', () => {
 console.log(`[build] deploy-root public/ -> ${countFiles(rootPublic)} files (Vercel static glob)`);
 
 // The Vercel lambda always names its handler `server.js`, and the bundle keys
-// files by basename, so `dist/server.js` (the Rosezm application module: 39
-// named exports, no default) collides with - and wins over - the real entry.
-// The launcher then imports a module whose default export is neither a function
-// nor a server, and every request fails at cold start with
+// files by basename, so `dist/server.js` (the Rosezm application module)
+// collides with - and wins over - the real entry. When the module has no
+// default at all the launcher fails at cold start with
 //   Invalid export found in module "/var/task/server.js".
-// dist/prod.mjs is the self-contained HTTP server (the lambda entry index.js
-// loads it and dispatches into it), so giving dist/server.js a function default
-// export makes whichever file wins the key collision satisfy the contract.
+// Newer bundles already export a default via `export{... as default ...}`;
+// appending a second one is a syntax error, so only add the shim when the
+// module has no default in either form. dist/prod.mjs is the self-contained
+// HTTP server (the lambda entry index.js loads it and dispatches into it).
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // R58: the installed Rosezm package now carries the fixes these two
@@ -205,7 +219,7 @@ console.log(`[build] deploy-root public/ -> ${countFiles(rootPublic)} files (Ver
 const distServer = join(ROOT, 'dist', 'server.js');
 if (existsSync(distServer)) {
   const src = readFileSync(distServer, 'utf8');
-  if (!/\bexport\s+default\b/.test(src)) {
+  if (!/\bexport\s+default\b/.test(src) && !/\bexport\s*\{[^}]*\bas\s+default\b/.test(src)) {
     const banner = [
       '',
       '// --- Vercel lambda entry shim (appended by tools/build.mjs) ---',

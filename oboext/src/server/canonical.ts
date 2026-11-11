@@ -9,11 +9,3 @@ export function canonicalJson(value: unknown): string {
   }
   return JSON.stringify(value) ?? "null";
 }
-
-// djb2 over the canonical form — good enough for "is this the same content".
-export function hashCanonical(value: unknown): string {
-  const s = canonicalJson(value);
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(16);
-}

@@ -122,8 +122,3 @@ export function passwordError(pw: string, ctx?: PasswordContext): ServiceError |
   const hit = violationKey(violations[0]);
   return new ServiceError(violations[0], 422, hit.key, hit.params);
 }
-
-export function assertPassword(pw: string, ctx?: PasswordContext): void {
-  const err = passwordError(pw, ctx);
-  if (err) throw err;
-}

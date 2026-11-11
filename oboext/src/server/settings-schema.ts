@@ -152,16 +152,3 @@ export function coerceSettings(
   }
   return out;
 }
-
-/** Whether a field should be visible given the current values. */
-export function isFieldVisible(
-  field: SettingField,
-  values: Record<string, unknown>,
-): boolean {
-  if (!field.showIf) return true;
-  const current = String(values[field.showIf.key] ?? "");
-  const expected = Array.isArray(field.showIf.equals)
-    ? field.showIf.equals
-    : [field.showIf.equals];
-  return expected.map(String).includes(current);
-}

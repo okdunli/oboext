@@ -65,11 +65,6 @@ export function resolveOrigin(
   return stickyOrigin || "http://localhost";
 }
 
-/** Test seam: forget the remembered origin. */
-export function resetStickyOrigin(): void {
-  stickyOrigin = "";
-}
-
 /**
  * Host of this site, for classifying a referrer as "internal" (0041).
  *

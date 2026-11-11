@@ -30,23 +30,6 @@ const localSubs: Set<(e: AdminEvent) => void> =
   (globalThis as any).__oboeAdminEventSubs || ((globalThis as any).__oboeAdminEventSubs = new Set());
 
 /**
- * 订阅进程内管理事件；返回退订函数（连接关闭时必须调用，否则 Set 只增不减）。
- *
- * **当前无生产调用方**，这是有意的：R245 的 `/api/admin-stream` 是立即返回型
- * 轮询（见该文件顶部说明：框架把请求放进全局串行队列，任何 hold 都会阻塞
- * 整站），轮询只比较 `currentAdminVersion()` 的 since 游标，不需要订阅。保留
- * 它的原因：一旦上游给 prod-server 补上流式直通、并把 api 分发移出 edge 队列，
- * SSE/长轮询可直接接这张表，无需重写本模块（收到 → 退订后收不到 → 抛错订阅者不
- * 破坏发射端）。
- */
-export function subscribeAdminEvents(cb: (e: AdminEvent) => void): () => void {
-  localSubs.add(cb);
-  return () => {
-    localSubs.delete(cb);
-  };
-}
-
-/**
  * 当前事件版本号（单调递增）。轮询端点拿它和客户端的 `since` 比较：读的是
  * $store box 的当前值，所以跨模块实例、跨热重载都一致。
  */

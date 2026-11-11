@@ -100,11 +100,6 @@ export async function loadPlugins(enabled: EnabledPlugin[]): Promise<void> {
   return s.promise;
 }
 
-/** Slugs currently loaded in this process. */
-export function loadedPluginSlugs(): string[] {
-  return [...state().loaded.keys()];
-}
-
 /**
  * Force the next loadPlugins() call to re-run (used after toggling in admin).
  *

@@ -1,6 +1,5 @@
 import type { ThemeConfig } from "./schema.js";
 
-
 export type PaletteTokens = Pick<
   ThemeConfig,
   | "background"
@@ -34,7 +33,6 @@ export interface PalettePreset {
   tokens: PaletteTokens;
 }
 
-
 const INDIGO: PaletteTokens = {
   background: "#0b0d12",
   surface: "#161922",
@@ -54,7 +52,6 @@ const INDIGO: PaletteTokens = {
   gradient: "linear-gradient(135deg,#7c8cff,#c084fc)",
   colorScheme: "dark",
 };
-
 
 const THYUU: PaletteTokens = {
   background: "#171a21",
@@ -76,7 +73,6 @@ const THYUU: PaletteTokens = {
   colorScheme: "dark",
 };
 
-
 const SAMSARA: PaletteTokens = {
   background: "#23272e",
   surface: "rgba(255,255,255,0.07)",
@@ -96,7 +92,6 @@ const SAMSARA: PaletteTokens = {
   gradient: "linear-gradient(135deg,#FFA000,#ffd166)",
   colorScheme: "dark",
 };
-
 
 const WRITER: PaletteTokens = {
   background: "#fbfaf7",
@@ -118,7 +113,6 @@ const WRITER: PaletteTokens = {
   colorScheme: "light",
 };
 
-
 const SOMNIA: PaletteTokens = {
   background: "#f6f6f7",
   surface: "#ffffff",
@@ -139,7 +133,6 @@ const SOMNIA: PaletteTokens = {
   colorScheme: "light",
 };
 
-
 const VAPOR: PaletteTokens = {
   background: "#e5e9ef",
   surface: "#f0f2f7",
@@ -159,7 +152,6 @@ const VAPOR: PaletteTokens = {
   gradient: "linear-gradient(135deg,#5b8def,#8fb6f2)",
   colorScheme: "light",
 };
-
 
 export const PALETTE_PRESETS: PalettePreset[] = [
   {
@@ -208,12 +200,10 @@ export const PALETTE_PRESETS: PalettePreset[] = [
 
 const BY_KEY = new Map(PALETTE_PRESETS.map((p) => [p.key, p]));
 
-
 export function getPalettePreset(key: string | null | undefined): PalettePreset | null {
   if (!key) return null;
   return BY_KEY.get(key) ?? null;
 }
-
 
 export function paletteLayeredConfig(
   config: ThemeConfig | null | undefined,
@@ -230,14 +220,4 @@ export function paletteLayeredConfig(
   }
   const preset = getPalettePreset(key);
   return { ...base, ...(preset?.tokens ?? {}), ...real } as ThemeConfig;
-}
-
-
-export function paletteTokenKeys(): string[] {
-  return Object.keys(PALETTE_PRESETS[0]?.tokens ?? {});
-}
-
-
-export function isDarkPalette(key: string | null | undefined): boolean {
-  return getPalettePreset(key)?.dark ?? true;
 }

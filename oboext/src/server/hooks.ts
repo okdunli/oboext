@@ -132,23 +132,6 @@ export async function applyAsyncFilters<P>(hook: string, payload: P): Promise<P>
   return value;
 }
 
-/** Introspection for the admin "hooks" debug panel. */
-export function listHooks(): {
-  actions: { hook: string; count: number; owners: string[] }[];
-  filters: { hook: string; count: number; owners: string[] }[];
-} {
-  const map = (m: Map<string, Registration[]>) =>
-    [...m.entries()]
-      .filter(([, l]) => l.length > 0)
-      .map(([hook, l]) => ({
-        hook,
-        count: l.length,
-        owners: [...new Set(l.map((r) => r.owner ?? "core"))],
-      }))
-      .sort((a, b) => a.hook.localeCompare(b.hook));
-  return { actions: map(registry().actions), filters: map(registry().filters) };
-}
-
 /** Does any registration on `hook` belong to `owner`? (admin sidebar panels) */
 export function hasHookOwner(hook: string, owner: string): boolean {
   return (registry().filters.get(hook) ?? []).some((r) => r.owner === owner);

@@ -94,13 +94,3 @@ export const POST_FORMATS: PostFormatDef[] = [
     hideTitle: true,
   },
 ];
-
-export function getPostFormat(value: string | null | undefined): PostFormatDef {
-  return POST_FORMATS.find((f) => f.value === value) ?? POST_FORMATS[0];
-}
-
-/** Select options for the editor dropdown. */
-export const POST_FORMAT_OPTIONS = POST_FORMATS.map((f) => ({
-  value: f.value,
-  label: f.label,
-}));

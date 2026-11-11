@@ -125,20 +125,3 @@ export function createLogger(mod: string): Logger {
 }
 
 const cache = new Map<string, Logger>();
-
-export function getLog(mod: string): Logger {
-  let l = cache.get(mod);
-  if (!l) {
-    l = createLogger(mod);
-    cache.set(mod, l);
-  }
-  return l;
-}
-
-export function setLogWriter(level: LogLevel, fn: (line: string) => void): void {
-  writers[level] = fn;
-}
-
-export function clearLogWriters(): void {
-  for (const k of Object.keys(writers)) delete writers[k as LogLevel];
-}

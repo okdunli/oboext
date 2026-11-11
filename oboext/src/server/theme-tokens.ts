@@ -105,9 +105,3 @@ export function resolveThemeConfig(
 ): Required<ThemeConfig> {
   return merged(config);
 }
-
-/** Helper for themes: read a boolean-ish token ("on"/"off"/"true"/"1"). */
-export function isOn(value: string | undefined | null): boolean {
-  if (!value) return false;
-  return ["on", "true", "1", "yes", "enabled"].includes(value.toLowerCase());
-}

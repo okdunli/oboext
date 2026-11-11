@@ -316,6 +316,19 @@
       "when": 1792840006003,
       "tag": "0044_pages_status_published_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "tag": "0045_page_locale",
+      "when": 1792840007003
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "tag": "0046_page_translation_of",
+      "when": 1792840008003,
+      "breakpoints": true
     }
   ]
 }

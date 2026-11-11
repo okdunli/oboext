@@ -1,0 +1,14 @@
+{
+  "slug": "two-factor",
+  "name": "两步验证 2FA",
+  "description": "登录时在账号密码之外再要求 TOTP 动态码（Google Authenticator、微软验证器、1Password 等）或一次性恢复码。每个账号独立绑定，提供 20 个备用恢复码，支持重新生成与凭密码解绑。核心扩展点 auth.challenge / auth.challenge.verify。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "ShieldCheck",
+  "hooks": [
+    "auth.challenge",
+    "auth.challenge.verify",
+    "admin.menu",
+    "admin.panel"
+  ]
+}

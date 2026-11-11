@@ -1,0 +1,85 @@
+{
+  "slug": "announcement-bar",
+  "name": "公告条",
+  "description": "在站点顶部或底部展示可关闭的公告横幅，支持链接与自定义配色；访客关闭后按公告内容记忆，改文案会重新展示。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "Megaphone",
+  "hooks": [
+    "footer.html"
+  ],
+  "settings": [
+    {
+      "key": "content",
+      "label": "公告内容",
+      "fields": [
+        {
+          "key": "text",
+          "label": "公告文案",
+          "type": "text",
+          "default": "欢迎访问本站，记得收藏关注哦！",
+          "placeholder": "输入要展示的公告"
+        },
+        {
+          "key": "link",
+          "label": "跳转链接",
+          "type": "text",
+          "default": "",
+          "placeholder": "https://（留空则不显示按钮）",
+          "half": true
+        },
+        {
+          "key": "linkText",
+          "label": "链接按钮文案",
+          "type": "text",
+          "default": "了解更多",
+          "half": true
+        }
+      ]
+    },
+    {
+      "key": "style",
+      "label": "外观",
+      "fields": [
+        {
+          "key": "position",
+          "label": "展示位置",
+          "type": "select",
+          "default": "top",
+          "options": [
+            {
+              "value": "top",
+              "label": "页面顶部（随滚动走）"
+            },
+            {
+              "value": "bottom",
+              "label": "页面底部（悬浮固定）"
+            }
+          ],
+          "half": true
+        },
+        {
+          "key": "dismissible",
+          "label": "允许关闭",
+          "type": "switch",
+          "default": true,
+          "half": true
+        },
+        {
+          "key": "bgColor",
+          "label": "背景颜色",
+          "type": "color",
+          "default": "#5b8cff",
+          "half": true
+        },
+        {
+          "key": "textColor",
+          "label": "文字颜色",
+          "type": "color",
+          "default": "#ffffff",
+          "half": true
+        }
+      ]
+    }
+  ]
+}

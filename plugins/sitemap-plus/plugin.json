@@ -1,0 +1,287 @@
+{
+  "slug": "sitemap-plus",
+  "name": "高级站点地图",
+  "description": "增强内置 sitemap：图片扩展、收录开关、更新频率/优先级、关键词排除与自定义 URL；新增 Google News 新闻站点地图，以及超 50000 条/50MB 时自动输出 sitemapindex 分片。",
+  "version": "1.1.0",
+  "author": "Oboext",
+  "icon": "map",
+  "hooks": [
+    "sitemap.urls",
+    "sitemap.document",
+    "robots.rules"
+  ],
+  "settings": [
+    {
+      "key": "scope",
+      "label": "收录范围",
+      "icon": "FolderTree",
+      "fields": [
+        {
+          "key": "includePages",
+          "label": "收录独立页面",
+          "type": "switch",
+          "default": true
+        },
+        {
+          "key": "includeCategories",
+          "label": "收录分类归档",
+          "type": "switch",
+          "default": true
+        },
+        {
+          "key": "includeTags",
+          "label": "收录标签归档",
+          "type": "switch",
+          "default": true
+        }
+      ]
+    },
+    {
+      "key": "freshness",
+      "label": "更新标记与优先级",
+      "icon": "Clock",
+      "fields": [
+        {
+          "key": "lastmodSource",
+          "label": "最后修改时间来源",
+          "type": "select",
+          "default": "updated",
+          "half": true,
+          "options": [
+            {
+              "value": "updated",
+              "label": "内容更新时间（updatedAt）"
+            },
+            {
+              "value": "published",
+              "label": "首次发布时间（publishedAt）"
+            }
+          ]
+        },
+        {
+          "key": "changefreq",
+          "label": "内容更新频率",
+          "type": "select",
+          "default": "weekly",
+          "half": true,
+          "options": [
+            {
+              "value": "always",
+              "label": "always（持续变化）"
+            },
+            {
+              "value": "hourly",
+              "label": "hourly（每小时）"
+            },
+            {
+              "value": "daily",
+              "label": "daily（每天）"
+            },
+            {
+              "value": "weekly",
+              "label": "weekly（每周）"
+            },
+            {
+              "value": "monthly",
+              "label": "monthly（每月）"
+            },
+            {
+              "value": "yearly",
+              "label": "yearly（每年）"
+            },
+            {
+              "value": "never",
+              "label": "never（永不更新）"
+            }
+          ]
+        },
+        {
+          "key": "postPriority",
+          "label": "文章优先级",
+          "type": "select",
+          "default": "1.0",
+          "half": true,
+          "help": "全部文章使用 1.0。",
+          "options": [
+            {
+              "value": "1.0",
+              "label": "1.0（最高）"
+            },
+            {
+              "value": "0.9",
+              "label": "0.9"
+            },
+            {
+              "value": "0.8",
+              "label": "0.8"
+            },
+            {
+              "value": "0.7",
+              "label": "0.7"
+            },
+            {
+              "value": "0.6",
+              "label": "0.6"
+            }
+          ]
+        },
+        {
+          "key": "pagePriority",
+          "label": "页面优先级",
+          "type": "select",
+          "default": "0.7",
+          "half": true,
+          "options": [
+            {
+              "value": "0.9",
+              "label": "0.9"
+            },
+            {
+              "value": "0.8",
+              "label": "0.8"
+            },
+            {
+              "value": "0.7",
+              "label": "0.7"
+            },
+            {
+              "value": "0.6",
+              "label": "0.6"
+            },
+            {
+              "value": "0.5",
+              "label": "0.5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "images",
+      "label": "图片站点地图",
+      "icon": "Image",
+      "description": "通过 image:image 扩展向搜索引擎提交文章与页面中的图片（Google 图片搜索）。",
+      "fields": [
+        {
+          "key": "images",
+          "label": "启用图片站点地图扩展",
+          "type": "switch",
+          "default": true
+        },
+        {
+          "key": "imageFeatured",
+          "label": "包含特色图片",
+          "type": "switch",
+          "default": true,
+          "showIf": {
+            "key": "images",
+            "equals": "true"
+          }
+        },
+        {
+          "key": "imageContent",
+          "label": "包含正文图片（图片块与 HTML 块内 <img>）",
+          "type": "switch",
+          "default": true,
+          "showIf": {
+            "key": "images",
+            "equals": "true"
+          }
+        }
+      ]
+    },
+    {
+      "key": "news",
+      "label": "Google News 新闻地图",
+      "icon": "Newspaper",
+      "description": "开启后 /sitemap.xml?kind=news 输出新闻站点地图，并在 robots.txt 中声明。Google 规范仅收录最近 48 小时内发布的文章。",
+      "fields": [
+        {
+          "key": "newsEnabled",
+          "label": "启用新闻站点地图",
+          "type": "switch",
+          "default": false
+        },
+        {
+          "key": "newsLanguage",
+          "label": "出版物语言代码",
+          "type": "text",
+          "default": "zh-CN",
+          "half": true,
+          "help": "BCP 47 语言代码，如 zh-CN、en。",
+          "showIf": {
+            "key": "newsEnabled",
+            "equals": "true"
+          }
+        },
+        {
+          "key": "newsHours",
+          "label": "收录时间窗（小时）",
+          "type": "number",
+          "default": 48,
+          "min": 1,
+          "max": 720,
+          "step": 1,
+          "half": true,
+          "help": "仅收录最近 N 小时内发布的文章，Google News 规范为 48。",
+          "showIf": {
+            "key": "newsEnabled",
+            "equals": "true"
+          }
+        }
+      ]
+    },
+    {
+      "key": "sharding",
+      "label": "超量分片",
+      "icon": "Layers",
+      "description": "条目超过单文件上限时，/sitemap.xml 自动输出 sitemapindex，各分片地址为 /sitemap.xml?part=1、?part=2……默认值为 sitemaps.org 规范上限，通常无需修改。",
+      "fields": [
+        {
+          "key": "shardMaxUrls",
+          "label": "单分片最大 URL 数",
+          "type": "number",
+          "default": 50000,
+          "min": 1,
+          "step": 1,
+          "half": true,
+          "help": "规范上限 50000；联调时可临时设小值（如 3）验证分片。"
+        },
+        {
+          "key": "shardMaxMb",
+          "label": "单分片最大体积（MB，未压缩）",
+          "type": "number",
+          "default": 50,
+          "min": 1,
+          "max": 1024,
+          "step": 1,
+          "half": true,
+          "help": "规范上限 50MB。"
+        }
+      ]
+    },
+    {
+      "key": "advanced",
+      "label": "排除与自定义 URL",
+      "icon": "SlidersHorizontal",
+      "fields": [
+        {
+          "key": "excludeKeywords",
+          "label": "排除关键词",
+          "type": "textarea",
+          "default": "",
+          "placeholder": "每行一个关键词\n例如：\n/private\n?preview=",
+          "help": "URL 中包含任意关键词的条目不进入 sitemap（普通地图与新闻地图同时生效）。"
+        },
+        {
+          "key": "extraUrls",
+          "label": "额外 URL",
+          "type": "textarea",
+          "default": "",
+          "placeholder": "每行一个地址，支持相对路径\n例如：\n/about\nspecial/landing",
+          "help": "系统未覆盖的静态页面可在此手动追加，统一按 monthly / 0.5 输出。"
+        }
+      ]
+    }
+  ]
+}

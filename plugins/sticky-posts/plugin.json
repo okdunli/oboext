@@ -1,0 +1,35 @@
+{
+  "slug": "sticky-posts",
+  "name": "置顶文章",
+  "description": "把任意文章固定在前台所有文章列表的最前面，即使文章不是最新的也优先于时间排序（升序/倒序均生效）。支持多篇置顶并在独立面板中自定义先后顺序。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "Pin",
+  "hooks": [
+    "posts.pinned",
+    "admin.panel",
+    "admin.menu"
+  ],
+  "settings": [
+    {
+      "key": "data",
+      "label": "置顶数据",
+      "description": "由「置顶文章」管理面板维护，请勿手动修改。",
+      "fields": [
+        {
+          "key": "ids",
+          "label": "置顶文章 ID（数组顺序即展示顺序）",
+          "type": "hidden",
+          "default": []
+        },
+        {
+          "key": "includeHome",
+          "label": "置顶同时显示在首页「智能推荐」的近期文章区块",
+          "type": "switch",
+          "default": true,
+          "help": "关闭后插件置顶仅出现在最新文章列表与分类/标签/归档页"
+        }
+      ]
+    }
+  ]
+}

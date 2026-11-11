@@ -1,0 +1,81 @@
+{
+  "slug": "seo-schema",
+  "name": "结构化数据 (JSON-LD)",
+  "description": "为文章与网站注入 schema.org 结构化数据，帮助搜索引擎生成富摘要。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "Braces",
+  "hooks": [
+    "head.tags"
+  ],
+  "settings": [
+    {
+      "key": "org",
+      "label": "组织信息",
+      "fields": [
+        {
+          "key": "orgName",
+          "label": "组织/作者名称",
+          "type": "text",
+          "default": "",
+          "half": true,
+          "placeholder": "留空则使用站点标题"
+        },
+        {
+          "key": "orgLogo",
+          "label": "组织 Logo",
+          "type": "image",
+          "default": ""
+        },
+        {
+          "key": "type",
+          "label": "文章类型",
+          "type": "select",
+          "default": "BlogPosting",
+          "options": [
+            {
+              "value": "BlogPosting",
+              "label": "BlogPosting（博文）"
+            },
+            {
+              "value": "Article",
+              "label": "Article（文章）"
+            },
+            {
+              "value": "NewsArticle",
+              "label": "NewsArticle（新闻）"
+            },
+            {
+              "value": "TechArticle",
+              "label": "TechArticle（技术文档）"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "extra",
+      "label": "附加输出",
+      "fields": [
+        {
+          "key": "breadcrumb",
+          "label": "输出面包屑结构化数据",
+          "type": "switch",
+          "default": true
+        },
+        {
+          "key": "website",
+          "label": "输出 WebSite + 站内搜索",
+          "type": "switch",
+          "default": true
+        },
+        {
+          "key": "organization",
+          "label": "输出 Organization 组织实体（站点 logo/品牌信号）",
+          "type": "switch",
+          "default": true
+        }
+      ]
+    }
+  ]
+}

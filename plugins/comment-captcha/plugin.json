@@ -1,0 +1,28 @@
+{
+  "slug": "comment-captcha",
+  "name": "评论图形验证",
+  "description": "评论提交前要求回答算术图形验证码（SVG 干扰图 + HMAC 签名一次性令牌，防重放），拦截机器人灌水。依赖核心 /api/comment-captcha 签发端点与 comment.submission 守卫钩子；前端零依赖脚本自动挂载到内置评论表单，登录用户可豁免。",
+  "version": "1.0.0",
+  "icon": "ShieldCheck",
+  "author": "Oboext",
+  "hooks": [
+    "comment.submission",
+    "footer.html"
+  ],
+  "settings": [
+    {
+      "key": "guard",
+      "label": "验证策略",
+      "icon": "ShieldCheck",
+      "fields": [
+        {
+          "key": "guestsOnly",
+          "label": "仅游客需要验证（登录用户豁免）",
+          "type": "switch",
+          "default": true,
+          "help": "关闭后，包括管理员在内的所有账号发表评论都必须通过验证码。"
+        }
+      ]
+    }
+  ]
+}

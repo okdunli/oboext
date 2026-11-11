@@ -1,0 +1,78 @@
+{
+  "slug": "comment-guard",
+  "name": "评论守卫",
+  "description": "基于链接数量、关键词黑名单与最短长度的评论垃圾过滤，可自动标记为待审或垃圾。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "ShieldCheck",
+  "hooks": [
+    "comment.approve",
+    "comment.created"
+  ],
+  "settings": [
+    {
+      "key": "rules",
+      "label": "过滤规则",
+      "fields": [
+        {
+          "key": "maxLinks",
+          "label": "允许的最大链接数",
+          "type": "number",
+          "default": 2,
+          "half": true,
+          "help": "超过则按下方动作处理"
+        },
+        {
+          "key": "minLength",
+          "label": "最短内容长度",
+          "type": "number",
+          "default": 2,
+          "half": true
+        },
+        {
+          "key": "blacklist",
+          "label": "关键词黑名单",
+          "type": "textarea",
+          "default": "casino\nviagra\n加微信\n代开发票",
+          "placeholder": "每行一个关键词",
+          "help": "命中任意一条即触发动作，不区分大小写"
+        },
+        {
+          "key": "action",
+          "label": "命中后动作",
+          "type": "select",
+          "default": "spam",
+          "options": [
+            {
+              "value": "spam",
+              "label": "直接标记为垃圾"
+            },
+            {
+              "value": "pending",
+              "label": "转入待审核"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "trust",
+      "label": "信任策略",
+      "fields": [
+        {
+          "key": "trustLoggedIn",
+          "label": "已登录用户直接通过",
+          "type": "switch",
+          "default": true
+        },
+        {
+          "key": "trustReturning",
+          "label": "有过已通过评论的邮箱直接通过",
+          "type": "switch",
+          "default": false,
+          "help": "需要核心提供历史查询，未实现时忽略"
+        }
+      ]
+    }
+  ]
+}

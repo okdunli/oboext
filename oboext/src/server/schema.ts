@@ -269,6 +269,10 @@ export const pages = pgTable(
     publishedAt: timestamp("published_at", { withTimezone: true }),
     template: text("template"),
     order: integer("order").notNull().default(0),
+    // 0045: the page's content language, same vocabulary as posts.locale.
+    locale: text("locale").notNull().default("zh-CN"),
+    // 0046: the page this row translates (same contract as posts.translationOf).
+    translationOf: integer("translation_of").references((): any => pages.id, { onDelete: "set null" }),
   },
   (t) => ({
     slugIdx: uniqueIndex("pages_slug_idx").on(t.slug),

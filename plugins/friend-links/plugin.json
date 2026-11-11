@@ -1,0 +1,95 @@
+{
+  "slug": "friend-links",
+  "name": "友情链接",
+  "description": "分组友链卡片墙：[friendlinks] 短代码或开启免建页面的独立 /links 虚拟路由，后台管理名称、链接、头像、分组与显隐。",
+  "version": "1.1.0",
+  "icon": "link-2",
+  "author": "Oboext",
+  "hooks": [
+    "admin.panel",
+    "admin.menu",
+    "site.routes",
+    "sitemap.urls"
+  ],
+  "settings": [
+    {
+      "key": "data",
+      "label": "链接数据",
+      "icon": "Database",
+      "fields": [
+        {
+          "key": "links",
+          "label": "links",
+          "type": "hidden",
+          "default": []
+        }
+      ]
+    },
+    {
+      "key": "display",
+      "label": "展示设置",
+      "icon": "Monitor",
+      "fields": [
+        {
+          "key": "columns",
+          "label": "每行卡片数",
+          "type": "select",
+          "default": "3",
+          "options": [
+            {
+              "value": "2",
+              "label": "2 列"
+            },
+            {
+              "value": "3",
+              "label": "3 列（默认）"
+            },
+            {
+              "value": "4",
+              "label": "4 列"
+            }
+          ]
+        },
+        {
+          "key": "showDescription",
+          "label": "显示描述文字",
+          "type": "switch",
+          "default": true
+        },
+        {
+          "key": "openNewTab",
+          "label": "新窗口打开链接",
+          "type": "switch",
+          "default": true
+        }
+      ]
+    },
+    {
+      "key": "route",
+      "label": "独立路由",
+      "icon": "Globe",
+      "fields": [
+        {
+          "key": "routeEnabled",
+          "label": "启用独立路由（无需新建页面）",
+          "type": "switch",
+          "default": false,
+          "help": "开启后访客可直接访问该路径看到友链墙，并自动加入 sitemap；与真实页面/文章重名时实体优先。"
+        },
+        {
+          "key": "routePath",
+          "label": "路由路径",
+          "type": "text",
+          "default": "links",
+          "help": "单段路径，填 links 即 /links，填 friends 即 /friends；不要含斜杠。"
+        },
+        {
+          "key": "pageTitle",
+          "label": "页面标题",
+          "type": "text",
+          "default": "友情链接"
+        }
+      ]
+    }
+  ]
+}

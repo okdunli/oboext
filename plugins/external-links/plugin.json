@@ -1,0 +1,50 @@
+{
+  "slug": "external-links",
+  "name": "外链新窗打开",
+  "description": "自动为站外链接添加新窗口打开与安全 rel 属性，可限定正文范围，可选 nofollow。纯前端注入。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "ExternalLink",
+  "hooks": [
+    "footer.html"
+  ],
+  "settings": [
+    {
+      "key": "general",
+      "label": "外链规则",
+      "fields": [
+        {
+          "key": "scope",
+          "label": "生效范围",
+          "type": "select",
+          "default": "content",
+          "options": [
+            {
+              "value": "content",
+              "label": "仅正文区域"
+            },
+            {
+              "value": "all",
+              "label": "整页所有链接"
+            }
+          ]
+        },
+        {
+          "key": "noreferrer",
+          "label": "附带 noopener noreferrer",
+          "type": "switch",
+          "default": true,
+          "half": true,
+          "help": "防止新窗口拿到 window.opener，建议开启"
+        },
+        {
+          "key": "nofollow",
+          "label": "附带 nofollow",
+          "type": "switch",
+          "default": false,
+          "half": true
+        }
+      ]
+    }
+  ]
+}

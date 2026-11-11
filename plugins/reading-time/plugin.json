@@ -1,0 +1,49 @@
+{
+  "slug": "reading-time",
+  "name": "阅读时长",
+  "description": "统计文章字数并在元信息行展示预计阅读时长，支持中英文分别计速。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "Clock",
+  "hooks": [
+    "post.meta"
+  ],
+  "settings": [
+    {
+      "key": "general",
+      "label": "计算规则",
+      "fields": [
+        {
+          "key": "cpm",
+          "label": "中文阅读速度",
+          "type": "number",
+          "default": 400,
+          "unit": "字/分钟",
+          "half": true,
+          "help": "普通读者约 300–500 字/分钟"
+        },
+        {
+          "key": "wpm",
+          "label": "英文阅读速度",
+          "type": "number",
+          "default": 220,
+          "unit": "词/分钟",
+          "half": true
+        },
+        {
+          "key": "template",
+          "label": "展示文案",
+          "type": "text",
+          "default": "约 {minutes} 分钟",
+          "help": "可用占位符：{minutes} {words} {chars}"
+        },
+        {
+          "key": "showWordCount",
+          "label": "同时显示字数",
+          "type": "switch",
+          "default": true
+        }
+      ]
+    }
+  ]
+}

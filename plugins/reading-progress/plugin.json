@@ -1,0 +1,59 @@
+{
+  "slug": "reading-progress",
+  "name": "阅读进度条",
+  "description": "页面顶部（或底部）显示当前阅读进度细条，纯前端注入，可限定仅文章/独立页面显示。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "Percent",
+  "hooks": [
+    "footer.html"
+  ],
+  "settings": [
+    {
+      "key": "ui",
+      "label": "外观",
+      "fields": [
+        {
+          "key": "color",
+          "label": "进度条颜色",
+          "type": "color",
+          "default": "#5b8cff"
+        },
+        {
+          "key": "height",
+          "label": "粗细",
+          "type": "number",
+          "default": 3,
+          "min": 1,
+          "max": 12,
+          "unit": "px",
+          "half": true
+        },
+        {
+          "key": "position",
+          "label": "位置",
+          "type": "select",
+          "default": "top",
+          "options": [
+            {
+              "value": "top",
+              "label": "页面顶部"
+            },
+            {
+              "value": "bottom",
+              "label": "页面底部"
+            }
+          ],
+          "half": true
+        },
+        {
+          "key": "onlyArticle",
+          "label": "仅文章/独立页面显示",
+          "type": "switch",
+          "default": true,
+          "help": "首页、归档等列表页不显示"
+        }
+      ]
+    }
+  ]
+}

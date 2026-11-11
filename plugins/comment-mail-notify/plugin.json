@@ -1,0 +1,42 @@
+{
+  "slug": "comment-mail-notify",
+  "name": "评论邮件通知",
+  "description": "有新评论时通过「通知设置」中已配置的 SMTP 给指定收件人发邮件，待审核评论同样提醒，便于及时审核。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "MailCheck",
+  "hooks": [
+    "comment.created"
+  ],
+  "settings": [
+    {
+      "key": "general",
+      "label": "通知规则",
+      "fields": [
+        {
+          "key": "recipients",
+          "label": "收件邮箱",
+          "type": "textarea",
+          "default": "",
+          "placeholder": "admin@example.com",
+          "help": "多个收件人一行一个；留空则不发送。SMTP 请到后台「通知设置」中配置。"
+        },
+        {
+          "key": "notifyPending",
+          "label": "待审核评论也通知",
+          "type": "switch",
+          "default": true,
+          "half": true,
+          "help": "关闭后仅评论直接通过时才发邮件"
+        },
+        {
+          "key": "includeContent",
+          "label": "邮件包含评论正文",
+          "type": "switch",
+          "default": true,
+          "half": true
+        }
+      ]
+    }
+  ]
+}

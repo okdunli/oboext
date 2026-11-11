@@ -1,0 +1,45 @@
+{
+  "slug": "code-copy",
+  "name": "代码块工具条",
+  "description": "为前台代码块添加「复制」按钮与语言标签，可选显示行号。纯前端注入，不改主题代码。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "ClipboardCopy",
+  "hooks": [
+    "footer.html"
+  ],
+  "settings": [
+    {
+      "key": "ui",
+      "label": "外观",
+      "fields": [
+        {
+          "key": "buttonText",
+          "label": "按钮文案",
+          "type": "text",
+          "default": "复制",
+          "half": true
+        },
+        {
+          "key": "copiedText",
+          "label": "复制成功文案",
+          "type": "text",
+          "default": "已复制",
+          "half": true
+        },
+        {
+          "key": "showLang",
+          "label": "显示语言标签",
+          "type": "switch",
+          "default": true
+        },
+        {
+          "key": "showLineNumbers",
+          "label": "显示行号",
+          "type": "switch",
+          "default": false
+        }
+      ]
+    }
+  ]
+}

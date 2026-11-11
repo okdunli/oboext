@@ -1,0 +1,36 @@
+{
+  "slug": "image-lightbox",
+  "name": "图片灯箱",
+  "description": "点击正文图片全屏放大查看，支持 Esc / 点击空白关闭与图片说明。纯前端注入，不改动主题。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "ZoomIn",
+  "hooks": [
+    "footer.html"
+  ],
+  "settings": [
+    {
+      "key": "ui",
+      "label": "灯箱设置",
+      "fields": [
+        {
+          "key": "caption",
+          "label": "显示图片说明（alt 文本）",
+          "type": "switch",
+          "default": true,
+          "half": true
+        },
+        {
+          "key": "minSize",
+          "label": "触发最小宽度",
+          "type": "number",
+          "default": 200,
+          "min": 0,
+          "unit": "px",
+          "half": true,
+          "help": "小于该宽度的图片（表情、图标等）不触发灯箱"
+        }
+      ]
+    }
+  ]
+}

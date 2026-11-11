@@ -1,0 +1,144 @@
+{
+  "slug": "checkin",
+  "name": "每日签到",
+  "description": "会员每日签到赚取积分：后台配置货币名称与固定/随机数额，前台提供签到页、积分记录与排行榜（支持匿名与排序方式）。",
+  "version": "1.0.0",
+  "icon": "CalendarCheck",
+  "author": "Oboext",
+  "hooks": [
+    "api.request",
+    "site.routes",
+    "usercenter.menu",
+    "footer.html"
+  ],
+  "settings": [
+    {
+      "key": "reward",
+      "label": "签到奖励",
+      "icon": "Coins",
+      "fields": [
+        {
+          "key": "currencyName",
+          "label": "货币名称",
+          "type": "text",
+          "default": "积分",
+          "help": "前台展示的积分类货币名称，如积分、金币、能量。"
+        },
+        {
+          "key": "mode",
+          "label": "每日奖励方式",
+          "type": "select",
+          "default": "fixed",
+          "options": [
+            {
+              "value": "fixed",
+              "label": "固定数额"
+            },
+            {
+              "value": "random",
+              "label": "随机数额"
+            }
+          ]
+        },
+        {
+          "key": "fixedAmount",
+          "label": "固定奖励",
+          "type": "number",
+          "default": 5,
+          "min": 1,
+          "half": true,
+          "showIf": {
+            "key": "mode",
+            "equals": "fixed"
+          }
+        },
+        {
+          "key": "randomMin",
+          "label": "随机最小值",
+          "type": "number",
+          "default": 1,
+          "min": 0,
+          "half": true,
+          "showIf": {
+            "key": "mode",
+            "equals": "random"
+          }
+        },
+        {
+          "key": "randomMax",
+          "label": "随机最大值",
+          "type": "number",
+          "default": 20,
+          "min": 1,
+          "half": true,
+          "showIf": {
+            "key": "mode",
+            "equals": "random"
+          }
+        }
+      ]
+    },
+    {
+      "key": "ranking",
+      "label": "排行榜",
+      "icon": "Trophy",
+      "fields": [
+        {
+          "key": "rankingEnabled",
+          "label": "开启排行榜",
+          "type": "switch",
+          "default": true
+        },
+        {
+          "key": "rankingAnonymity",
+          "label": "排行榜匿名方式",
+          "type": "select",
+          "default": "none",
+          "options": [
+            {
+              "value": "none",
+              "label": "全部显示昵称"
+            },
+            {
+              "value": "partial",
+              "label": "部分匿名（前三名与自己显示昵称）"
+            },
+            {
+              "value": "full",
+              "label": "全部匿名"
+            }
+          ]
+        },
+        {
+          "key": "rankingSort",
+          "label": "排行榜排序",
+          "type": "select",
+          "default": "points",
+          "options": [
+            {
+              "value": "points",
+              "label": "按积分排序"
+            },
+            {
+              "value": "time",
+              "label": "按最近签到时间排序"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "display",
+      "label": "展示",
+      "icon": "Eye",
+      "fields": [
+        {
+          "key": "floatEnabled",
+          "label": "显示右下角悬浮入口",
+          "type": "switch",
+          "default": true
+        }
+      ]
+    }
+  ]
+}

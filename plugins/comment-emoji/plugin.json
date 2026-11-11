@@ -1,0 +1,95 @@
+{
+  "slug": "comment-emoji",
+  "name": "评论表情增强",
+  "description": "接管评论框的表情面板，支持完全自定义：自建表情分类（可改图标与名称）、表情/颜文字/图片（本地、媒体库或 URL，含 GIF）/快捷语混排，可设置面板与单项宽高，支持导入导出。评论列表中的图片表情会按设置渲染。",
+  "version": "1.0.0",
+  "author": "Oboext",
+  "icon": "SmilePlus",
+  "hooks": [
+    "footer.html",
+    "admin.menu",
+    "admin.panel"
+  ],
+  "settings": [
+    {
+      "key": "basic",
+      "label": "基本",
+      "icon": "Settings",
+      "fields": [
+        {
+          "key": "enabled",
+          "label": "启用增强表情面板",
+          "type": "switch",
+          "default": true,
+          "help": "关闭后恢复主题自带的表情面板"
+        }
+      ]
+    },
+    {
+      "key": "data",
+      "label": "表情数据",
+      "icon": "List",
+      "description": "由「评论表情增强」管理面板维护，请勿手动修改。",
+      "fields": [
+        {
+          "key": "groups",
+          "label": "表情分类",
+          "type": "hidden",
+          "default": []
+        }
+      ]
+    },
+    {
+      "key": "layout",
+      "label": "外观尺寸",
+      "icon": "Ruler",
+      "fields": [
+        {
+          "key": "panelW",
+          "label": "面板最大宽度（px）",
+          "type": "number",
+          "default": 320,
+          "min": 200,
+          "max": 800,
+          "half": true,
+          "help": "0 表示不限"
+        },
+        {
+          "key": "panelH",
+          "label": "面板最大高度（px）",
+          "type": "number",
+          "default": 260,
+          "min": 120,
+          "max": 800,
+          "half": true,
+          "help": "0 表示不限"
+        },
+        {
+          "key": "itemW",
+          "label": "单项最大宽度（px）",
+          "type": "number",
+          "default": 64,
+          "min": 16,
+          "max": 400,
+          "half": true
+        },
+        {
+          "key": "itemH",
+          "label": "单项最大高度（px）",
+          "type": "number",
+          "default": 64,
+          "min": 16,
+          "max": 400,
+          "half": true
+        },
+        {
+          "key": "showTitle",
+          "label": "在表情下方显示标题",
+          "type": "switch",
+          "default": true,
+          "half": true
+        }
+      ]
+    }
+  ]
+}

@@ -6,6 +6,8 @@ import { invalidateOptionCache } from "./options.js";
 import { invalidateAll, invalidateContentCaches } from "./cache.js";
 import { invalidateSettings } from "./queries.js";
 import { reloadPlugins } from "./plugins.js";
+import { resetDefaultMenusSeed } from "./menus.js";
+import { resetThemesSync } from "./themes.js";
 import { ServiceError } from "./admin.js";
 
 const ENV_CONFIG = path.resolve(process.cwd(), ".env.local");
@@ -107,6 +109,8 @@ export async function applyDbConfig(input: {
     // ran out. invalidateContentCaches() is the one call that sweeps kv +
     // hot + every content memo on top of the invalidateAll above.
     invalidateContentCaches();
+    resetDefaultMenusSeed();
+    resetThemesSync();
     await reloadPlugins();
   }
 

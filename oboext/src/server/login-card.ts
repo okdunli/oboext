@@ -23,7 +23,7 @@ export function loginCardHtml(
 
     `<div class="adm-field" data-login-show="login forgot codelogin">` +
     `<label>${t("login.account")}</label>` +
-    `<input class="adm-input" name="account" autocomplete="username" required autofocus>` +
+    `<input class="adm-input" name="account" aria-label="${t("login.account")}" autocomplete="username" required autofocus>` +
     `</div>` +
 
     `<div class="adm-field" data-login-show="login">` +
@@ -31,33 +31,33 @@ export function loginCardHtml(
     `<label>${t("login.password")}</label>` +
     `<button type="button" class="adm-auth-link" data-adm-act="login-forgot">${t("login.forgot_link")}</button>` +
     `</div>` +
-    `<input class="adm-input" type="password" name="password" autocomplete="current-password" required>` +
+    `<input class="adm-input" type="password" name="password" aria-label="${t("login.password")}" autocomplete="current-password" required>` +
     `</div>` +
 
     `<div class="adm-field" data-login-show="codelogin" hidden>` +
     `<label data-login-target-label>${t("login.target_email")}</label>` +
-    `<input class="adm-input" name="target" type="email" autocomplete="email" placeholder="${t("login.target_ph_email")}">` +
+    `<input class="adm-input" name="target" type="email" aria-label="${t("login.target_email")}" autocomplete="email" placeholder="${t("login.target_ph_email")}">` +
     `</div>` +
     `<div class="adm-field" data-login-show="codelogin" hidden>` +
     `<label>${t("login.code_label")}</label>` +
     `<div style="display:flex;align-items:center;gap:8px;">` +
-    `<input class="adm-input" name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="${t("login.code_ph")}" style="flex:1;">` +
+    `<input class="adm-input" name="code" aria-label="${t("login.code_label")}" inputmode="numeric" autocomplete="one-time-code" placeholder="${t("login.code_ph")}" style="flex:1;">` +
     `<button type="button" class="adm-btn adm-btn-ghost" data-adm-act="login-send-code" style="flex-shrink:0;white-space:nowrap;">${t("login.send_code")}</button>` +
     `</div>` +
     `</div>` +
 
     `<div class="adm-field" data-login-show="forgot" hidden>` +
     `<label>${t("login.reset_code")}</label>` +
-    `<input class="adm-input" name="resetCode" inputmode="numeric" maxlength="8" placeholder="${t("login.reset_code_ph")}">` +
+    `<input class="adm-input" name="resetCode" aria-label="${t("login.reset_code")}" inputmode="numeric" maxlength="8" placeholder="${t("login.reset_code_ph")}">` +
     `</div>` +
     `<div class="adm-field" data-login-show="forgot" hidden>` +
     `<label>${t("login.new_password")}</label>` +
-    `<input class="adm-input" type="password" name="resetPassword" minlength="8" autocomplete="new-password" placeholder="${t("login.new_password_ph")}">` +
+    `<input class="adm-input" type="password" name="resetPassword" aria-label="${t("login.new_password")}" minlength="8" autocomplete="new-password" placeholder="${t("login.new_password_ph")}">` +
     `</div>` +
 
     `<div class="adm-field" data-login-show="twofa" hidden>` +
     `<label>${t("login.twofa_label")}</label>` +
-    `<input class="adm-input" name="twoFaCode" autocomplete="one-time-code" placeholder="${t("login.twofa_ph")}" autofocus>` +
+    `<input class="adm-input" name="twoFaCode" aria-label="${t("login.twofa_label")}" autocomplete="one-time-code" placeholder="${t("login.twofa_ph")}" autofocus>` +
     `<p class="adm-hint" style="margin:6px 0 0;">${t("login.twofa_hint")}</p>` +
     `</div>` +
 
@@ -65,9 +65,9 @@ export function loginCardHtml(
       ? `<div class="adm-field" data-login-captcha data-login-show="login codelogin forgot" hidden>` +
         `<label>${t("login.captcha")}</label>` +
         `<div style="display:flex;align-items:center;gap:8px;">` +
-        `<input class="adm-input" name="captcha" maxlength="4" autocomplete="off" spellcheck="false" placeholder="${t("login.captcha_ph")}" style="width:120px;text-transform:uppercase;letter-spacing:.18em;" data-login-captcha-builtin>` +
+        `<input class="adm-input" name="captcha" aria-label="${t("login.captcha")}" maxlength="4" autocomplete="off" spellcheck="false" placeholder="${t("login.captcha_ph")}" style="width:120px;text-transform:uppercase;letter-spacing:.18em;" data-login-captcha-builtin>` +
         `<img data-login-captcha-img src="/api/captcha/image" alt="${t("login.captcha_alt")}" title="${t("login.captcha_title")}" style="height:38px;width:120px;cursor:pointer;border:1px solid var(--adm-border);border-radius:6px;background:#eef2f7;">` +
-        `<input class="adm-input" name="captchaToken" maxlength="200" autocomplete="off" placeholder="${t("login.captcha_token_ph")}" data-login-captcha-custom hidden>` +
+        `<input class="adm-input" name="captchaToken" aria-label="${t("login.captcha")}" maxlength="200" autocomplete="off" placeholder="${t("login.captcha_token_ph")}" data-login-captcha-custom hidden>` +
         `</div>` +
         `</div>`
       : "") +
@@ -95,7 +95,8 @@ export function secretEntryPageHtml(captcha: Captcha | undefined, t: Translate, 
     loginCardHtml(captcha, t, locale) +
     `</div>` +
     `</div>` +
-    `<link rel="stylesheet" href="/public/admin.css">` +
-    `<script src="${publicAssetHref("login-card.js")}" defer></script>`
+    `<link rel="stylesheet" href="${publicAssetHref("admin.css")}">` +
+    `<script src="${publicAssetHref("login-card.js")}" defer></script>` +
+    `<script src="${publicAssetHref("oauth-twofa.js")}" defer></script>`
   );
 }

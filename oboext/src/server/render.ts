@@ -16,6 +16,7 @@ import { authorUrlFor } from "./links.js";
 import fsMod from "node:fs";
 import pathMod from "node:path";
 import { DEFAULT_LOCALE, makeT, type Locale, type Translate } from "./i18n.js";
+import { siteDateContext, siteDayParts, siteNumericFmt, siteYear } from "./site-dates.js";
 
 // The bundled 80x80 brand mark shipped in public/. Doubles as the publisher
 // logo and og:image fallback so a fresh install still has a valid social card.
@@ -117,6 +118,20 @@ export function imgVariantAttrs(url: string, sizes?: string): string {
   return sizes ? `${srcset} sizes="${esc(sizes)}"` : srcset;
 }
 
+/** <link rel="preload" as="image"> for a hero/cover image, using the same
+ *  srcset the rendered <img> carries so the browser fetches ONE file, not two.
+ *  Only variant-backed /uploads/ URLs get imagesrcset; anything else preloads
+ *  its plain href. */
+export function imagePreloadTag(url: string | null | undefined, sizes?: string): string {
+  if (!url) return "";
+  const srcset = url.startsWith("/uploads/")
+    ? imgVariantSrcset(url).trim().replace(/^srcset=/, "imagesrcset=")
+    : "";
+  return `<link rel="preload" as="image" href="${esc(url)}"${srcset ? ` ${srcset}` : ""}${
+    srcset && sizes ? ` imagesizes="${esc(sizes)}"` : ""
+  }>`;
+}
+
 function imgVariantSrcset(url: string): string {
   const hit = variantCache.get(url);
   if (hit !== undefined) return hit;
@@ -129,11 +144,12 @@ function imgVariantSrcset(url: string): string {
       const base = pathMod.basename(abs, ext);
       const dirUrl = url.slice(0, url.length - (base + ext).length);
       const widths: Array<{ w: number; u: string }> = [];
+      const variantRe = new RegExp(
+        `^${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.w(\\d+)${ext.replace(".", "\\.")}$`,
+        "i",
+      );
       for (const f of fsMod.readdirSync(dir)) {
-        const mm = new RegExp(
-          `^${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.w(\\d+)${ext.replace(".", "\\.")}$`,
-          "i",
-        ).exec(f);
+        const mm = variantRe.exec(f);
         const w = mm ? Number(mm[1]) : 0;
         if (w > 0) widths.push({ w, u: `${dirUrl}${base}.w${w}${ext}` });
       }
@@ -152,20 +168,57 @@ function imgVariantSrcset(url: string): string {
 
 // --------------------------------------------------------------------- utils
 
-export const esc = (s: unknown): string =>
-  String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+const ESC_MAP: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+const ESC_RE = /[&<>"']/g;
+// Non-global quick check: stateless (a global regex's .test() keeps lastIndex
+// state and would misfire across calls), used only to skip the common no-special
+// string without touching the regex engine's mutable state.
+const ESC_HAS = /[&<>"']/;
+export const esc = (s: unknown): string => {
+  const str = String(s ?? "");
+  return ESC_HAS.test(str) ? str.replace(ESC_RE, (c) => ESC_MAP[c]) : str;
+};
 
 const pad = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * A visitor-facing date, in the SITE's calendar and the SITE's date format.
+ *
+ * R533: this used to read the SERVER's clock fields and always print
+ * YYYY-MM-DD, so the front desk disagreed with the admin list about the day
+ * a post belongs to (a post published at 20:00 UTC is already the next day
+ * in Asia/Shanghai), and the site's own `dateFormat` setting never showed up
+ * on the front desk at all. The site's date context is refreshed by every
+ * settings read (queries.getSettings) and read here synchronously, so the
+ * theme's call sites keep working unchanged.
+ */
+export { siteYear };
+
+/**
+ * The machine-readable instant for a <time datetime="..."> attribute.
+ *
+ * Exported for themes: the visible date is the site's calendar choice, the
+ * attribute is the exact instant - a theme that renders its own <time> gets
+ * both halves right without re-deriving either.
+ */
+export function isoDateAttr(v: Date | string | null | undefined): string {
+  if (!v) return "";
+  const d = typeof v === "string" ? new Date(v) : v;
+  if (Number.isNaN(d.getTime())) return "";
+  return ` datetime="${esc(d.toISOString())}"`;
+}
+
 export function fmtDate(v: Date | string | null | undefined): string {
   if (!v) return "—";
-  const d = new Date(v);
+  const d = typeof v === "string" ? new Date(v) : v;
   if (Number.isNaN(d.getTime())) return "—";
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return formatSiteDate(d, siteDateContext()) || "—";
 }
 
 // Intl.DateTimeFormat CONSTRUCTION is the expensive half (~70µs each, measured
@@ -174,20 +227,9 @@ export function fmtDate(v: Date | string | null | undefined): string {
 // built once. They are immutable and keyed by timezone - an admin setting, so
 // one entry in practice. A bad timezone still throws, exactly as it did when
 // the constructor was called inline.
-const dateFmtNumeric = new Map<string, Intl.DateTimeFormat>();
-function numericDateFmt(tz: string): Intl.DateTimeFormat {
-  let f = dateFmtNumeric.get(tz);
-  if (!f) {
-    f = new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    dateFmtNumeric.set(tz, f);
-  }
-  return f;
-}
+// The numeric formatter now lives in site-dates.ts, next to the context it
+// is keyed by - one place owns the site's calendar (R533).
+const numericDateFmt = siteNumericFmt;
 
 const dateFmtShort = new Map<string, Intl.DateTimeFormat>();
 function shortDateFmt(tz: string): Intl.DateTimeFormat {
@@ -274,28 +316,7 @@ function renderBlock(b: Block): string {
 const serializeBlocks = (blocks: Block[] | null | undefined) =>
   !blocks || !blocks.length ? "" : blocks.map(renderBlock).join("\n");
 
-/** Plain-text version (excerpts, reading-time plugin, search). */
-export function blocksToPlainText(blocks: Block[] | null | undefined): string {
-  return (blocks ?? [])
-    .map((b) => {
-      switch (b.type) {
-        case "heading":
-        case "paragraph":
-        case "quote":
-          return b.text || "";
-        case "code":
-          return b.code || "";
-        case "list":
-          return (b.items || []).join(" ");
-        case "image":
-          return b.caption || b.alt || "";
-        default:
-          return "";
-      }
-    })
-    .filter(Boolean)
-    .join("\n");
-}
+export { blocksToPlainText } from "./plain-text.js";
 
 /** One label/value row on the post meta line (plugins append via post.meta). */
 export type MetaItem = { label: string; value: string };
@@ -490,7 +511,7 @@ function hTokenize(src: string, lang: string): string {
   const family = H_ALIAS[lang] ?? (lang ? "generic" : "");
   const rules = family ? H_RULES[family] : null;
   if (!rules) return esc(src);
-  let out = "";
+  const parts: string[] = [];
   let i = 0;
   while (i < src.length) {
     let hit: { text: string; kind: string } | null = null;
@@ -503,14 +524,14 @@ function hTokenize(src: string, lang: string): string {
       }
     }
     if (hit) {
-      out += `<span class="tok-${hit.kind}">${esc(hit.text)}</span>`;
+      parts.push(`<span class="tok-${hit.kind}">${esc(hit.text)}</span>`);
       i += hit.text.length;
     } else {
-      out += esc(src[i]);
+      parts.push(esc(src[i]));
       i += 1;
     }
   }
-  return out;
+  return parts.join("");
 }
 const H_PRE_RE = /<pre([^>]*\bdata-lang="([^"]*)"[^>]*)><code>([\s\S]*?)<\/code><\/pre>/g;
 function highlightCodeBlocks(html: string): string {
@@ -607,11 +628,12 @@ function readImageDims(abs: string): [number, number] | null {
  * eager). Exception: the FIRST image is normally the page's LCP element, so it
  * stays eager (with high fetch-priority) and only gains `decoding="async"`.
  */
-export function addLazyImages(html: string): string {
+export function optimizeContentImages(html: string, sizes: string = IMG_SIZES_BODY): string {
   if (!/<img/i.test(html)) return html;
   let firstSeen = false;
   return html.replace(/<img\b([^>]*)>/gi, (_full, attrsRaw: string) => {
     let attrs = attrsRaw.replace(/\s*\/\s*$/, "");
+    // --- lazy/eager + decoding (was addLazyImages) ---
     const hasLoading = /\sloading\s*=/i.test(attrs);
     if (!firstSeen) {
       firstSeen = true;
@@ -622,14 +644,7 @@ export function addLazyImages(html: string): string {
       attrs = ` loading="lazy"${attrs}`;
     }
     if (!/\sdecoding\s*=/i.test(attrs)) attrs = ` decoding="async"${attrs}`;
-    return `<img${attrs}>`;
-  });
-}
-
-export function optimizeContentImages(html: string, sizes: string = IMG_SIZES_BODY): string {
-  if (!/<img/i.test(html)) return html;
-  return addLazyImages(html).replace(/<img\b([^>]*)>/gi, (_full, attrsRaw: string) => {
-    let attrs = attrsRaw.replace(/\s*\/\s*$/, "");
+    // --- responsive srcset + intrinsic dims (was the second pass) ---
     const hasDims = /\s(width|height)\s*=/i.test(attrs);
     const hasSrcset = /\ssrcset\s*=/i.test(attrs);
     if (!hasDims || !hasSrcset) {
@@ -795,31 +810,16 @@ export function postCard(p: PostView, award = 0, t?: Translate, high = false): s
     (award ? awardBadge(award) : "") +
     `<div class="title"><span>${esc(p.title)}</span>${subtitle ? `<span class="subtitle">${esc(subtitle)}</span>` : ""}${langTag}</div>` +
     img +
-    `<div class="metas"><time class="time">${fmtDate(p.publishedAt)}</time>` +
+    // R533: the visible text is the site's day and format; the datetime
+    // attribute stays the exact instant, so a machine (a reader, a crawler,
+    // a feed) never has to reverse-engineer the site's calendar.
+    // R536: itemprop="datePublished" turns this <time> into schema.org
+    // microdata, agreeing with the BlogPosting JSON-LD the post page emits -
+    // a crawler on a listing page reads the date without fetching the post.
+    `<div class="metas"><time class="time" itemprop="datePublished"${isoDateAttr(p.publishedAt)}>${fmtDate(p.publishedAt)}</time>` +
     `<div class="info">` +
     `<span class="reads" data-toggle="tooltip" title="${L("post.reads_tip")}"><i class="obx-icons-book-reader"></i>${p.views ?? 0}</span>` +
     likes +
-    `<span class="comments" data-toggle="tooltip" title="${L("comments.title")}"><i class="obx-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
-    `</div><a class="read-more" href="${esc(p.url)}">${L("post.read_more")}</a></div></div></div>`
-  );
-}
-
-export function nestedCard(p: PostView, t?: Translate, high = false): string {
-  const L = (k: string) => (t ? t(k) : makeT(DEFAULT_LOCALE)(k));
-  // Same LCP rule as postCard: first nested card eager+high, the rest lazy.
-  const imgAttrs = high ? { srcset: false } : { srcset: false, lazy: true };
-  const img = p.featuredImage
-    ? `<img src="${esc(p.featuredImage)}"${imgVariantAttrs(p.featuredImage)}${imgPerfAttrs(p.featuredImage, imgAttrs)}${high ? ' loading="eager" fetchpriority="high"' : ""} crossorigin="anonymous">`
-    : "";
-  const subtitle = extractSubtitle(p.title);
-  return (
-    `<div class="post-card-nested-col"><div class="post-card is-nested">` +
-    `<div class="title"><span>${esc(p.title)}</span>${subtitle ? `<span class="subtitle">${esc(subtitle)}</span>` : ""}</div>` +
-    `<a class="post-thumbnail-wrapper" href="${esc(p.url)}">${img}</a>` +
-    `<div class="metas"><time class="time">${fmtDate(p.publishedAt)}</time>` +
-    `<div class="info">` +
-    `<span class="reads" data-toggle="tooltip" title="${L("post.reads_tip")}"><i class="obx-icons-book-reader"></i>${p.views ?? 0}</span>` +
-    `<span class="likes" data-toggle="tooltip" title="${L("post.likes_tip")}"><i class="obx-icons-heart"></i>${p.likes ?? 0}</span>` +
     `<span class="comments" data-toggle="tooltip" title="${L("comments.title")}"><i class="obx-icons-comment"></i>${p.commentsCount ?? 0}</span>` +
     `</div><a class="read-more" href="${esc(p.url)}">${L("post.read_more")}</a></div></div></div>`
   );
@@ -961,6 +961,8 @@ export function postHead(
   const primaryCat = p.categories?.[0]?.name ?? "";
   const tagMetas = (p.tags ?? []).map((t) => `<meta property="article:tag" content="${esc(t.name)}">`).join("");
   const author = p.author?.name;
+  // The author's archive URL — the same Person URL the JSON-LD publishes.
+  const authorUrl = p.author ? `${origin}${authorUrlFor(p.author.id)}` : "";
   // JSON-LD must never fabricate a date: a draft preview can reach here with
   // neither publishedAt nor updatedAt, and new Date(null) fakes 1970. A
   // missing/invalid value drops the field (same rule fmtDateSlash follows).
@@ -1028,6 +1030,7 @@ export function postHead(
     posting.timeRequired = isoDuration(read.minutes);
   }
   return [
+    imagePreloadTag(p.featuredImage, IMG_SIZES_BODY),
     `<title>${esc(fullTitle)}</title>`,
     `<meta name="description" content="${esc(desc)}">`,
     `<meta name="robots" content="${robotsFor(robots)}">`,
@@ -1042,7 +1045,15 @@ export function postHead(
     tagMetas,
     publishedIso ? `<meta property="article:published_time" content="${publishedIso}">` : "",
     modifiedIso ? `<meta property="article:modified_time" content="${modifiedIso}">` : "",
-    author ? `<meta property="article:author" content="${esc(author)}">` : "",
+    // R537: article:author is a URL-shaped property — Facebook/OG resolve a
+    // plain name to nothing, while the JSON-LD above publishes the author's
+    // dereferenceable archive URL. Both shapes now name the SAME person the
+    // SAME way: the display name rides the Person JSON-LD; this meta carries
+    // the archive URL, so a card scraper lands on the author's page instead
+    // of a name nobody can follow.
+    author
+      ? `<meta property="article:author" content="${esc(authorUrl)}">`
+      : "",
     `<meta name="twitter:card" content="${twitterCardKind(card, ogImage)}">`,
     `<meta name="twitter:title" content="${esc(fullTitle)}">`,
     `<meta name="twitter:description" content="${esc(desc)}">`,
@@ -1085,10 +1096,16 @@ export type CommentModel = {
   defaultContent: string;
   me: { id: number; name: string; email: string } | null;
   items: FlatComment[];
+  /** Published count for the whole thread; items[] is capped at 200. */
+  totalComments?: number;
   avatar: { source: AvatarSource; size: number; default: string; rating: string };
   config: Record<string, unknown>;
   locale: Locale;
   t?: Translate;
+  /** Path to return to after a no-JS native form POST (the post itself). */
+  commentBack?: string;
+  /** One of ok|pending|invalid|failed - the ?c= flash after a no-JS submit. */
+  commentFlash?: string;
 };
 
 const DFLT_AVATAR_BG = "linear-gradient(135deg,#dce8f7,#bcd6f3)";
@@ -1099,11 +1116,25 @@ function safeCommentUrl(u?: string | null): string | null {
   return /^https?:\/\//i.test(t) ? t : null;
 }
 
+/**
+ * A comment's timestamp, in the SITE's calendar.
+ *
+ * R534: the day used to come from the server's clock fields. A comment left
+ * at 17:00Z shows 01:00 next day in Shanghai - the visitor reads the day the
+ * site is on, so the label must follow the site's calendar too. The compact
+ * Y/M/D HH:mm shape is that layout's design choice and stays.
+ */
 function fmtCommentDate(v: Date | string): string {
-  const d = new Date(v);
+  const d = typeof v === "string" ? new Date(v) : v;
   if (Number.isNaN(d.getTime())) return "";
   const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  const { year, month, day } = siteDayParts(d, siteDateContext().timezone);
+  const tz = siteDateContext().timezone;
+  // The clock half: hours/minutes in the same site calendar.
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(d);
+  return `${year}/${Number(month)}/${Number(day)} ${parts}`;
 }
 
 const ICON_REPLY =
@@ -1176,7 +1207,7 @@ function renderCommentNodes(
         `<li id="comment-item-${n.id}"><div class="wrapper flex">` +
         `<div class="avatar relative flex-shrink-0" style="${bg || DFLT_AVATAR_BG}"><div class="highlight"></div></div>` +
         `<div class="body flex-grow"><div class="flex items-start">` +
-        `<div class="flex-grow flex items-center justify-between info">${name}<div class="date">${fmtCommentDate(n.createdAt)}</div></div>` +
+        `<div class="flex-grow flex items-center justify-between info">${name}<div class="date"><time${isoDateAttr(n.createdAt)}>${fmtCommentDate(n.createdAt)}</time></div></div>` +
         `${reply}${like}</div>` +
         `<div class="content has-emoji">${parentInfo}${esc(n.content)}</div>` +
         `</div></div>${children}</li>`
@@ -1198,16 +1229,26 @@ function builtinCommentsHtml(m: CommentModel): string {
       `<span class="sf-comment-me-email">${esc(m.me.email)}</span>` +
       "</span></div>"
     : "";
+  const captchaOn = process.env.OBOEXT_COMMENT_CAPTCHA === "1";
   const guestFields = m.me
     ? ""
-    : '<div class="guest-info flex">' +
-      '<div class="item"><input type="text" class="comment-field" name="authorName" autocomplete="nickname" placeholder=' +
+    : (captchaOn
+        ? '<div class="comment-captcha" data-comment-captcha>' +
+          '<span class="comment-captcha-svg" data-captcha-svg aria-hidden="true"></span>' +
+          `<input class="comment-field" name="captchaAnswer" inputmode="numeric" autocomplete="off" aria-label="${esc(L("comments.captcha"))}" placeholder="${esc(L("comments.captcha"))}">` +
+          '<input type="hidden" name="captchaToken" value="">' +
+          "</div>"
+        : "") +
+      '<div class="guest-info flex">' +
+      '<div class="item"><input type="text" class="comment-field" name="authorName" autocomplete="nickname" aria-label=' +
+      `"${esc(L("comments.nickname"))}" placeholder=` +
       `"${esc(L("comments.nickname"))}${m.requireNameEmail ? " *" : ""}">` +
       `<i>${ICON_USER}</i></div>` +
-      '<div class="item"><input type="email" class="comment-field" name="authorEmail" autocomplete="email" placeholder=' +
+      '<div class="item"><input type="email" class="comment-field" name="authorEmail" autocomplete="email" aria-label=' +
+      `"${esc(L("comments.email"))}" placeholder=` +
       `"${esc(L("comments.email"))}${m.requireNameEmail ? " *" : ""}">` +
       `<i>${ICON_MAIL}</i></div>` +
-      `<div class="item"><input type="url" class="comment-field" name="authorUrl" autocomplete="url" placeholder="${esc(m.authorUrlLabel)}${m.requireAuthorUrl ? " *" : ""}"><i>${ICON_LINK}</i></div>` +
+      `<div class="item"><input type="url" class="comment-field" name="authorUrl" autocomplete="url" aria-label="${esc(m.authorUrlLabel)}" placeholder="${esc(m.authorUrlLabel)}${m.requireAuthorUrl ? " *" : ""}"><i>${ICON_LINK}</i></div>` +
       "</div>";
 
   // The toolbar is ONE row: the emoji trigger on the left, the submit on the
@@ -1220,15 +1261,25 @@ function builtinCommentsHtml(m: CommentModel): string {
   // The panel span stays INSIDE the left group, because the panel is positioned
   // against it (positionEmoji measures the host to decide above/below), so the
   // host must remain the element the button is in.
+  const flash =
+    m.commentFlash && ["ok", "pending", "invalid", "failed"].includes(m.commentFlash)
+      ? `<div class="sf-comment-flash" data-comment-flash="${esc(m.commentFlash)}" role="status">${esc(
+          L("comments.flash_" + m.commentFlash),
+        )}</div>`
+      : "";
   const form =
     '<form class="comment-form sf-comment-form my-5" novalidate data-comment-form ' +
+    `method="POST" action="/api/comment-form" ` +
     `data-post-id=${m.postId} data-post-type=${esc(m.postType)} data-require=${m.requireNameEmail ? "1" : "0"}` +
     ` data-require-url=${m.requireAuthorUrl ? "1" : "0"} data-comment-locale=${esc(m.locale || DEFAULT_LOCALE)}>` +
+    `<input type="hidden" name="back" value="${esc(m.commentBack || "/")}">` +
+    `<input type="hidden" name="postId" value="${m.postId}">` +
+    `<input type="hidden" name="postType" value="${esc(m.postType)}">` +
     '<input type="hidden" name="parentId" value="">' +
     meBox +
     guestFields +
     '<div class="input">' +
-    `<textarea name="content" placeholder="${esc(L("comments.placeholder"))}">${esc(m.defaultContent || "")}</textarea></div>` +
+    `<textarea name="content" aria-label="${esc(L("comments.content_label"))}" placeholder="${esc(L("comments.placeholder"))}">${esc(m.defaultContent || "")}</textarea></div>` +
     '<div class="sf-toolbar">' +
     // No mx-5 here: the toolbar's own padding already insets the row, so the
     // margin pushed the emoji trigger 20px further right than the textarea
@@ -1246,7 +1297,19 @@ function builtinCommentsHtml(m: CommentModel): string {
   const tree = m.items.length
     ? renderCommentNodes(buildCommentTree(m.items), m, 0)
     : '<div class="sf-comment-close">' + esc(L("comments.empty")) + "</div>";
-  return '<div data-comment-notice class="sf-comment-close" style="display:none;color:var(--primary-color)"></div>' + form + tree;
+  // The list is capped at the newest 200; say so instead of letting the
+  // rest vanish silently.
+  const shown = m.items.length;
+  const total = Number(m.totalComments ?? shown);
+  const capNote =
+    total > shown
+      ? `<p class="sf-comment-cap">${esc(L("comments.truncated", { n: shown }))}${
+          m.commentBack
+            ? ` <a href="${esc(m.commentBack.split("#")[0])}?comments=all#comments">${esc(L("comments.show_all"))}</a>`
+            : ""
+        }</p>`
+      : "";
+  return '<div id="comments" data-comment-notice class="sf-comment-close" style="display:none;color:var(--primary-color)"></div>' + flash + form + tree + capNote;
 }
 
 function commentsInner(m: CommentModel): string {
@@ -1259,12 +1322,6 @@ function commentsInner(m: CommentModel): string {
       '" data-config="' + esc(JSON.stringify(m.config)) + '" data-comment-locale=' + esc(m.locale || DEFAULT_LOCALE) + '></div>';
   }
   return builtinCommentsHtml(m);
-}
-
-export function commentsSection(m: CommentModel): string {
-  const L = commentT(m);
-  return '<section class="sk-section sk-comments"><h2 class="title_style_01">' + esc(L("comments.title")) + "</h2>" +
-    commentsInner(m) + "</section>";
 }
 
 export function commentsBare(m: CommentModel): string {
@@ -1301,8 +1358,8 @@ export function postPage(
     `<span> · ${authorByline(p, L("post.author_unknown"))}</span>` +
     `<span> · ${fmtDate(p.publishedAt)}</span>` +
     `<span> · ${L("post.reads", { n: p.views ?? 0 })}</span>` +
-    `<span> · ${L("post.comments", { n: p.commentsCount ?? 0 })}</span>` +
-    pluginMeta.map((m) => `<span> · ${esc(m.label)}：${esc(m.value)}</span>`).join("") +
+    `<span> · <a href="#comments" style="color:inherit;text-decoration:none">${L("post.comments", { n: p.commentsCount ?? 0 })}</a></span>` +
+    pluginMeta.map((m) => `<span> · ${esc(m.label)}${L("post.meta_sep")}${esc(m.value)}</span>`).join("") +
     "</div>";
   const renderedBody = bodyHtml;
   const headings = extractHeadings(renderedBody);
@@ -1376,12 +1433,18 @@ export function postPage(
 
 // ---------------------------------------------------------------- page pages
 
-/** Slash-form date (Y/M/D) for the page meta line. */
+/**
+ * Slash-form date (Y/M/D) for the compact page meta line.
+ *
+ * The compact shape is a design choice of that layout, but the CALENDAR is
+ * still the site's: the day must be the day the site shows (R533).
+ */
 function fmtDateSlash(v: Date | string | null | undefined): string {
   if (!v) return "";
-  const d = new Date(v);
+  const d = typeof v === "string" ? new Date(v) : v;
   if (Number.isNaN(d.getTime())) return "";
-  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+  const [y, m, day] = numericDateFmt(siteDateContext().timezone).format(d).split("-");
+  return `${y}/${Number(m)}/${Number(day)}`;
 }
 
 /**

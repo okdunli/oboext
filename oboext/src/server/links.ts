@@ -12,6 +12,8 @@ import {
 import type { PostRow } from "./queries.js";
 import type { Category, Tag, Page } from "./schema.js";
 import { createLogger } from "./logger.js";
+import { normalizeLocale } from "./i18n.js";
+import { siteDateContext, siteDayParts } from "./site-dates.js";
 const log = createLogger("links");
 
 export type PostLinkMode = "slug" | "id" | "pinyin" | "initial" | "custom";
@@ -129,17 +131,23 @@ type PostUrlInput = {
   createdAt?: Date | string | null;
 };
 
+/**
+ * The {year}/{month}/{day} URL tokens, in the SITE's calendar.
+ *
+ * R534: these used to read the server's clock fields. A permalink like
+ * `{year}/{month}/{day}/{slug}` is a permanent address, and it must agree
+ * with the calendar the site itself publishes on - the admin list, the
+ * archive sections and the sitemap's lastmod all use the site timezone. A
+ * post published 20:00 UTC must live under the year/month the site shows,
+ * not the one the server's wall clock happens to name.
+ */
 function dateParts(post: PostUrlInput): { year: string; month: string; day: string } {
   const d = post.publishedAt
     ? new Date(post.publishedAt)
     : post.createdAt
       ? new Date(post.createdAt)
       : new Date();
-  return {
-    year: String(d.getFullYear()),
-    month: String(d.getMonth() + 1).padStart(2, "0"),
-    day: String(d.getDate()).padStart(2, "0"),
-  };
+  return siteDayParts(d, siteDateContext().timezone);
 }
 
 function postTailSegments(cfg: PermalinkConfig, post: PostUrlInput): string[] {
@@ -328,14 +336,12 @@ export function matchPostTail(
   return null;
 }
 
+/** The resolver side of dateParts(): the same site calendar, so a URL the
+ *  builder emitted always resolves back (R534). */
 function dateTokensMatch(post: { publishedAt?: Date | string | null; createdAt?: Date | string | null }, parts: Record<string, string>): boolean {
   const d = post.publishedAt ? new Date(post.publishedAt)
     : post.createdAt ? new Date(post.createdAt) : new Date();
-  const actual: Record<string, string> = {
-    year: String(d.getFullYear()),
-    month: String(d.getMonth() + 1).padStart(2, "0"),
-    day: String(d.getDate()).padStart(2, "0"),
-  };
+  const actual: Record<string, string> = siteDayParts(d, siteDateContext().timezone);
   return Object.entries(parts).every(([k, v]) => v.padStart(2, "0") === actual[k]);
 }
 
@@ -355,6 +361,7 @@ function dateTokensMatch(post: { publishedAt?: Date | string | null; createdAt?:
 async function fetchPostByTail(
   tail: string[],
   cfg: PermalinkConfig,
+  preview = false,
 ): Promise<PostRow | null> {
   const key = matchPostTail(cfg, tail);
   if (!key) return null;
@@ -367,11 +374,11 @@ async function fetchPostByTail(
   // rejection either (runOnce clears its in-flight marker), so the next read
   // re-runs the query.
   return memoQuery<PostRow | null>(
-    `rp:${cfg.postMode}|${cfg.postPattern}|${tail.join("/")}`,
+    `${preview ? "rpv" : "rp"}:${cfg.postMode}|${cfg.postPattern}|${tail.join("/")}`,
     SIDEBAR_TTL,
     async () => {
       const { getPostRow } = await import("./queries.js");
-      const row = await getPostRow(String(key.slug ?? key.id ?? ""));
+      const row = await getPostRow(String(key.slug ?? key.id ?? ""), { preview });
       // A date mismatch is a real "no such post" and IS worth caching.
       if (row && key.dateParts && !dateTokensMatch(row.post, key.dateParts)) return null;
       return row;
@@ -401,7 +408,20 @@ function startsWith(segs: string[], prefix: string[]): boolean {
  */
 export async function resolveSitePath(
   rawSegments: string[],
+  opts: { preview?: boolean; locale?: "en" | "zh-CN" } = {},
 ): Promise<SitePathResolution | null> {
+  // The locale rides the first segment when present (the router matches the raw
+  // URL): an explicit locale from the caller wins (resolveInner strips the /en
+  // prefix before calling); otherwise guess from the first raw segment.
+  // It drives the prefix strip below only. LISTINGS stay locale-scoped
+  // (listPublishedPages — R284), but DETAIL resolves across trees: a slug names
+  // at most one row (globally unique), so filtering it by tree could only 404
+  // nav links and merged canonical targets while the row exists — exactly how
+  // post detail has always behaved (R269: /en/x and /x are one document).
+  const selfLocale = opts.locale ?? (normalizeLocale(String(rawSegments[0] ?? "")) === "en" ? "en" : "zh-CN");
+  // Preview links and a signed-in manager must still find an UNPUBLISHED row at
+  // its public URL; everyone else resolves published content only.
+  const preview = opts.preview === true;
   const cfg = await getPermalinkConfig();
   // Decode-or-literal, not a bare decodeURIComponent: the handler receives the
   // RAW url (prod-server decodes only for its static layer; the edge adapter
@@ -421,7 +441,10 @@ export async function resolveSitePath(
   // answer 500. A NUL can never name a real entity: the path is unresolvable,
   // and returning null lets the caller negative-cache a clean 404 instead.
   if (decodedSegments.some((s) => s.includes("\u0000"))) return null;
-  const segments = decodedSegments.filter(Boolean);
+  let segments = decodedSegments.filter(Boolean);
+  // The /en prefix belongs to the locale tree, not to the slug: strip it so
+  // the page/post base matching sees the same segments both trees do.
+  if (selfLocale === "en" && segments[0] === "en") segments = segments.slice(1);
   if (!segments.length) return { kind: "home" };
 
   const pb = baseSegs(cfg.postBase);
@@ -445,7 +468,7 @@ export async function resolveSitePath(
 
   // Prefixed entities.
   if (startsWith(segments, pb)) {
-    const post = await fetchPostByTail(segments.slice(pb.length), cfg);
+    const post = await fetchPostByTail(segments.slice(pb.length), cfg, preview);
     if (post) return { kind: "post", post };
   }
   if (startsWith(segments, pgb) && segments.length === pgb.length + 1) {
@@ -454,8 +477,10 @@ export async function resolveSitePath(
     // page base, so the category/tag branches below can never match the same
     // path — swallowing a query error here would only convert it into a null,
     // which the caller then negative-caches as a confirmed 404.
-    const { getPublishedPageRow } = await import("./pages.js");
-    const page = await getPublishedPageRow(segments[pgb.length]);
+    const { getPublishedPageRow, getPageRowForPreview } = await import("./pages.js");
+    const page = preview
+      ? await getPageRowForPreview(segments[pgb.length])
+      : await getPublishedPageRow(segments[pgb.length]);
     if (page) return { kind: "page", page };
   }
   if (startsWith(segments, cb) && segments.length === cb.length + 1) {
@@ -486,11 +511,11 @@ export async function resolveSitePath(
     // valid category). But a probe that failed and left NOTHING resolved means
     // the DB could not answer — rethrow below so the caller answers 500
     // instead of negative-caching a 404 it never confirmed.
-    const { getPublishedPageRow } = await import("./pages.js");
+    const { getPublishedPageRow, getPageRowForPreview } = await import("./pages.js");
     const { getCategoryBySlug, getTagBySlug } = await import("./queries.js");
     const [postR, pageR, catR, tagR] = await Promise.allSettled([
-      fetchPostByTail(segments, cfg),
-      getPublishedPageRow(segments[0]),
+      fetchPostByTail(segments, cfg, preview),
+      preview ? getPageRowForPreview(segments[0]) : getPublishedPageRow(segments[0]),
       getCategoryBySlug(segments[0]),
       getTagBySlug(segments[0]),
     ]);
@@ -508,7 +533,7 @@ export async function resolveSitePath(
 
   // Posts at root with multi-segment custom patterns (e.g. {year}/{slug}).
   if (pb.length === 0 && segments.length === tailMatcher.segCount) {
-    const post = await fetchPostByTail(segments, cfg);
+    const post = await fetchPostByTail(segments, cfg, preview);
     if (post) return { kind: "post", post };
   }
 

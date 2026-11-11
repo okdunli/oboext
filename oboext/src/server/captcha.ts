@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { getSecret } from "./auth.js";
 import type { AdminSecurity } from "./security.js";
 import { type Translate } from "./i18n.js";
-import { b64url, makeUsedTracker, rnd, timingSafeEqualText } from "./captcha-common.js";
+import { b64url, makeUsedTracker, rnd } from "./captcha-common.js";
 
 export const CAPTCHA_COOKIE = "oboe_captcha";
 
@@ -23,21 +23,48 @@ const REMOTE_TIMEOUT_MS = 8000;
 
 const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
-let keyCache: Buffer | null = null;
-function signingKey(): Buffer {
-  if (!keyCache) {
-    keyCache = crypto
-      .createHmac("sha256", Buffer.from(getSecret()))
-      .update(VERSION)
-      .digest();
-  }
-  return keyCache;
-}
-
 const used = makeUsedTracker();
 
-function sign(bodyB64: string): string {
-  return crypto.createHmac("sha256", signingKey()).update(bodyB64).digest("base64url");
+let sealKey: Buffer | null = null;
+function encryptionKey(): Buffer {
+  if (!sealKey) {
+    sealKey = crypto.createHash("sha256").update(getSecret()).update(VERSION).digest();
+  }
+  return sealKey;
+}
+
+function sealPayload(payload: TokenPayload): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  const ct = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+  return b64url(Buffer.concat([iv, cipher.getAuthTag(), ct]));
+}
+
+function openPayload(token: string): TokenPayload | null {
+  try {
+    const raw = Buffer.from(token, "base64url");
+    if (raw.length <= 12 + 16) return null;
+    const iv = raw.subarray(0, 12);
+    const tag = raw.subarray(12, 28);
+    const ct = raw.subarray(28);
+    const d = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), iv);
+    d.setAuthTag(tag);
+    const p = JSON.parse(Buffer.concat([d.update(ct), d.final()]).toString("utf8")) as {
+      c?: unknown;
+      j?: unknown;
+      e?: unknown;
+    };
+    if (
+      typeof p.c !== "string" ||
+      typeof p.j !== "string" ||
+      typeof p.e !== "number" ||
+      p.e <= Date.now()
+    )
+      return null;
+    return { c: p.c, j: p.j, e: p.e };
+  } catch {
+    return null;
+  }
 }
 
 function normalizeAnswer(raw: string): string {
@@ -137,7 +164,7 @@ export function captchaSvg(code: string): string {
   }
   for (let i = 0; i < 24; i++) {
     noise.push(
-      `<circle cx="${rnd(2, W - 2)} cy="${rnd(2, H - 2)} r="${(crypto.randomInt(6, 14) / 10).toFixed(1)}" fill="#cbd5e1" opacity="0.7"/>`,
+      `<circle cx="${rnd(2, W - 2)}" cy="${rnd(2, H - 2)}" r="${(crypto.randomInt(6, 14) / 10).toFixed(1)}" fill="#cbd5e1" opacity="0.7"/>`,
     );
   }
 
@@ -169,41 +196,19 @@ export function captchaSvg(code: string): string {
 }
 
 export async function signCaptchaToken(code: string): Promise<string> {
-  const payload = {
+  const payload: TokenPayload = {
     c: code.toUpperCase(),
     j: crypto.randomUUID(),
     e: Date.now() + TTL_MS,
   };
-  const body = b64url(JSON.stringify(payload));
-  return `${body}.${sign(body)}`;
+  return sealPayload(payload);
 }
 
 type TokenPayload = { c: string; j: string; e: number };
 
 function parseToken(token: string | undefined | null): TokenPayload | null {
   if (!token) return null;
-  try {
-    const dot = token.lastIndexOf(".");
-    if (dot <= 0) return null;
-    const body = token.slice(0, dot);
-    const sig = token.slice(dot + 1);
-    if (!timingSafeEqualText(sig, sign(body))) return null;
-    const p = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as {
-      c?: unknown;
-      j?: unknown;
-      e?: unknown;
-    };
-    if (
-      typeof p.c !== "string" ||
-      typeof p.j !== "string" ||
-      typeof p.e !== "number" ||
-      p.e <= Date.now()
-    )
-      return null;
-    return { c: p.c, j: p.j, e: p.e };
-  } catch {
-    return null;
-  }
+  return openPayload(token);
 }
 
 function verifyBuiltin(

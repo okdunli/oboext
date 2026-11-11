@@ -22,23 +22,23 @@ export function registerView(config: RegisterViewConfig, t: Translate, locale: L
   const field = (name: string, label: string, extra: string, required: boolean) =>
     `<div class="oboe-reg-fld">` +
     `<label>${label}${required ? "" : t("reg.optional")}</label>` +
-    `<input class="oboe-reg-input" name="${name}" ${extra}${required ? " required" : ""}>` +
+    `<input class="oboe-reg-input" name="${name}" aria-label="${label}" ${extra}${required ? " required" : ""}>` +
     `</div>`;
   const codeField = (name: string, sendAttr: string, label: string) =>
     `<div class="oboe-reg-fld">` +
     `<label>${label}</label>` +
     `<div class="oboe-reg-code">` +
-    `<input class="oboe-reg-input" name="${name}" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="${t("reg.code_ph")}" required>` +
+    `<input class="oboe-reg-input" name="${name}" aria-label="${label}" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="${t("reg.code_ph")}" required>` +
     `<button type="button" class="oboe-reg-send" ${sendAttr}>${t("reg.send_code")}</button>` +
     `</div></div>`;
   const captchaBlock = !config.captcha.enabled
     ? ""
     : config.captcha.mode === "custom"
       ? `<div class="oboe-reg-fld"><label>${t("reg.captcha")}</label>` +
-        `<input class="oboe-reg-input" name="captchaToken" maxlength="200" autocomplete="off" placeholder="${t("reg.captcha_token_ph")}" required></div>`
+        `<input class="oboe-reg-input" name="captchaToken" aria-label="${t("reg.captcha")}" maxlength="200" autocomplete="off" placeholder="${t("reg.captcha_token_ph")}" required></div>`
       : `<div class="oboe-reg-fld"><label>${t("reg.captcha")}</label>` +
         `<div class="oboe-reg-code">` +
-        `<input class="oboe-reg-input" name="captcha" maxlength="4" autocomplete="off" spellcheck="false" placeholder="${t("reg.captcha_ph")}" required style="max-width:120px;text-transform:uppercase;letter-spacing:.18em;">` +
+        `<input class="oboe-reg-input" name="captcha" aria-label="${t("reg.captcha")}" maxlength="4" autocomplete="off" spellcheck="false" placeholder="${t("reg.captcha_ph")}" required style="max-width:120px;text-transform:uppercase;letter-spacing:.18em;">` +
         `<img data-oboe-reg-captcha-img src="/api/captcha/image" alt="${t("reg.captcha_alt")}" title="${t("reg.captcha_title")}" style="height:38px;width:120px;cursor:pointer;border:1px solid var(--border-color,#d4d4d8);border-radius:8px;background:#eef2f7;">` +
         `</div></div>`;
   const main =

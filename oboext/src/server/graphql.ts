@@ -1,5 +1,5 @@
 import { buildSchema, GraphQLError } from "graphql";
-import { and, desc, eq, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { categories, media, pages, posts, tags, users } from "./schema.js";
 import {
@@ -9,15 +9,19 @@ import {
   verifyChallengeTicket,
   verifyCredentials,
   assertLoginAllowed,
+  clearLoginFailures,
   recordLoginEvent,
   LOGIN_EVENTS,
   clientIp,
+  clientUa,
   LoginThrottledError,
   type SessionUser,
 } from "./auth.js";
 import { ensurePluginsLoaded } from "./plugins.js";
+import { normalizeLocale } from "./i18n.js";
 import { HOOKS, applyAsyncFilters } from "./hooks.js";
 import { ServiceError } from "./errors.js";
+import { getTwoFaState, verifyTwoFaCode } from "./twofa.js";
 import { roleAllows } from "./admin-menu.js";
 import { attachTaxonomies, listCategories, listPosts, listTags } from "./queries.js";
 import { offsetNum } from "./paging.js";
@@ -44,7 +48,7 @@ const typeDefs = /* GraphQL */ `
 
   type User {
     id: Int!
-    email: String!
+    email: String
     name: String!
     role: String!
     bio: String
@@ -115,6 +119,12 @@ const typeDefs = /* GraphQL */ `
     publishedAt: DateTime
     createdAt: DateTime
     updatedAt: DateTime
+    "0045: the page's content language."
+    locale: String!
+    "0046: id of the page this row translates; null for originals."
+    translationOf: Int
+    "0046: the page this one translates, or the translation of it."
+    translationOriginal: Page
   }
 
   type PostList {
@@ -144,6 +154,10 @@ const typeDefs = /* GraphQL */ `
     authorId: Int
     categoryIds: [Int!]
     tagIds: [Int!]
+    "R278: the content language; defaults to the site default."
+    locale: String
+    "R278: id of the post this row translates."
+    translationOf: Int
   }
 
   input PageInput {
@@ -159,6 +173,10 @@ const typeDefs = /* GraphQL */ `
     parentId: Int
     categoryIds: [Int!]
     tagIds: [Int!]
+    "0045: the content language; defaults to the site default."
+    locale: String
+    "0046: id of the page this row translates."
+    translationOf: Int
   }
 
   input CategoryInput {
@@ -185,7 +203,7 @@ const typeDefs = /* GraphQL */ `
     ): PostList!
     post(id: Int!): Post
     postBySlug(slug: String!): Post
-    pages(status: String, limit: Int, offset: Int): PageList!
+    pages(status: String, limit: Int, offset: Int, locale: String): PageList!
     page(id: Int!): Page
     pageBySlug(slug: String!): Page
     categories: [Category!]!
@@ -216,7 +234,7 @@ const typeDefs = /* GraphQL */ `
 
 // ---- Local read helpers (authed-aware, per-request) ----
 
-type Ctx = { user: SessionUser | null; ip: string | null };
+type Ctx = { user: SessionUser | null; ip: string | null; ua?: string | null };
 
 // scheduled: JS twin of queries.publishedVisible — a published post or page
 // whose publishedAt is still in the future stays a 404 for guests, not just
@@ -278,12 +296,34 @@ async function pageBySlug(slug: string, authed: boolean) {
   return row;
 }
 
-async function toPost(row: Awaited<ReturnType<typeof postById>>) {
+/**
+ * 0046: the other half of a translation pair. The pointer only lives on the
+ * translation row, so the original finds its twin by lookup — the same shape
+ * the public loader uses.
+ */
+async function pagePair(row: { id: number; translationOf: number | null }) {
+  const id = row.translationOf ?? (await db
+    .select({ id: pages.id })
+    .from(pages)
+    .where(eq(pages.translationOf, row.id))
+    .limit(1))[0]?.id;
+  if (!id) return null;
+  const [original] = await db.select().from(pages).where(eq(pages.id, id));
+  return original ?? null;
+}
+
+async function toPost(row: Awaited<ReturnType<typeof postById>>, authed: boolean) {
   const tax = await attachTaxonomies([row.post.id]);
   return {
     ...row.post,
+    // The byline is public; the author address is only for signed-in readers
+    // (the schema has to allow null here, which it now does).
     author: row.authorId
-      ? { id: row.authorId, name: row.authorName, email: row.authorEmail }
+      ? {
+          id: row.authorId,
+          name: row.authorName,
+          ...(authed ? { email: row.authorEmail } : {}),
+        }
       : null,
     categories: tax.categories[row.post.id] ?? [],
     tags: tax.tags[row.post.id] ?? [],
@@ -315,15 +355,20 @@ async function listPagesPublic(
   limit: number | undefined,
   offset: number | undefined,
   authed: boolean,
+  locale?: string,
 ) {
   const n = Math.min(Math.max(Number(limit) || 20, 1), 100);
   const off = offsetNum(offset);
-  const where =
+  const loc = locale ? normalizeLocale(locale) : null;
+  const where = and(
     status && authed
       ? eq(pages.status, status as any)
       : authed
         ? undefined
-        : and(eq(pages.status, "published"), publishedPageVisible);
+        : and(eq(pages.status, "published"), publishedPageVisible),
+    // 0045: the content language filter, same vocabulary as posts.
+    loc ? eq(pages.locale, loc) : undefined,
+  );
   const rows = await db
     .select()
     .from(pages)
@@ -335,7 +380,37 @@ async function listPagesPublic(
     .select({ n: sql<number>`count(*)` })
     .from(pages)
     .where(where);
-  return { items: rows, total: Number(c?.n ?? 0) };
+  // 0046: the pairs for the whole window in ONE query, not one per row — the
+  // list is a public endpoint and a page-per-row lookup would make it N+1.
+  // Two halves: the rows themselves (to learn their own pointer) and the
+  // rows they point at (the original), plus the rows pointing at them (the
+  // translation, when this row IS the original).
+  const pairIds = rows.map((r) => r.id);
+  const targetIds = rows.map((r) => r.translationOf).filter((v): v is number => v != null);
+  const originals = pairIds.length
+    ? await db
+        .select()
+        .from(pages)
+        .where(
+          or(
+            inArray(pages.id, pairIds),
+            targetIds.length ? inArray(pages.id, targetIds) : undefined,
+            inArray(pages.translationOf, pairIds),
+          ),
+        )
+    : [];
+  const byId = new Map(originals.map((o) => [o.id, o]));
+  const pairOf = new Map<number, number>();
+  for (const o of originals) {
+    if (o.translationOf != null) pairOf.set(o.translationOf, o.id);
+    if (pairIds.includes(o.id)) pairOf.set(o.id, o.translationOf ?? o.id);
+  }
+  const items = rows.map((r) => {
+    const otherId = pairOf.get(r.id);
+    const other = otherId && otherId !== r.id ? byId.get(otherId) : undefined;
+    return { ...r, translationOriginal: other ?? null };
+  });
+  return { items, total: Number(c?.n ?? 0) };
 }
 
 // ---- Helpers ----
@@ -376,25 +451,53 @@ const queryResolvers: Record<string, Resolver> = {
           args.categoryId ? slugOfCategory(args.categoryId) : undefined,
           args.tagId ? slugOfTag(args.tagId) : undefined,
         ]);
-        return wrap(() =>
-          listPosts({
-            status: mayReadDrafts(ctx.user) ? args.status : "published",
+        return wrap(async () => {
+          const drafts = mayReadDrafts(ctx.user);
+          const out = await listPosts({
+            status: drafts ? args.status : "published",
             authorId: args.authorId,
             categorySlug,
             tagSlug,
             limit: args.limit ?? 20,
             offset: args.offset ?? 0,
             full: true,
-          }),
-        );
+          });
+          if (drafts) return out;
+          // Anonymous readers get the byline, never the author's address.
+          return {
+            ...out,
+            items: out.items.map((it) => {
+              if (!it.author) return it;
+              const { email: _mailbox, ...author } = it.author;
+              return { ...it, author };
+            }),
+          };
+        });
       },
-      post: (_p, { id }, ctx) => wrap(() => postById(id, mayReadDrafts(ctx.user)).then(toPost)),
+      post: (_p, { id }, ctx) =>
+          wrap(() => {
+            const drafts = mayReadDrafts(ctx.user);
+            return postById(id, drafts).then((row) => toPost(row, drafts));
+          }),
       postBySlug: (_p, { slug }, ctx) =>
-        wrap(() => postBySlug(slug, mayReadDrafts(ctx.user)).then(toPost)),
+        wrap(() => {
+            const drafts = mayReadDrafts(ctx.user);
+            return postBySlug(slug, drafts).then((row) => toPost(row, drafts));
+          }),
       pages: (_p, args, ctx) =>
-        wrap(() => listPagesPublic(args.status, args.limit, args.offset, mayReadDrafts(ctx.user))),
-      page: (_p, { id }, ctx) => wrap(() => pageById(id, mayReadDrafts(ctx.user))),
-      pageBySlug: (_p, { slug }, ctx) => wrap(() => pageBySlug(slug, mayReadDrafts(ctx.user))),
+        wrap(() => listPagesPublic(args.status, args.limit, args.offset, mayReadDrafts(ctx.user), args.locale)),
+      page: (_p, { id }, ctx) =>
+        wrap(async () => {
+          const drafts = mayReadDrafts(ctx.user);
+          const row = await pageById(id, drafts);
+          return { ...row, translationOriginal: await pagePair(row) };
+        }),
+      pageBySlug: (_p, { slug }, ctx) =>
+        wrap(async () => {
+          const drafts = mayReadDrafts(ctx.user);
+          const row = await pageBySlug(slug, drafts);
+          return { ...row, translationOriginal: await pagePair(row) };
+        }),
       categories: () => wrap(() => listCategories()),
       category: (_p, { id }) => wrap(() => categoryById(id)),
       tags: () => wrap(() => listTags()),
@@ -430,13 +533,17 @@ const mutationResolvers: Record<string, Resolver> = {
           throw new GraphQLError("邮箱或密码错误", { extensions: { code: "UNAUTHENTICATED" } });
         }
 
-        await ensurePluginsLoaded();
-        const challenged = await applyAsyncFilters<{
-          user: typeof user;
-          challenge: { type: string } | null;
-        }>(HOOKS.authChallenge, { user, challenge: null });
+        const [, twoFa] = await Promise.all([ensurePluginsLoaded(), getTwoFaState(user.id)]);
+        const challenged = twoFa?.enabled
+          ? { challenge: { type: "totp" } }
+          : await applyAsyncFilters<{
+              user: typeof user;
+              challenge: { type: string } | null;
+            }>(HOOKS.authChallenge, { user, challenge: null });
         if (challenged.challenge) {
           const ticket = await signChallengeTicket(user);
+          // Same audit row the REST branches write at this step.
+          await recordLoginEvent({ eventType: LOGIN_EVENTS.LOGIN_CHALLENGE, userId: user.id, account, ip: ctx.ip, userAgent: ctx.ua ?? null });
           throw new GraphQLError("需要两步验证", {
             extensions: {
               code: "TWO_FACTOR_REQUIRED",
@@ -446,6 +553,16 @@ const mutationResolvers: Record<string, Resolver> = {
           });
         }
         const token = await signSession(user);
+        await Promise.all([
+          clearLoginFailures(account),
+          recordLoginEvent({
+            eventType: LOGIN_EVENTS.SUCCESS,
+            userId: user.id,
+            account,
+            ip: ctx.ip,
+            userAgent: ctx.ua ?? null,
+          }),
+        ]);
         return { token, user };
       },
       login2fa: async (_p, { ticket, code }, ctx) => {
@@ -463,12 +580,18 @@ const mutationResolvers: Record<string, Resolver> = {
             throw new GraphQLError(e.message, { extensions: { code: "THROTTLED" } });
           throw e;
         }
-        await ensurePluginsLoaded();
+        const pluginReady = ensurePluginsLoaded();
+        if (!(await Promise.all([pluginReady, verifyTwoFaCode(user.id, code)]))[1]) {
+          await recordLoginEvent({ eventType: LOGIN_EVENTS.FAIL, userId: user.id, account: user.name, ip: ctx.ip });
+          throw new GraphQLError("动态码或恢复码不正确", {
+            extensions: { code: "UNAUTHENTICATED" },
+          });
+        }
         const verdict = await applyAsyncFilters<{
           user: typeof user;
           code: string;
           ok: boolean;
-        }>(HOOKS.authChallengeVerify, { user, code, ok: false });
+        }>(HOOKS.authChallengeVerify, { user, code, ok: true });
         if (!verdict.ok) {
           await recordLoginEvent({ eventType: LOGIN_EVENTS.FAIL, userId: user.id, account: user.name, ip: ctx.ip });
           throw new GraphQLError("动态码或恢复码不正确", {
@@ -476,6 +599,16 @@ const mutationResolvers: Record<string, Resolver> = {
           });
         }
         const token = await signSession(user);
+        await Promise.all([
+          clearLoginFailures(user.name),
+          recordLoginEvent({
+            eventType: LOGIN_EVENTS.SUCCESS,
+            userId: user.id,
+            account: user.name,
+            ip: ctx.ip,
+            userAgent: ctx.ua ?? null,
+          }),
+        ]);
         return { token, user };
       },
       createPost: (_p, { input }, ctx) =>
@@ -534,5 +667,5 @@ function mayReadDrafts(user: { role?: string } | null | undefined): boolean {
 
 export async function buildContext(req: Request): Promise<Ctx> {
   const user = await getSessionFromRequest(req);
-  return { user, ip: clientIp(req) };
+  return { user, ip: clientIp(req), ua: clientUa(req) };
 }

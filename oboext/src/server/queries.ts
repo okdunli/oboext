@@ -15,6 +15,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { db, isConnectionError } from "./db.js";
+import type { Locale } from "./i18n.js";
 import { offsetNum } from "./paging.js";
 import {
   categories,
@@ -45,6 +46,7 @@ import { invalidate, memoQuery, memoStrict, SIDEBAR_TTL } from "./cache.js";
 import { classifyReferrer, referrerHostOf } from "./referrer.js";
 import { ownHost } from "./site-origin.js";
 import { createLogger } from "./logger.js";
+import { updateSiteDateContext } from "./site-dates.js";
 const log = createLogger("queries");
 
 // Scheduled publishing (time gate): a `published` post whose publishedAt is in the future is "scheduled" and hidden from every public read.
@@ -121,10 +123,15 @@ export type PostQuery = {
  * and `invalidateSettings()` still drops it immediately on a write.
  */
 export async function getSettings(): Promise<Record<string, any>> {
-  return memoStrict("settings", 30_000, async () => {
+  const settings = await memoStrict("settings", 30_000, async () => {
     const rows = await db.select().from(siteSettings).limit(1);
     return rows[0] ?? {};
   });
+  // R533: this is the ONE place the site settings are read, so it is also the
+  // one place the site's date context (timezone + date format) is refreshed.
+  // The front desk's date helpers read it synchronously - see site-dates.ts.
+  updateSiteDateContext(settings as Record<string, unknown>);
+  return settings;
 }
 
 export function invalidateSettings(): void {
@@ -187,13 +194,16 @@ export async function listCategories(): Promise<CategoryWithUrl[]> {
  * name; listCategories() carries no count column, and counting per category
  * would be N round trips.
  */
-export async function categoryPostCounts(): Promise<Map<number, number>> {
-  return memoQuery("tax:catCounts", SIDEBAR_TTL, async () => {
+export async function categoryPostCounts(locale?: Locale): Promise<Map<number, number>> {
+  // The badge is a content claim: it must count what THIS language tree lists,
+  // or an /en sidebar promises posts its category pages do not show.
+  return memoQuery(`tax:catCounts:${locale ?? "*"}`, SIDEBAR_TTL, async () => {
     const rows = await db.execute(sql`select ${postCategories.categoryId} as cid, count(*)::int as n
       from ${postCategories}
       join ${posts} on ${posts.id} = ${postCategories.postId}
       where ${posts.status} = 'published'
         and (${posts.publishedAt} is null or ${posts.publishedAt} <= now())
+        ${locale ? sql`and ${posts.locale} = ${locale}` : sql``}
       group by ${postCategories.categoryId}`);
     const out = new Map<number, number>();
     for (const r of (Array.isArray(rows) ? rows : ((rows as any).rows ?? [])) as any[]) {
@@ -848,12 +858,16 @@ export async function listPosts(
  * then the page loader ran the same pipeline again. Memoized 60s under `sred:`
  * (dropped by invalidateContentCaches, same contract as `lp:`).
  */
-export async function searchSingleHit(q: string): Promise<string | null> {
+export async function searchSingleHit(q: string, locale?: string): Promise<string | null> {
   const cleaned = q.trim();
   if (!cleaned) return null;
   const terms = searchTerms(cleaned).map(ilikeEscape);
   if (!terms.length) return null;
-  return memoQuery<string | null>(`sred:${cleaned}`, 60_000, async () => {
+  // The locale is part of the key AND the query: the redirect must not jump
+  // an /en reader to a Chinese post (the middleware would then prefix it
+  // into /en/..., a URL the Chinese post does not live at).
+  const loc = locale === "en" ? "en" : locale === "zh-CN" ? "zh-CN" : null;
+  return memoQuery<string | null>(`sred:${loc ?? "any"}:${cleaned}`, 60_000, async () => {
     const rows = await db
       .select({
         id: posts.id,
@@ -868,6 +882,8 @@ export async function searchSingleHit(q: string): Promise<string | null> {
         and(
           eq(posts.status, "published"),
           publishedVisible,
+          // 0045: scope the hit to the reader's language tree.
+          loc ? eq(posts.locale, loc) : undefined,
           and(
             ...terms.map((t) =>
               sql`(${posts.title} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.excerpt} ILIKE ${"%" + t + "%"} ESCAPE '\\' OR ${posts.bodyPlain} ILIKE ${"%" + t + "%"} ESCAPE '\\')`,
@@ -1069,10 +1085,17 @@ export async function getAdjacentPosts(postId: number, key: Date): Promise<Adjac
   });
 }
 
-export async function relatedByTaxonomy(postId: number, limit = 4): Promise<PostView[]> {
+export async function relatedByTaxonomy(
+  postId: number,
+  limit = 4,
+  locale?: string,
+): Promise<PostView[]> {
   // Same contract as relatedPosts: per-view reads of a rarely-changing set,
   // memoized per (post, limit) and dropped by invalidateContentCaches.
-  return memoQuery(`reltax:${postId}:${limit}`, SIDEBAR_TTL, async () => {
+  // 0045: the locale rides the key AND the query - the related list is a
+  // language tree, so an en post must not recommend Chinese articles.
+  const loc = locale === "en" ? "en" : locale === "zh-CN" ? "zh-CN" : null;
+  return memoQuery(`reltax:${loc ?? "any"}:${postId}:${limit}`, SIDEBAR_TTL, async () => {
   // One query, not a wave chain: the post's own category/tag ids (the old
   // first UNION) are a `mine` CTE the membership scan joins against in the
   // same statement. The old shape ran the scan as a second round trip that
@@ -1102,6 +1125,7 @@ export async function relatedByTaxonomy(postId: number, limit = 4): Promise<Post
       where p."status" = 'published'
         and (p."published_at" is null or p."published_at" <= now())
         and p."id" <> ${postId}
+        ${loc ? sql`and p."locale" = ${loc}` : sql``}
       group by p."id", p."title", p."slug", p."published_at", p."featured_image"
       order by "score" desc, p."published_at" desc nulls last
       limit ${limit}`),
@@ -1115,7 +1139,15 @@ export async function relatedByTaxonomy(postId: number, limit = 4): Promise<Post
     featured_image: string | null;
   }[];
   if (!scored.length) {
-    const { items } = await listPosts({ status: "published", excludeId: postId, orderBy: "date", limit });
+    // The fallback list is a language tree too (same rule as the scored
+    // query above).
+    const { items } = await listPosts({
+      status: "published",
+      excludeId: postId,
+      orderBy: "date",
+      limit,
+      locale: loc ?? undefined,
+    });
     return items;
   }
   return scored
@@ -1148,6 +1180,7 @@ export async function relatedByTaxonomy(postId: number, limit = 4): Promise<Post
 export async function listPostComments(
   postId: number,
   postType = "post",
+  cap = 200,
 ): Promise<Array<{
   id: number;
   parentId: number | null;
@@ -1176,8 +1209,8 @@ export async function listPostComments(
     .from(comments)
     .where(where)
     .orderBy(desc(comments.id))
-    .limit(200);
-  if (tail.length < 200) return tail.reverse();
+    .limit(cap);
+  if (tail.length < cap) return tail.reverse();
   // Capped: re-fetch EXACTLY the newest window in tree order - a bare
   // `asc limit 200` here would silently select the OLDEST 200 again (the very
   // bug this rewrite removes).
@@ -1213,12 +1246,33 @@ export async function listComments(opts: {
   limit?: number;
   offset?: number;
   order?: "asc" | "desc";
+  /** Public callers set this: comments whose parent content is a draft,
+   *  archived, or not-yet-due row must not leave the building. Moderators
+   *  list without it (the admin table shows everything). */
+  requireVisibleParent?: boolean;
 }): Promise<{ items: Awaited<ReturnType<typeof listPostComments>>; total: number }> {
   const conds = [];
   if (opts.postId != null) conds.push(eq(comments.postId, opts.postId));
   if (opts.postType) conds.push(eq(comments.postType, opts.postType));
   if (opts.status) conds.push(eq(comments.status, opts.status as any));
   if (opts.parentId != null) conds.push(eq(comments.parentId, opts.parentId));
+  if (opts.requireVisibleParent) {
+    // The post half always carries status/publishedAt; the page half is
+    // status-only (pages have no scheduling). An OR of the two visibility
+    // shapes keyed by postType, expressed as one EXISTS each.
+    conds.push(
+      or(
+        and(
+          eq(comments.postType, "post"),
+          sql`exists (select 1 from posts p where p.id = ${comments.postId} and p.status = 'published' and (p.published_at is null or p.published_at <= now()))`,
+        ),
+        and(
+          eq(comments.postType, "page"),
+          sql`exists (select 1 from pages g where g.id = ${comments.postId} and g.status = 'published')`,
+        ),
+      )!,
+    );
+  }
   const where = conds.length ? and(...conds) : undefined;
   const limit = Math.min(opts.limit ?? 200, 200);
   const offset = Math.max(0, opts.offset ?? 0);
@@ -1256,6 +1310,45 @@ export type CommentFeedItem = {
   createdAt: Date;
   post: { id: number; title: string; url: string };
 };
+
+/** The comment feed rows for ONE post - the per-post comment feed's data
+ *  half. Same moderation gates as listCommentFeed (published comments on a
+ *  published, currently-visible post), newest first. */
+export async function listPostCommentFeed(postId: number, limit: number): Promise<CommentFeedItem[]> {
+  const n = Math.min(Math.max(limit, 1), 100);
+  const rows = await db
+    .select({
+      id: comments.id,
+      postId: comments.postId,
+      authorName: comments.authorName,
+      content: comments.content,
+      createdAt: comments.createdAt,
+    })
+    .from(comments)
+    .innerJoin(posts, eq(comments.postId, posts.id))
+    .where(
+      and(
+        eq(comments.status, "published"),
+        eq(comments.postType, "post"),
+        eq(comments.postId, postId),
+        eq(posts.status, "published"),
+        publishedVisible,
+      ),
+    )
+    .orderBy(desc(comments.id))
+    .limit(n);
+  const [p] = await db
+    .select({ id: posts.id, slug: posts.slug, title: posts.title })
+    .from(posts)
+    .where(eq(posts.id, postId))
+    .limit(1);
+  if (!p) return [];
+  const cfg = await getPermalinkConfig();
+  return rows.map((r) => ({
+    ...r,
+    post: { id: p.id, title: p.title, url: postUrlFor(cfg, { id: p.id, slug: p.slug }) },
+  }));
+}
 
 export async function listCommentFeed(limit: number): Promise<CommentFeedItem[]> {
   const n = Math.min(Math.max(limit, 1), 100);
@@ -1306,13 +1399,21 @@ export async function listCommentFeed(limit: number): Promise<CommentFeedItem[]>
 
 // ---------------------------------------------------------------- widgets
 
-export async function counts() {
-  return memoQuery("counts", SIDEBAR_TTL, async () => {
+export async function counts(locale?: Locale) {
+  return memoQuery(`counts:${locale ?? "*"}`, SIDEBAR_TTL, async () => {
     // One round trip instead of four: every count is a scalar subquery, and
     // at Neon RTT (~300ms) each extra statement is real first-paint latency.
     const rows = await db.execute(sql`select
-      (select count(*) from ${posts} where ${posts.status} = 'published' and (${posts.publishedAt} is null or ${posts.publishedAt} <= now())) as posts,
-      (select count(*) from ${comments} where ${comments.status} = 'published') as comments,
+      (select count(*) from ${posts} where ${posts.status} = 'published' and (${posts.publishedAt} is null or ${posts.publishedAt} <= now())${locale ? sql` and ${posts.locale} = ${locale}` : sql``}) as posts,
+      (select count(*) from ${comments} where ${comments.status} = 'published' and (
+        (${comments.postType} = 'post' and exists (
+          select 1 from ${posts} where ${posts.id} = ${comments.postId} and ${posts.status} = 'published'
+            and (${posts.publishedAt} is null or ${posts.publishedAt} <= now())
+        )) or
+        (${comments.postType} = 'page' and exists (
+          select 1 from pages where pages.id = ${comments.postId} and pages.status = 'published'
+        ))
+      )) as comments,
       (select count(*) from ${tags}) as tags,
       (select count(*) from ${categories}) as categories`);
     const r = (Array.isArray(rows) ? rows : (rows as any).rows)[0] ?? {};
@@ -1326,36 +1427,61 @@ export async function counts() {
 }
 
 /** Sidebar "most popular": the floating pinned set, in float order (matches the baked widget). */
-export async function popularPosts(limit = 5): Promise<PostView[]> {
-  return memoQuery(`popular:${limit}`, SIDEBAR_TTL, async () => {
-    const { items } = await listPosts({ status: "published", orderBy: "views", limit });
+export async function popularPosts(limit = 5, locale?: Locale): Promise<PostView[]> {
+  // 0045: the sidebar's popular list is a language tree - an /en reader
+  // must not see Chinese posts in "most popular".
+  const loc = locale === "en" ? "en" : locale === "zh-CN" ? "zh-CN" : null;
+  return memoQuery(`popular:${loc ?? "any"}:${limit}`, SIDEBAR_TTL, async () => {
+    const { items } = await listPosts({
+      status: "published",
+      orderBy: "views",
+      limit,
+      locale: loc ?? undefined,
+    });
     return items;
   });
 }
 
-export async function randomPosts(limit = 20): Promise<PostView[]> {
+export async function randomPosts(limit = 20, locale?: Locale): Promise<PostView[]> {
   // random() is uncacheable inside listPosts by design, so a per-view random
   // widget paid a full scan + hydrate on every render (the render cache is
   // per-cookie, so on every visitor). Rotate the pool on the sidebar TTL
   // instead: still fresh enough to feel random, one query per window.
-  return memoQuery(`rand:${limit}`, SIDEBAR_TTL, async () => {
-    const { items } = await listPosts({ status: "published", random: true, pinned: false, limit });
+  return memoQuery(`rand:${limit}:${locale ?? "*"}`, SIDEBAR_TTL, async () => {
+    const { items } = await listPosts({
+      status: "published",
+      random: true,
+      pinned: false,
+      limit,
+      locale,
+    });
     return items;
   });
 }
 
 /** Published posts grouped by year/month for the archives timeline. */
-export async function archiveGroups(): Promise<
+/** The site's calendar zone: archive buckets are calendar months, so they must
+ *  agree with the date the page prints (formatSiteDate uses the same setting). */
+export async function siteTimeZone(): Promise<string> {
+  const settings = await getSettings();
+  return String((settings as { timezone?: unknown }).timezone || "Asia/Shanghai");
+}
+
+export async function archiveGroups(locale?: Locale): Promise<
   { year: number; months: { month: number; count: number }[]; total: number }[]
 > {
-  return memoQuery("archive", SIDEBAR_TTL, async () => {
+  return memoQuery(`archive:${locale ?? "*"}`, SIDEBAR_TTL, async () => {
+    const tz = await siteTimeZone();
+    // The archive counts CONTENT, so it is locale-scoped like every other
+    // listing: an /en visitor must not see Chinese posts in the timeline.
+    const localeCond = locale ? sql` AND ${posts.locale} = ${locale}` : sql``;
     const rows = await db.execute(
-      sql`SELECT EXTRACT(YEAR FROM ${posts.publishedAt})::int AS y,
-               EXTRACT(MONTH FROM ${posts.publishedAt})::int AS m,
+      sql`SELECT EXTRACT(YEAR FROM (${posts.publishedAt} AT TIME ZONE ${tz}))::int AS y,
+               EXTRACT(MONTH FROM (${posts.publishedAt} AT TIME ZONE ${tz}))::int AS m,
                count(*)::int AS n
         FROM ${posts}
         WHERE ${posts.status} = 'published' AND ${posts.publishedAt} IS NOT NULL
-          AND ${posts.publishedAt} <= now()
+          AND ${posts.publishedAt} <= now()${localeCond}
         GROUP BY y, m
         ORDER BY y DESC, m DESC`,
     );
@@ -1399,8 +1525,16 @@ export async function archiveItems(
   // R305: the archive is a language tree too - /en/archives lists the English
   // articles, /archives the Chinese ones.
   if (opts.locale) conditions.push(eq(posts.locale, opts.locale));
-  if (opts.year) conditions.push(sql`EXTRACT(YEAR FROM ${posts.publishedAt}) = ${opts.year}`);
-  if (opts.month) conditions.push(sql`EXTRACT(MONTH FROM ${posts.publishedAt}) = ${opts.month}`);
+  // Same calendar zone as archiveGroups(): a post published 20:00 UTC belongs
+  // to the NEXT month in Asia/Shanghai, so UTC bucketing listed it under a
+  // month whose page then printed the following month's date.
+  if (opts.year || opts.month) {
+    const tz = await siteTimeZone();
+    if (opts.year)
+      conditions.push(sql`EXTRACT(YEAR FROM (${posts.publishedAt} AT TIME ZONE ${tz})) = ${opts.year}`);
+    if (opts.month)
+      conditions.push(sql`EXTRACT(MONTH FROM (${posts.publishedAt} AT TIME ZONE ${tz})) = ${opts.month}`);
+  }
   const rows = await db
     .select({
       id: posts.id,
@@ -1496,7 +1630,13 @@ export async function getPostViews(id: number): Promise<number> {
   const [row] = await db
     .select({ views: posts.views })
     .from(posts)
-    .where(eq(posts.id, id))
+    .where(
+      and(
+        eq(posts.id, id),
+        eq(posts.status, "published"),
+        publishedVisible,
+      ),
+    )
     .limit(1);
   return row?.views ?? 0;
 }

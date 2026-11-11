@@ -189,8 +189,7 @@ async function sendConfirmation(email: string, locale: Locale): Promise<void> {
     log.debug("[newsletter] smtp not configured, skip confirm mail");
     return;
   }
-  const notify = await getNotifySettings();
-  const site = await getSettings();
+  const [notify, site] = await Promise.all([getNotifySettings(), getSettings()]);
   const siteName = String(site.siteTitle || "Oboext");
   const origin = configuredOrigin(process.env);
   const t = makeT(locale);
@@ -200,7 +199,7 @@ async function sendConfirmation(email: string, locale: Locale): Promise<void> {
   const html =
     `<div style="padding:24px;font-family:system-ui,sans-serif">` +
     `<h2 style="margin:0 0 12px">${escapeHtml(siteName)}</h2>` +
-    `<p>${t("newsletter.mail_confirm_lead", { site: siteName })}</p>` +
+    `<p>${t("newsletter.mail_confirm_lead", { site: escapeHtml(siteName) })}</p>` +
     `<p><a href="${confirmHref}">${t("newsletter.mail_confirm_cta")}</a></p>` +
     `<p style="color:#888;font-size:12px">${t("newsletter.mail_foot")}</p>` +
     `</div>`;
@@ -385,11 +384,15 @@ export async function enqueueSweep(windowMs = 60_000): Promise<number> {
   await ensureMigrations();
   const window = Math.max(1, Math.trunc(windowMs));
   // No subscribers -> the cheapest exit: one aggregate, no post scan.
-  const [{ n: activeCount }] = await rawQuery<{ n: number | string }>(
+  // rawQuery returns [] when there are no rows: a fresh site has no
+  // subscribers, so destructuring [{ n }] on the empty array threw
+  // "Cannot read properties of undefined" inside the sweeper every minute.
+  const countRows = await rawQuery<{ n: number | string }>(
     `select count(*) as n from subscribers
       where confirmed_at is not null and unsubscribed_at is null`,
   );
-  if (Number(activeCount) === 0) return 0;
+  const activeCount = Number(countRows[0]?.n ?? 0);
+  if (activeCount === 0) return 0;
 
   // Same index posts_status_published_idx (status, published_at) serves for the
   // due-cache sweep answers this shape.
@@ -557,11 +560,6 @@ let lastRetryAt = 0;
 /** How long the sweeper must wait between two retry passes. */
 export const RETRY_THROTTLE_MS = 300_000;
 
-/** Test seam: forget the retry throttle so a pass can run immediately. */
-export function resetRetryThrottle(): void {
-  lastRetryAt = 0;
-}
-
 /**
  * The sweeper's door into retryFailedSends: at most one retry pass per
  * RETRY_THROTTLE_MS.
@@ -611,8 +609,7 @@ async function deliverPost(
     log.debug("[newsletter] smtp not configured, skip post fanout");
     return { failedSubscriberIds: [] };
   }
-  const notify = await getNotifySettings();
-  const site = await getSettings();
+  const [notify, site] = await Promise.all([getNotifySettings(), getSettings()]);
   const siteName = String(site.siteTitle || "Oboext");
   const origin = configuredOrigin(process.env);
   const cfg = await getPermalinkConfig();
@@ -630,7 +627,7 @@ async function deliverPost(
     // One message per RECIPIENT: the unsubscribe link carries that
     // subscriber's capability token, so a shared batch mail cannot carry it.
     for (const r of set) {
-      const { html, text } = buildPostMail(
+      const { html, text, unsubHref } = buildPostMail(
         { title: post.title, postUrl, excerpt: post.excerpt, featuredImage: post.featuredImage },
         { origin, token: r.token, siteName },
         t,
@@ -638,7 +635,7 @@ async function deliverPost(
       try {
         // sendTo's rejection propagates into `failed` here — it is NOT swallowed,
         // or the batch would silently count as delivered.
-        await sendTo(notify, r.email, subject, html, text);
+        await sendTo(notify, r.email, subject, html, text, unsubHref);
       } catch (e) {
         log.warn("[newsletter] post mail failed:", e instanceof Error ? e.message : String(e));
         failed.push(r.id);
@@ -666,7 +663,7 @@ export function buildPostMail(
   post: { title: string; postUrl: string; excerpt: string | null; featuredImage: string | null },
   ctx: { origin: string; token: string; siteName: string },
   t: ReturnType<typeof makeT>,
-): { html: string; text: string } {
+): { html: string; text: string; unsubHref: string } {
   const unsubHref = `${ctx.origin}/api/newsletter/unsubscribe?token=${encodeURIComponent(ctx.token)}`;
   const img = post.featuredImage
     ? `<p><img src="${escapeHtml(post.featuredImage.startsWith("http") ? post.featuredImage : ctx.origin + post.featuredImage)}" alt="" style="max-width:100%;height:auto;border-radius:8px"></p>`
@@ -684,7 +681,7 @@ export function buildPostMail(
     `<p style="color:#888;font-size:12px">${t("newsletter.mail_foot")} · <a href="${unsubHref}" style="color:#888">${t("newsletter.mail_unsub")}</a></p>` +
     `</div>`;
   const text = `${post.title}\n${post.postUrl}\n${post.excerpt ? post.excerpt + "\n" : ""}${t("newsletter.mail_foot")}\n${unsubHref}`;
-  return { html, text };
+  return { html, text, unsubHref };
 }
 
 async function sendTo(
@@ -693,6 +690,7 @@ async function sendTo(
   subject: string,
   html: string,
   text: string,
+  listUnsubscribe?: string,
 ): Promise<void> {
   await sendSmtpMail(
     {
@@ -703,7 +701,7 @@ async function sendTo(
       pass: notify.smtp.pass,
       from: notify.smtp.from || notify.smtp.user,
     },
-    { to, subject, text, html },
+    { to, subject, text, html, listUnsubscribe },
   );
 }
 

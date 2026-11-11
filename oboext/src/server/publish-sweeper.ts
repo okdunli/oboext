@@ -119,11 +119,15 @@ export function startPublishSweeper(intervalMs = SWEEP_INTERVAL): () => void {
     // Elapsed, not the configured interval: a late tick widens its own window
     // instead of leaving a hole of rows nobody ever sees come due. `lastPass`
     // only moves on SUCCESS, so a failed pass is retried over the same span
-    // rather than silently skipped.
-    const windowMs = Date.now() - lastPass;
+    // rather than silently skipped. It moves to THIS tick's instant, not to
+    // the pass's completion: the due query reads `now()` when it runs, so
+    // anchoring at completion would strand every row that comes due between
+    // the query and the .then() - a hole no later window would ever cover.
+    const now = Date.now();
+    const windowMs = now - lastPass;
     void sweepOnce(windowMs)
       .then(() => {
-        lastPass = Date.now();
+        lastPass = now;
       })
       .catch((err) => log.warn("[publish] due sweep failed:", err))
       .finally(() => {

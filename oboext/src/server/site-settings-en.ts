@@ -16,6 +16,10 @@ export const SETTINGS_EN: Record<string, string> = {
   "广告\n赌博": "ads\ngambling",
   "留空则不预填": "Empty pre-fills nothing",
   "我的博客": "My blog",
+  "全站的日历基准：文章的年月日、归档分组、sitemap lastmod、签到日期都按它切日。修改后新内容按新时区记日，历史数据按旧时区记录、不回改，跨日附近的内容可能前后差一天。":
+    "The site's calendar: post dates, archive sections, the sitemap's lastmod and check-in days all split on it. New content uses the new zone; historical day labels keep the zone they were written in and are not rewritten, so content near a day boundary may shift by a day.",
+  "前台每个日期（文章、页面、评论）的显示样式；sitemap 与机器可读的 datetime 属性不受影响。":
+    "How every front-desk date (posts, pages, comments) reads; the sitemap and machine-readable datetime attributes are unaffected.",
   // ---- section descriptions
   "站点身份信息，出现在标题栏、页头、页脚与分享卡片上。": "Site identity: the title bar, header, footer and share cards.",
   "首页展示方式、分页数量与摘要长度等阅读相关设置。": "How the front page lists posts, plus page size and excerpt length.",

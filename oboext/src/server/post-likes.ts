@@ -58,7 +58,9 @@ export async function likePost(
       with ins as (
         insert into ${postLikes} ("post_id", "visitor_key")
         select ${id}::int, ${key}::text
-        where exists (select 1 from ${posts} where "id" = ${id})
+        where exists (select 1 from ${posts}
+                      where "id" = ${id} and "status" = 'published'
+                        and ("published_at" is null or "published_at" <= now()))
         on conflict do nothing
         returning "post_id"
       ),
@@ -69,7 +71,9 @@ export async function likePost(
         returning "likes"
       )
       select
-        exists (select 1 from ${posts} where "id" = ${id}) as "found",
+        exists (select 1 from ${posts}
+                where "id" = ${id} and "status" = 'published'
+                  and ("published_at" is null or "published_at" <= now())) as "found",
         -- "liked" is the visitor's state AFTER this call, not "did I insert":
         -- the ins CTE covers the first like, and the plain read covers a repeat
         -- (a data-modifying CTE's own effects are invisible to the rest of the
@@ -112,7 +116,9 @@ export async function unlikePost(
         returning "likes"
       )
       select
-        exists (select 1 from ${posts} where "id" = ${id}) as "found",
+        exists (select 1 from ${posts}
+                where "id" = ${id} and "status" = 'published'
+                  and ("published_at" is null or "published_at" <= now())) as "found",
         exists (select 1 from del) as "removed",
         coalesce(
           (select "likes" from upd),

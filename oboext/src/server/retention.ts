@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pruneSecurityEvents } from "./security-events.js";
+import { pruneVerifyCodes } from "./verify-codes.js";
+import { pruneVisitorLedger } from "./visit-sources.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("retention");
@@ -80,6 +82,8 @@ export async function runRetentionOnce(
   opts: { force?: boolean; devDir?: string } = {},
 ): Promise<void> {
   await pruneSecurityEvents(opts);
+  await pruneVerifyCodes();
+  await pruneVisitorLedger();
   await pruneDamagedWrecks(dataDir);
   for (const dir of opts.devDir ? [opts.devDir] : devBundleDirs()) {
     await pruneDevBundles(dir);

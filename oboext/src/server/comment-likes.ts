@@ -1,8 +1,8 @@
 // Comment likes — counts are aggregated at query time (never stored on
 // comments) so the number cannot drift.
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { db } from "./db.js";
-import { commentLikes } from "./schema";
+import { commentLikes, comments, posts, pages } from "./schema";
 import { ServiceError } from "./errors.js";
 
 function requireVisitorKey(visitorKey: unknown): string {
@@ -23,6 +23,30 @@ export async function likeComment(
 ): Promise<{ likes: number }> {
   const id = requireCommentId(commentId);
   const key = requireVisitorKey(visitorKey);
+  // The comment and its parent content must both be visible: liking a
+  // pending/spam comment (or one on a draft) is a ghost interaction.
+  const [row] = await db
+    .select({ status: comments.status, postType: comments.postType, postId: comments.postId })
+    .from(comments)
+    .where(eq(comments.id, id))
+    .limit(1);
+  if (!row || row.status !== "published") throw new ServiceError("评论不存在", 404);
+  if (row.postType === "post") {
+    const [p] = await db
+      .select({ id: posts.id })
+      .from(posts)
+      .where(and(eq(posts.id, row.postId), eq(posts.status, "published"),
+        or(sql`${posts.publishedAt} is null`, sql`${posts.publishedAt} <= now()`)))
+      .limit(1);
+    if (!p) throw new ServiceError("评论不存在", 404);
+  } else {
+    const [pg] = await db
+      .select({ id: pages.id })
+      .from(pages)
+      .where(and(eq(pages.id, row.postId), eq(pages.status, "published")))
+      .limit(1);
+    if (!pg) throw new ServiceError("评论不存在", 404);
+  }
   // Idempotent upsert: a repeat like leaves the row (and the count) alone.
   await db.insert(commentLikes).values({ commentId: id, visitorKey: key }).onConflictDoNothing();
   const rows = await db

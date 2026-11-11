@@ -12,8 +12,8 @@ export interface MaintenanceSettings {
 
 const DEFAULT_SETTINGS: MaintenanceSettings = {
   enabled: false,
-  title: "网站维护中",
-  message: "站点正在进行例行维护，很快就会回来，请稍后再访问。",
+  title: "",
+  message: "",
 };
 
 export async function getMaintenanceSettings(): Promise<MaintenanceSettings> {

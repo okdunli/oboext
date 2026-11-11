@@ -21,6 +21,16 @@ export function optionFresh(at: number, now: number): boolean {
   return now - at < OPTION_TTL_MS;
 }
 
+/** A cache-bypassing read. For consent flags (the reply-mail opt-out) where
+ *  a 5s TTL of staleness would mail a reader who just opted out on another
+ *  worker. */
+export async function getOptionFresh<T = unknown>(key: string, fallback?: T): Promise<T> {
+  const [row] = await db.select().from(options).where(eq(options.key, key));
+  const value = (row?.value ?? fallback) as T;
+  cache.set(key, { at: Date.now(), value });
+  return value;
+}
+
 export async function getOption<T = unknown>(key: string, fallback?: T): Promise<T> {
   const hit = cache.get(key);
   if (hit && optionFresh(hit.at, Date.now())) return hit.value as T;

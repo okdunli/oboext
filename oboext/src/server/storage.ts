@@ -51,6 +51,9 @@ const EXT_MIME: Record<string, string> = {
   ".md": "text/markdown; charset=utf-8",
   ".csv": "text/csv; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".xml": "application/xml; charset=utf-8",
+  ".xsl": "text/xsl; charset=utf-8",
+  ".xslt": "text/xsl; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -86,8 +89,24 @@ export function sniffMime(buf: Buffer): string | null {
 }
 
 export async function uploadFile(file: File, folder = "media"): Promise<UploadResult> {
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const ext = path.extname(file.name).toLowerCase().replace(/[^\w.]/g, "");
+  return uploadBuffer(Buffer.from(await file.arrayBuffer()), file.name, folder);
+}
+
+/**
+ * The buffer-carrying core of uploadFile.
+ *
+ * R556: createMediaFromFile used to read `file.arrayBuffer()` for its own
+ * magic-number sniff and then call uploadFile, which read the SAME array
+ * buffer AGAIN for the write — two full copies of a file whose upload cap is
+ * 25 MB. Callers that need the bytes (to sniff before accepting) pass them
+ * in; the write and the stored size reuse the one buffer.
+ */
+export async function uploadBuffer(
+  buffer: Buffer,
+  originalName: string,
+  folder = "media",
+): Promise<UploadResult> {
+  const ext = path.extname(originalName).toLowerCase().replace(/[^\w.]/g, "");
   const random = Math.random().toString(36).slice(2, 10);
   const localName = `${Date.now()}-${random}${ext}`;
   const dir = path.join(UPLOADS_DIR, folder);
@@ -112,6 +131,10 @@ export async function deleteFile(url: string): Promise<void> {
   // Never let a crafted URL escape the uploads root.
   if (!target.startsWith(path.resolve(UPLOADS_DIR))) return;
   await fs.unlink(target).catch(() => {});
+  // The existence memo keys on the same resolved path: dropping the entry
+  // here is what keeps uploadExists from answering `true` for a file this
+  // process just removed (a cover would keep rendering a dead image).
+  existsMemo.delete(target);
 }
 
 /**
@@ -156,12 +179,8 @@ export function uploadExists(url: string | null | undefined): boolean {
   return ok;
 }
 
-/** Drop the memoized existence check for a path (after an upload/ delete). */
-export function invalidateUploadExists(url?: string): void {
-  if (!url) {
-    existsMemo.clear();
-    return;
-  }
+/** Forget one URL's memo — a caller that rewrites the bytes behind an existing URL (media replace writes in place) must not keep the old answer. */
+export function invalidateUploadExists(url: string): void {
   const abs = uploadsAbsPath(url);
   if (abs) existsMemo.delete(abs);
 }
@@ -214,7 +233,12 @@ function lruSet(map: Map<string, CompressedEntry>, key: string, entry: Compresse
 
 const uploadsCompressed = new Map<string, CompressedEntry>();
 
-export async function serveUpload(urlPath: string, method = "GET", acceptEncoding: string | null = null): Promise<Response> {
+export async function serveUpload(
+  urlPath: string,
+  method = "GET",
+  acceptEncoding: string | null = null,
+  rangeHeader: string | null = null,
+): Promise<Response> {
   const notFound = () =>
     new Response("Not found", {
       status: 404,
@@ -228,6 +252,48 @@ export async function serveUpload(urlPath: string, method = "GET", acceptEncodin
     const st = await fs.stat(target);
     if (!st.isFile()) return notFound();
     const ext = path.extname(target).toLowerCase();
+    // Media (audio/video) is seeked with Range requests; answering 200 with
+    // the whole body breaks seeking (Safari refuses to play at all) and reads
+    // the whole file into memory per request. Single byte range only - the
+    // shape browsers send - and everything else keeps the full-body path.
+    const rangeMatch =
+      rangeHeader && /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+    if (rangeMatch && method !== "HEAD") {
+      let start = rangeMatch[1] === "" ? NaN : parseInt(rangeMatch[1], 10);
+      let end = rangeMatch[2] === "" ? NaN : parseInt(rangeMatch[2], 10);
+      if (Number.isNaN(start) && Number.isNaN(end)) return notFound();
+      if (Number.isNaN(start)) {
+        // suffix form: bytes=-N = the last N bytes
+        start = Math.max(0, st.size - end!);
+        end = st.size - 1;
+      }
+      if (Number.isNaN(end) || end >= st.size) end = st.size - 1;
+      if (start > end || start >= st.size) {
+        return new Response(null, {
+          status: 416,
+          headers: { "content-range": `bytes */${st.size}` },
+        });
+      }
+      const fh = await fs.open(target, "r");
+      try {
+        const len = end - start + 1;
+        const slice = Buffer.alloc(len);
+        await fh.read(slice, 0, len, start);
+        return new Response(new Uint8Array(slice), {
+          status: 206,
+          headers: {
+            "content-type": mimeFor(target),
+            "content-length": String(len),
+            "content-range": `bytes ${start}-${end}/${st.size}`,
+            "accept-ranges": "bytes",
+            "cache-control": "public, max-age=31536000, immutable",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      } finally {
+        await fh.close();
+      }
+    }
     // HEAD describes the same representation GET would send.
     const enc = pickPublicEncoding(acceptEncoding, ext);
     let data: Buffer = await fs.readFile(target);
@@ -252,6 +318,7 @@ export async function serveUpload(urlPath: string, method = "GET", acceptEncodin
       // nosniff stops a browser re-interpreting a mislabeled body as HTML/JS
       // (type-confusion XSS). Zero cost for correctly-typed content.
       "x-content-type-options": "nosniff",
+      "accept-ranges": "bytes",
     };
     if (encoded) headers["content-encoding"] = enc!;
     // The body is chosen by Accept-Encoding: a shared cache must know.
@@ -288,7 +355,7 @@ export async function serveUpload(urlPath: string, method = "GET", acceptEncodin
  * wire raw. Measured: 132 KB for theme.css. Compressible text types are now
  * brotli/gzip encoded per Accept-Encoding, memoized per file+mtime.
  */
-const PUBLIC_COMPRESSIBLE = new Set([".css", ".js", ".mjs", ".json", ".svg", ".txt", ".csv", ".md", ".webmanifest"]);
+const PUBLIC_COMPRESSIBLE = new Set([".css", ".js", ".mjs", ".json", ".svg", ".txt", ".csv", ".md", ".webmanifest", ".xml", ".xsl", ".xslt"]);
 const publicCompressed = new Map<string, CompressedEntry>();
 
 function pickPublicEncoding(acceptEncoding: string | null, ext: string): "br" | "gzip" | null {
@@ -299,7 +366,7 @@ function pickPublicEncoding(acceptEncoding: string | null, ext: string): "br" | 
   return null;
 }
 
-export async function servePublic(urlPath: string, method = "GET", acceptEncoding: string | null = null): Promise<Response> {
+export async function servePublic(urlPath: string, method = "GET", acceptEncoding: string | null = null, versioned = false): Promise<Response> {
   const notFound = () =>
     new Response("Not found", {
       status: 404,
@@ -339,7 +406,12 @@ export async function servePublic(urlPath: string, method = "GET", acceptEncodin
       // The compressed length; identity keeps the file size (RFC 9110: the
       // length must describe the bytes actually sent, not the uncompressed size).
       "content-length": String(data.length),
-      "cache-control": "public, max-age=31536000, immutable",
+      // Immutable is only honest for a content-addressed URL (?v=): an
+      // unversioned /public/admin.css would otherwise stay stale in the
+      // browser for a year after the deploy that changed it.
+      "cache-control": versioned
+        ? "public, max-age=31536000, immutable"
+        : "public, max-age=3600",
       // Served straight from the app origin (user uploads / app assets):
       // nosniff stops a browser re-interpreting a mislabeled body as HTML/JS
       // (type-confusion XSS). Zero cost for correctly-typed content.

@@ -4,8 +4,10 @@ import { sql } from "drizzle-orm";
 import { db, rawQuery } from "./db.js";
 import { invalidateOptionCache } from "./options.js";
 import { invalidateSettings } from "./queries.js";
-import { invalidateContentCaches } from "./cache.js";
+import { invalidateAll, invalidateContentCaches } from "./cache.js";
 import { reloadPlugins } from "./plugins.js";
+import { resetDefaultMenusSeed } from "./menus.js";
+import { resetThemesSync } from "./themes.js";
 import { ServiceError } from "./errors.js";
 import { createLogger } from "./logger.js";
 const log = createLogger("backup");
@@ -314,6 +316,9 @@ export async function restoreDatabaseBackup(input: unknown): Promise<RestoreResu
   // is the most write-like event there is: invalidate everything at the
   // commit point, after plugins reloaded.
   invalidateContentCaches();
+  invalidateAll();
+  resetDefaultMenusSeed();
+  resetThemesSync();
 
   const restored: Record<string, number> = {};
   for (const name of ordered) restored[name] = backup.tables[name].length;

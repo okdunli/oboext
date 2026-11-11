@@ -139,6 +139,7 @@ export const SITE_SETTINGS_SCHEMA: SettingsSchema = [
         default: "Asia/Shanghai",
         half: true,
         placeholder: "Asia/Shanghai",
+        help: "全站的日历基准：文章的年月日、归档分组、sitemap lastmod、签到日期都按它切日。修改后新内容按新时区记日，历史数据按旧时区记录、不回改，跨日附近的内容可能前后差一天。",
       },
       {
         key: "dateFormat",
@@ -151,6 +152,7 @@ export const SITE_SETTINGS_SCHEMA: SettingsSchema = [
           { value: "MMM D, YYYY", label: "Aug 24, 2026" },
           { value: "D/M/YYYY", label: "24/8/2026" },
         ],
+        help: "前台每个日期（文章、页面、评论）的显示样式；sitemap 与机器可读的 datetime 属性不受影响。",
       },
     ],
   },

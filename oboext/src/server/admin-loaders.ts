@@ -8,8 +8,10 @@ import {
   ServiceError,
 } from "./admin.js";
 import { adminListPages, adminGetPage } from "./pages.js";
+import { memoQuery } from "./cache.js";
 import { pageNum } from "./paging.js";
 import { POST_FORMATS } from "./post-formats.js";
+import { localizePostFormats } from "./post-formats-en.js";
 import { listMedia } from "./media.js";
 import { listMenus, menuLabelDisplay } from "./menus.js";
 import {
@@ -36,7 +38,15 @@ import {
 } from "./admin-menu.js";
 import { listCategories, listTags, getSettings } from "./queries.js";
 import { PUBLIC_DIR } from "./storage.js";
-import { makeT, acceptLanguageLocale, ctxLocale, resolveLocale } from "./i18n.js";
+import {
+  makeT,
+  acceptLanguageLocale,
+  ctxLocale,
+  resolveLocale,
+  pluginNameKey,
+  pluginDescKey,
+  type Translate,
+} from "./i18n.js";
 import { listPlugins, getPlugin, ensurePluginsLoaded } from "./plugins.js";
 import { getNotifySettings } from "./notify.js";
 import { getMemberSettings } from "./members.js";
@@ -51,6 +61,7 @@ import { getOption } from "./options.js";
 import { listSecurityEvents } from "./security-events.js";
 import { SITE_SETTINGS_SCHEMA } from "./site-settings-schema.js";
 import { SETTINGS_EN } from "./site-settings-en.js";
+import { localizeWidgetCatalog } from "./widgets-en.js";
 import { resolveSettings } from "./settings-schema.js";
 import {
   visitSourcesToday,
@@ -67,16 +78,17 @@ import type { SessionUser } from "./auth.js";
 import { hasAnyUser } from "./auth.js";
 import { publicAssetHref } from "./theme-chrome.js";
 import { db } from "./db.js";
-import { comments, posts, users, searchTerms, webmentions } from "./schema.js";
-import { and, desc, eq, gte, isNotNull, sql } from "drizzle-orm";
+import { comments, pages as pagesTable, posts, users, searchTerms, webmentions } from "./schema.js";
+import { and, desc, eq, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { can } from "./admin.js";
 
 // Newsletter admin screen (subscribers list). Kept to direct db reads here —
 // the module itself avoids the content memo for the same reason: subscriber
 // state is exact, live data, and the admin table must show it as-is.
-import { rawQuery as rawQueryNewsletter } from "./db.js";
+import { rawQuery, rawQuery as rawQueryNewsletter } from "./db.js";
 import { newsletterSends, subscribers } from "./schema.js";
 import { ADMIN_RETRY_LIMIT } from "./newsletter.js";
+import { siteDateContext, siteDayParts } from "./site-dates.js";
 
 /**
  * Privacy mask for the list column: keeps the first character of the local
@@ -237,11 +249,16 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
     navRaw?: string;
     csrfHref: string;
     adminHref: string;
+    adminCssHref: string;
+    mediaPickerHref: string;
+    twofaHref: string;
+    oauthTwofaHref: string;
+    usersHref: string;
     autosaveHref: string;
     liveHref: string;
     locale: string;
     toast: Record<string, string>;
-    shell: Record<string, string>;
+    shell: Record<string, string | Record<string, string>>;
     login: Record<string, string>;
     export: Record<string, string>;
     backup: Record<string, string>;
@@ -257,6 +274,46 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
       myAccount: t("admin.shell.my_account"),
       logout: t("admin.shell.logout"),
       visitSite: t("admin.shell.visit_site"),
+      // The topbar heading is the sidebar's own word for the screen, so the
+      // page title never disagrees with the nav. Edit/detail screens get the
+      // one extra word a menu entry cannot carry.
+      titles: {
+        dash: t("admin.nav.dash"),
+        content: t("admin.nav.content"),
+        posts: t("admin.nav.posts"),
+        postEdit: t("admin.title.edit_post"),
+        pages: t("admin.nav.pages"),
+        pageEdit: t("admin.title.edit_page"),
+        media: t("admin.nav.media"),
+        comments: t("admin.nav.comments"),
+        categories: t("admin.nav.categories"),
+        tags: t("admin.nav.tags"),
+        users: t("admin.nav.users"),
+        members: t("admin.nav.members"),
+        widgets: t("admin.nav.widgets"),
+        themes: t("admin.nav.themes"),
+        themeDetail: t("admin.title.theme_detail"),
+        menus: t("admin.nav.menus"),
+        menuSettings: t("admin.nav.menu_settings"),
+        settings: t("admin.nav.settings"),
+        permalinks: t("admin.nav.permalinks"),
+        redirects: t("admin.nav.redirects"),
+        security: t("admin.nav.security"),
+        securityLogs: t("admin.nav.security_logs"),
+        maintenance: t("admin.nav.maintenance"),
+        oauth: t("admin.nav.oauth"),
+        email: t("admin.nav.email"),
+        sms: t("admin.nav.sms"),
+        account: t("admin.nav.account"),
+        notfound: t("admin.nav.notfound"),
+        backup: t("admin.nav.backup"),
+        export: t("admin.nav.export"),
+        icons: t("admin.nav.icons"),
+        plugins: t("admin.nav.plugins"),
+        newsletter: t("admin.nav.newsletter"),
+        searchTerms: t("admin.nav.search_terms"),
+        webmentions: t("admin.nav.webmentions"),
+      },
     },
     login: {
       docTitle: t("admin.login.doc_title"),
@@ -264,6 +321,7 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
     },
     export: {
       docTitle: t("admin.export.doc_title"),
+      noscope: t("admin.export.noscope"),
       title: t("admin.export.title"),
       scope: t("admin.export.scope"),
       posts: t("admin.export.posts"),
@@ -280,6 +338,8 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
       jsonDesc: t("admin.export.json_desc"),
       markdownDesc: t("admin.export.markdown_desc"),
       wxrDesc: t("admin.export.wxr_desc"),
+      listSep: t("admin.export.list_sep"),
+      importDetail: t("admin.export.import_detail"),
       complement: t("admin.export.complement"),
       start: t("admin.export.start"),
       import: t("admin.export.import"),
@@ -288,17 +348,6 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
       skipHint: t("admin.export.skip_hint"),
       overwrite: t("admin.export.overwrite"),
       overwriteHint: t("admin.export.overwrite_hint"),
-      importScope: t("admin.export.import_scope"),
-      importScope2: t("admin.export.import_scope2"),
-      importScope3: t("admin.export.import_scope3"),
-      importScope4: t("admin.export.import_scope4"),
-      importScope5: t("admin.export.import_scope5"),
-      importScope6: t("admin.export.import_scope6"),
-      importScope7: t("admin.export.import_scope7"),
-      importScope8: t("admin.export.import_scope8"),
-      importScope9: t("admin.export.import_scope9"),
-      importScope10: t("admin.export.import_scope10"),
-      importScope11: t("admin.export.import_scope11"),
       dryRun: t("admin.export.dry_run"),
       runImport: t("admin.export.run_import"),
       fmtZip: t("admin.export.fmt_zip"),
@@ -345,8 +394,13 @@ export async function adminSession(_p: unknown, _ctx: Ctx) {
     needsSetup: !(await hasAnyUser()),
     csrfHref: publicAssetHref("csrf.js"),
     adminHref: publicAssetHref("admin.js"),
+    adminCssHref: publicAssetHref("admin.css"),
     autosaveHref: publicAssetHref("autosave.js"),
     liveHref: publicAssetHref("admin-live.js"),
+    mediaPickerHref: publicAssetHref("admin-media-picker.js"),
+    twofaHref: publicAssetHref("account-twofa.js"),
+    oauthTwofaHref: publicAssetHref("oauth-twofa.js"),
+    usersHref: publicAssetHref("admin-users.js"),
   };
   if (user) {
     const [prefs, extras] = await Promise.all([
@@ -418,13 +472,15 @@ export type AdminSourcePost = { kind: string; postId: number; title: string; vie
  * like the `sources` leg below: every other number on the page still matters.
  */
 async function adminTopSourcePosts(): Promise<AdminSourcePost[]> {
-  const perKind = await Promise.all(
-    REFERRER_KINDS.map((k) => topPostsBySource(k, 7, 5).catch(() => [] as SourcePostRow[])),
-  );
-  return perKind
-    .flat()
-    .sort((a, b) => b.views - a.views)
-    .slice(0, 12);
+  return memoQuery(`vsp:${new Date().toISOString().slice(0, 10)}`, 30_000, async () => {
+    const perKind = await Promise.all(
+      REFERRER_KINDS.map((k) => topPostsBySource(k, 7, 5).catch(() => [] as SourcePostRow[])),
+    );
+    return perKind
+      .flat()
+      .sort((a, b) => b.views - a.views)
+      .slice(0, 12);
+  });
 }
 
 
@@ -440,7 +496,9 @@ async function adminTopSourcePosts(): Promise<AdminSourcePost[]> {
  */
 
 /** "YYYY-MM-DD" in `tz` (en-CA gives ISO-order parts); invalid/missing tz ->
- *  the server-local calendar day, the pre-R339 behavior. */
+ *  the SITE's default calendar (site-dates), never the server's wall clock
+ *  (R534: the dashboard trend must agree with the rest of the app even when
+ *  the configured zone name is a typo). */
 export function zonedDayLabel(dt: Date, tz?: string | null): string {
   if (tz) {
     try {
@@ -451,16 +509,23 @@ export function zonedDayLabel(dt: Date, tz?: string | null): string {
       // fall through: an admin typo must not 500 the dashboard
     }
   }
-  return (
-    dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0")
-  );
+  // R534: the fallback is the site's default calendar, not the server's.
+  const { year, month, day } = siteDayParts(dt, siteDateContext().timezone);
+  return `${year}-${month}-${day}`;
 }
 
 async function adminDashboardTrends(): Promise<AdminTrendDay[]> {
+  // R559: the trend window changes only when content changes, so it rides the
+  // same memo contract as the public listings — 30s TTL under `trend:`,
+  // dropped by invalidateContentCaches on every write (the same list the
+  // `lp:`/`sred:` families ride). The dashboard is the admin's first screen;
+  // every visit used to re-run both 8-day-window reads even when nothing had
+  // changed since the previous visit.
   const { timezone } = await getSettings();
   const tz = typeof timezone === "string" ? timezone.trim() : "";
   const today = new Date();
   const todayLabel = zonedDayLabel(today, tz);
+  return memoQuery(`trend:${tz}:${todayLabel}`, 30_000, async () => {
   const start = new Date(Date.now() - 8 * 86_400_000);
   const [postRows, commentRows] = await Promise.all([
     db.select({ createdAt: posts.createdAt }).from(posts).where(gte(posts.createdAt, start)),
@@ -487,7 +552,8 @@ async function adminDashboardTrends(): Promise<AdminTrendDay[]> {
   };
   for (const r of postRows) bump(r.createdAt, "posts");
   for (const r of commentRows) bump(r.createdAt, "comments");
-  return days;
+    return days;
+  });
 }
 
 export async function adminDashboard(_p: unknown, ctx: Ctx) {
@@ -552,6 +618,13 @@ export async function adminDashboard(_p: unknown, ctx: Ctx) {
     srcInternal: t("admin.dash.src_internal"),
     srcDirect: t("admin.dash.src_direct"),
     srcOther: t("admin.dash.src_other"),
+    pages: t("admin.dash.pages"),
+    media: t("admin.dash.media"),
+    tags: t("admin.dash.tags"),
+    users: t("admin.dash.users"),
+    pendingUnit: t("admin.dash.pending_unit"),
+    tipPosts: t("admin.dash.tip_posts"),
+    tipComments: t("admin.dash.tip_comments"),
   };
   // The dashboardCards filter receives a bare { cards: [] } payload - no
   // dependency on stats - so both reads run in one wave. The 7-day trend
@@ -598,6 +671,15 @@ export async function adminPosts(p: any, ctx: Ctx) {
   // literal, so /en/posts is English without a second template.
   const locale = adminLocale(ctx);
   const t = makeT(locale);
+  // R273/R543: the pair rows ride out of adminListPosts itself (fetched in
+  // parallel with the taxonomy ids there), so this loader issues NO extra
+  // query — the list's "↔ slug" column is pure mapping now.
+  const postPairRows = out.pairRows;
+  const postById = new Map(postPairRows.map((r) => [r.id, r]));
+  const postItems = out.items.map((r) => {
+    const other = r.translationOf != null ? postById.get(r.translationOf) : postPairRows.find((x) => x.translationOf === r.id);
+    return { ...r, pair: other ? { id: other.id, slug: other.slug, locale: other.locale } : null };
+  });
   const s = {
     docTitle: t("admin.posts.doc_title"),
     filterAll: t("admin.posts.filter_all"),
@@ -629,7 +711,7 @@ export async function adminPosts(p: any, ctx: Ctx) {
     pagerSummary: t("admin.posts.pager_summary"),
     scheduled: t("admin.posts.scheduled"),
   };
-  return { ...out, page, limit, locale, s };
+  return { ...out, items: postItems, page, limit, locale, s };
 }
 
 /**
@@ -711,6 +793,7 @@ export async function adminPost(p: any, ctx: Ctx) {
     author: t("admin.editor.author"),
     authorSelf: t("admin.editor.author_self"),
     featuredImageUrl: t("admin.editor.featured_image_url"),
+    pickMedia: t("admin.editor.pick_media"),
     postFormat: t("admin.editor.post_format"),
     cardColor: t("admin.editor.card_color"),
     apply: t("admin.editor.apply"),
@@ -742,6 +825,16 @@ export async function adminPost(p: any, ctx: Ctx) {
     excerptPhFull: t("admin.editor.excerpt_ph_full"),
     translationIdPhFull: t("admin.editor.translation_id_ph_full"),
     noHistory: t("admin.editor.no_history"),
+    publishedAt: t("admin.editor.published_at"),
+    scheduleHint: t("admin.editor.schedule_hint"),
+    commentsOpen: t("admin.editor.comments_open"),
+    commentsClosed: t("admin.editor.comments_closed"),
+    pinnedDesc: t("admin.editor.pinned_desc"),
+    noCatHint: t("admin.editor.no_cat_hint"),
+    translationHint: t("admin.editor.translation_hint"),
+    sourcesViews: t("admin.editor.sources_views"),
+    sourcesVisitors: t("admin.editor.sources_visitors"),
+    colorPick: t("admin.editor.color_pick"),
   };
   // Categories, tags, the author list and the post itself are mutually independent - one wave instead of the old three serial awaits (taxonomy pair).
   const authorsP = can(user.role, "content:update:any")
@@ -749,7 +842,7 @@ export async function adminPost(p: any, ctx: Ctx) {
     : Promise.resolve([]);
   if (p?.id === "new" || p?.id == null) {
     const [categories, tags, authors] = await Promise.all([listCategories(), listTags(), authorsP]);
-    return { post: null, categories, tags, authors, formats: POST_FORMATS, s };
+    return { post: null, categories, tags, authors, formats: localizePostFormats(adminLocale(ctx) === "en"), s };
   }
   const [categories, tags, authors, post, postSources] = await Promise.all([
     listCategories(),
@@ -761,7 +854,7 @@ export async function adminPost(p: any, ctx: Ctx) {
     visitSourcesForPost(Number(p.id)).catch(() => [] as VisitSourceRow[]),
   ]);
   if (!post) return { notFound: true };
-  return { post, categories, tags, authors, formats: POST_FORMATS, postSources, s };
+  return { post, categories, tags, authors, formats: localizePostFormats(adminLocale(ctx) === "en"), postSources, s };
 }
 
 export async function adminPages(p: any, ctx: Ctx) {
@@ -779,6 +872,18 @@ export async function adminPages(p: any, ctx: Ctx) {
   // Same contract as the dashboard / post list / comment queue (R485-R488).
   const locale = adminLocale(ctx);
   const t = makeT(locale);
+  // 0046/R544: the pair rows ride out of adminListPages itself (the same
+  // parallel-pair shape the posts list uses), so this loader issues NO extra
+  // query — the "↔ slug" column is pure mapping now.
+  const pairRows = out.pairRows;
+  const byId = new Map(pairRows.map((r) => [r.id, r]));
+  const items = out.items.map((r) => {
+    const other = r.translationOf != null ? byId.get(r.translationOf) : pairRows.find((x) => x.translationOf === r.id);
+    return {
+      ...r,
+      pair: other ? { id: other.id, slug: other.slug, locale: other.locale } : null,
+    };
+  });
   const s = {
     docTitle: t("admin.pages.doc_title"),
     filterAll: t("admin.pages.filter_all"),
@@ -807,7 +912,7 @@ export async function adminPages(p: any, ctx: Ctx) {
     confirmDeleteOne: t("admin.pages.confirm_delete_one"),
     pagerSummary: t("admin.pages.pager_summary"),
   };
-  return { ...out, page, limit, locale, s };
+  return { ...out, items, page, limit, locale, s };
 }
 
 /** Editor data: one page (or null for "new"). */
@@ -825,7 +930,14 @@ export async function adminPage(p: any, ctx: Ctx) {
     order: t("admin.page_editor.order"),
     orderHint: t("admin.page_editor.order_hint"),
     featuredImage: t("admin.page_editor.featured_image"),
+    pickMedia: t("admin.editor.pick_media"),
     previewLink: t("admin.page_editor.preview_link"),
+    contentLocale: t("admin.page_editor.content_locale"),
+    translation: t("admin.editor.translation"),
+    translationIdPh: t("admin.page_editor.translation_id_ph"),
+    translationHint: t("admin.page_editor.translation_hint"),
+    langZh: t("admin.editor.lang_zh"),
+    langEn: t("admin.editor.lang_en"),
     confirmDeletePageFull: t("admin.page_editor.confirm_delete_page_full"),
     titlePhPage: t("admin.page_editor.title_ph_page"),
     slugPhPage: t("admin.page_editor.slug_ph_page"),
@@ -899,6 +1011,7 @@ export async function adminMedia(_p: unknown, ctx: Ctx) {
   const t = makeT(adminLocale(ctx));
   const s = {
     docTitle: t("admin.media.doc_title"),
+    bulkPrefix: t("admin.media.bulk_prefix"),
     uploadHint: t("admin.media.upload_hint"),
     pasteHint: t("admin.media.paste_hint"),
     altLabel: t("admin.media.alt_label"),
@@ -912,6 +1025,10 @@ export async function adminMedia(_p: unknown, ctx: Ctx) {
     copyLinks: t("admin.media.copy_links"),
     tag: t("admin.media.tag"),
     variants: t("admin.media.variants"),
+    syncBtn: t("admin.media.sync_btn"),
+    titleSync: t("admin.media.title_sync"),
+    syncDone: t("admin.media.sync_done"),
+    syncNone: t("admin.media.sync_none"),
     bulkDelete: t("admin.media.bulk_delete"),
     loadMore: t("admin.media.load_more"),
     empty: t("admin.media.empty"),
@@ -927,6 +1044,7 @@ export async function adminMedia(_p: unknown, ctx: Ctx) {
     tagAppend: t("admin.media.tag_append"),
     tagOverwrite: t("admin.media.tag_overwrite"),
     phAlt: t("admin.media.ph_alt"),
+    typeFilter: t("admin.media.type_filter"),
     phSearch: t("admin.media.ph_search"),
     phTags: t("admin.media.ph_tags"),
     titleCopyAll: t("admin.media.title_copy_all"),
@@ -978,6 +1096,8 @@ export async function adminMenus(_p: unknown, ctx: Ctx) {
     phLabel: t("admin.menus.ph_label"),
     phUrl: t("admin.menus.ph_url"),
     phIcon: t("admin.menus.ph_icon"),
+    typeLabel: t("admin.menus.type_label"),
+    refLabel: t("admin.menus.ref_label"),
     setIcon: t("admin.menus.set_icon"),
     moveUp: t("admin.menus.move_up"),
     moveDown: t("admin.menus.move_down"),
@@ -1001,6 +1121,16 @@ export async function adminPlugins(_p: unknown, ctx: Ctx) {
     home: t("admin.plugins.home"),
     settings: t("admin.plugins.settings"),
     panel: t("admin.plugins.panel"),
+    enabled: t("admin.plugins.enabled"),
+    disabled: t("admin.plugins.disabled"),
+    enable: t("admin.plugins.enable"),
+    disable: t("admin.plugins.disable"),
+    installedUnit: t("admin.plugins.installed_unit"),
+    authorLabel: t("admin.plugins.author_label"),
+    pluginWord: t("admin.plugins.plugin_word"),
+    manage: t("admin.plugins.manage"),
+    saveVerb: t("admin.plugins.save_verb"),
+    adminSuffix: t("admin.plugins.admin_suffix"),
     empty: t("admin.plugins.empty"),
     uploadHint: t("admin.plugins.upload_hint"),
     settingsTitle: t("admin.plugins.settings_title"),
@@ -1009,23 +1139,22 @@ export async function adminPlugins(_p: unknown, ctx: Ctx) {
     adminPanel: t("admin.plugins.admin_panel"),
     close: t("admin.plugins.close"),
   };
-  return { plugins: await listPlugins(), s };
+  // R531: the plugin list shows the catalog's name/description when the
+  // catalog has them (first-party plugins), and the manifest's otherwise
+  // (third-party plugins are never renamed by the core).
+  const plugins = (await listPlugins()).map((p) => {
+    const nk = pluginNameKey(p.slug);
+    const dk = pluginDescKey(p.slug);
+    return {
+      ...p,
+      name: nk ? t(nk) : p.name,
+      description: dk ? t(dk) : p.description,
+    };
+  });
+  return { plugins, s };
 }
 
 /** One plugin: manifest settings schema + resolved values for the form. */
-export async function adminPlugin(p: any, ctx: Ctx) {
-  const user = requireUser(ctx);
-  if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
-  const t = makeT(adminLocale(ctx));
-  const s = {
-    back: t("admin.plugin_detail.back"),
-    enabled: t("admin.plugin_detail.enabled"),
-    noPanel: t("admin.plugin_detail.no_panel"),
-    noPanelHint: t("admin.plugin_detail.no_panel_hint"),
-  };
-  return { ...getPlugin(String(p?.slug || "")), s };
-}
-
 // Plugin-owned admin panel host (original parity: app/admin/plugins/[slug]).
 export async function adminPluginPanel(p: any, ctx: Ctx) {
   const user = requireUser(ctx);
@@ -1039,12 +1168,24 @@ export async function adminPluginPanel(p: any, ctx: Ctx) {
   }
   if (!plugin.enabled) return { plugin: null, html: "", scriptSrc: "" };
   await ensurePluginsLoaded();
-  const out = applyFilters<{ slug: string; html: string; scriptSrc: string }>(HOOKS.adminPanel, {
-    slug,
-    html: "",
-    scriptSrc: "",
-  });
-  return { plugin, html: out.html, scriptSrc: out.scriptSrc };
+  // R531: the panel payload carries the request's translator so plugins render
+  // their server-side panel HTML in the admin session's language (the same
+  // makeT the surrounding shell copy uses).
+  const t = makeT(adminLocale(ctx));
+  const out = applyFilters<{ slug: string; html: string; scriptSrc: string; t: Translate }>(
+    HOOKS.adminPanel,
+    { slug, html: "", scriptSrc: "", t },
+  );
+  // R531: the panel header shows the plugin's name/description - the
+  // catalog's when it has them, the manifest's otherwise.
+  const nk = pluginNameKey(plugin.slug);
+  const dk = pluginDescKey(plugin.slug);
+  const view = {
+    ...plugin,
+    name: nk ? t(nk) : plugin.name,
+    description: dk ? t(dk) : plugin.description,
+  };
+  return { plugin: view, html: out.html, scriptSrc: out.scriptSrc };
 }
 
 export async function adminNotify(_p: unknown, ctx: Ctx) {
@@ -1249,7 +1390,7 @@ export async function adminSecurityPublic(_p: unknown, _ctx: Ctx) {
 export async function adminOAuth(_p: unknown, ctx: Ctx) {
   const user = requireUser(ctx);
   if (!can(user.role, "settings:manage")) throw new ServiceError("权限不足", 403);
-  const providers = await listAdminProviders();
+  const providers = await listAdminProviders(adminLocale(ctx));
   const origin = typeof ctx.origin === "string" ? ctx.origin : "";
   const rows: Array<AdminProvider & { callbackUrl: string }> = providers.map((p) => ({
     ...p,
@@ -1260,6 +1401,8 @@ export async function adminOAuth(_p: unknown, ctx: Ctx) {
     docTitle: t("admin.oauth.doc_title"),
     title: t("admin.oauth.title"),
     lead: t("admin.oauth.lead"),
+    bindHint: t("admin.oauth.bind_hint"),
+    callbackLabel: t("admin.oauth.callback_label"),
     verifiedMerge: t("admin.oauth.verified_merge"),
     verifiedMerge2: t("admin.oauth.verified_merge2"),
     custom: t("admin.oauth.custom"),
@@ -1393,6 +1536,7 @@ export async function adminMaintenance(_p: unknown, ctx: Ctx) {
   const t = makeT(adminLocale(ctx));
   const s = {
     docTitle: t("admin.maintenance.doc_title"),
+    phDefault: t("admin.maintenance.ph_default"),
     title: t("admin.maintenance.title"),
     save: t("admin.common.save_changes"),
     closeSite: t("admin.maintenance.close_site"),
@@ -1419,6 +1563,7 @@ export async function adminSecurityLogs(p: unknown, ctx: Ctx) {
     loginOk: t("admin.seclogs.login_ok"),
     loginFail: t("admin.seclogs.login_fail"),
     loginLock: t("admin.seclogs.login_lock"),
+    loginChallenge: t("admin.seclogs.login_challenge"),
     resetRequest: t("admin.seclogs.reset_request"),
     resetDone: t("admin.seclogs.reset_done"),
     typePrefix: t("admin.seclogs.type_prefix"),
@@ -1437,6 +1582,11 @@ export async function adminSecurityLogs(p: unknown, ctx: Ctx) {
     phIp: t("admin.seclogs.ph_ip"),
     ipFilter: t("admin.seclogs.ip_filter"),
     seeThisAccount: t("admin.seclogs.see_this_account"),
+    totalLabel: t("admin.page.total_label"),
+    countUnit: t("admin.seclogs.count_unit"),
+    pagePrefix: t("admin.page.page_prefix"),
+    pageSuffix: t("admin.page.page_suffix"),
+    userHash: t("admin.page.user_hash"),
     seeThisIp: t("admin.seclogs.see_this_ip"),
     stage: t("admin.seclogs.stage"),
   };
@@ -1483,6 +1633,8 @@ export async function adminIcons(_p: unknown, ctx: Ctx) {
   const t = makeT(adminLocale(ctx));
   const s = {
     docTitle: t("admin.icons.doc_title"),
+    totalLabel: t("admin.page.total_label"),
+    countUnit: t("admin.icons.count_unit"),
     title: t("admin.icons.title"),
     source: t("admin.icons.source"),
     colIcon: t("admin.icons.col_icon"),
@@ -1523,6 +1675,9 @@ export async function adminWidgets(p: any, ctx: Ctx) {
     cancel: t("admin.widgets.cancel"),
     hide: t("admin.widgets.hide"),
     show: t("admin.widgets.show"),
+    currentSuffix: t("admin.widgets.current_suffix"),
+    countSuffix: t("admin.widgets.count_suffix"),
+    countSuffixOne: t("admin.widgets.count_suffix_one"),
   };
   const q = String(p?.theme || ctx.query?.get("theme") || "").trim();
   // One wave: listThemes is independent of the active slug, and the widget
@@ -1533,15 +1688,20 @@ export async function adminWidgets(p: any, ctx: Ctx) {
     listWidgets(q || s || THEME_SLUG),
   );
   const [active, rows, widgets] = await Promise.all([activeP, listThemes(), widgetsP]);
+  // The widget catalogue is authored in Chinese inside widgets.ts; the English
+  // names come from WIDGET_EN keyed by the source string (same shape as
+  // SETTINGS_EN). Labels reach the page through the loader only, so one pass
+  // covers every reader.
+  const catalog = localizeWidgetCatalog(adminLocale(ctx) === "en");
   return {
     theme: q || active || THEME_SLUG,
     activeThemeSlug: active,
-    themes: rows.map((t) => ({
-      slug: t.slug,
-      name: t.slug === active ? `${t.name}（当前启用）` : t.name,
+    themes: rows.map((th) => ({
+      slug: th.slug,
+      name: th.slug === active ? th.name + s.currentSuffix : th.name,
     })),
-    areas: WIDGET_AREAS,
-    types: WIDGET_TYPES,
+    areas: catalog.areas,
+    types: catalog.types,
     widgets,
     s,
   };
@@ -1555,6 +1715,7 @@ export async function adminThemes(_p: unknown, ctx: Ctx) {
   const t = makeT(adminLocale(ctx));
   const s = {
     docTitle: t("admin.themes.doc_title"),
+    updatedPrefix: t("admin.themes.updated_prefix"),
     title: t("admin.themes.title"),
     intro1: t("admin.themes.intro1"),
     intro2: t("admin.themes.intro2"),
@@ -1607,7 +1768,11 @@ export async function adminThemePanel(p: any, ctx: Ctx) {
     phSubtitle: tt("admin.themes_detail.ph_subtitle"),
     button: tt("admin.themes_detail.button"),
   };
-return getThemePanel(slug);
+const panel = await getThemePanel(slug);
+  // ts was built but never returned - the detail page read p.ts.* and 500ed.
+  // The panel copy (customDesc/customBadge) lives here, not in themes.ts: the
+  // theme module has no business carrying UI strings.
+  return { ...panel, ts, s: { ...(panel.s ?? {}), customDesc: tt("admin.themepanel.custom_desc"), customBadge: tt("admin.themepanel.custom_badge") } };
 }
 
 export async function adminComments(p: any, ctx: Ctx) {
@@ -1744,6 +1909,11 @@ export async function adminNewsletter(p: any, ctx: Ctx) {
     page,
     limit,
     s: {
+    totalLabel: t("admin.page.total_label"),
+    countUnit: t("admin.newsletter.count_unit"),
+    pagePrefix: t("admin.page.page_prefix"),
+    pageSuffix: t("admin.page.page_suffix"),
+    localeZh: t("admin.newsletter.locale_zh"),
       title: t("newsletter.admin_title"),
       docTitle: t("newsletter.admin_title"),
       pagerPrev: t("admin.common.prev"),
@@ -1848,6 +2018,8 @@ export async function adminUsers(_p: unknown, ctx: Ctx) {
     colUser: t("admin.users.col_user"),
     colRole: t("admin.users.col_role"),
     colCreated: t("admin.users.col_created"),
+    colTwofa: t("admin.users.col_twofa"),
+    twofaReset: t("admin.users.twofa_reset"),
     home: t("admin.users.home"),
     empty: t("admin.users.empty"),
     confirmDelete: t("admin.users.confirm_delete"),
@@ -1869,7 +2041,11 @@ export async function adminUsers(_p: unknown, ctx: Ctx) {
       subscriberHint: t("admin.roles.subscriber_hint"),
     },
   };
-  return { ...out, locale, s };
+  // Every list loader hands the page `{ items, s }` (the dashboard, comments
+  // and posts screens all do). Spreading the bare array here turned it into an
+  // object with numeric keys, so the template's {#each} had no .map and the
+  // whole page 500'd.
+  return { items: out, locale, s };
 }
 
 export async function adminSettings(_p: unknown, ctx: Ctx) {
@@ -1929,16 +2105,22 @@ export async function adminSettings(_p: unknown, ctx: Ctx) {
   for (const k of ["homePageId", "postsPageId"]) {
     stored[k] = stored[k] == null ? "" : String(stored[k]);
   }
+  // R551: the two options-store reads (feed_full_text, webhook_url) are
+  // independent — one wave instead of two serial awaits on every settings
+  // page load. Both have a short options cache, but a cold admin session
+  // still paid two round trips here.
+  const [feedFullText, webhookUrl] = await Promise.all([
+    getOption<boolean>("feed_full_text", false),
+    getOption<string>("webhook_url", ""),
+  ]);
   // feed_full_text lives in the generic options store AND is mirrored by the
   // site_settings feedContent column (the save route keeps both in sync), so
   // the checkbox reflects the real feed behavior whichever end last saved.
-  stored.feed_full_text =
-    (await getOption<boolean>("feed_full_text", false)) === true ||
-    stored.feedContent === "full";
+  stored.feed_full_text = feedFullText === true || stored.feedContent === "full";
   // webhook_url lives in the generic options store (webhook.ts reads it from
   // there) — site_settings has no such column — so inject it for the form the
   // same way feed_full_text is injected above.
-  stored.webhook_url = await getOption<string>("webhook_url", "");
+  stored.webhook_url = webhookUrl;
   return { settings: resolveSettings(schema, stored), schema, s };
 }
 
@@ -2006,6 +2188,11 @@ export async function adminSearchTerms(p: unknown, ctx: Ctx) {
     page,
     pages: Math.max(1, Math.ceil(total / limit)),
     s: {
+    totalLabel: t("admin.page.total_label"),
+    countUnit: t("admin.searchterms.count_unit"),
+    pagePrefix: t("admin.page.page_prefix"),
+    pageSuffix: t("admin.page.page_suffix"),
+    localeZh: t("admin.searchterms.locale_zh"),
       title: t("searchterm.admin_title"),
       docTitle: t("searchterm.admin_doc_title"),
       prev: t("admin.common.prev"),
@@ -2036,6 +2223,8 @@ export async function adminWebmentions(p: any, ctx: Ctx) {
   const t = makeT(adminLocale(ctx));
   const wm = {
     docTitle: t("admin.webmentions.doc_title"),
+    totalLabel: t("admin.page.total_label"),
+    countUnit: t("admin.webmentions.count_unit"),
   };
   const page = pageNum(p?.page);
   const limit = 30;
@@ -2105,6 +2294,7 @@ export async function adminWebmentions(p: any, ctx: Ctx) {
       createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : "",
     })),
     s: {
+      docTitle: t("admin.webmentions.doc_title"),
       title: t("webmention.admin_title"),
       lead: t("webmention.admin_lead"),
       col_source: t("webmention.admin_col_source"),

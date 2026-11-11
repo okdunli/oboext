@@ -11,6 +11,7 @@ import {
   type MenuItem,
 } from "./schema.js";
 import type { SessionUser } from "./auth.js";
+import type { Locale } from "./i18n.js";
 import { invalidatePrefix, memoQuery, SIDEBAR_TTL } from "./cache.js";
 import { zhCatalog, type Translate } from "./i18n.js";
 import { requireUser, requireCap, ServiceError } from "./admin.js";
@@ -112,49 +113,49 @@ async function resolveMenuUrls(
   const resolved = new Map<string, string>();
   const keyOf = (type: string, slug: string) => `${type}:${slug}`;
 
-  if (groups.post) {
-    const rows = await db
-      .select({
-        id: posts.id,
-        slug: posts.slug,
-        pinyinSlug: posts.pinyinSlug,
-        initialSlug: posts.initialSlug,
-        title: posts.title,
-        publishedAt: posts.publishedAt,
-        createdAt: posts.createdAt,
-        status: posts.status,
-      })
-      .from(posts)
-      .where(inArray(posts.slug, groups.post));
-    for (const r of rows) {
-      if (!includeUnpublished && r.status !== "published") continue;
-      resolved.set(keyOf("post", r.slug), postUrlFor(cfg, r));
-    }
+  const [postRows, pageRows, catRows, tagRows] = await Promise.all([
+    groups.post
+      ? db
+          .select({
+            id: posts.id,
+            slug: posts.slug,
+            pinyinSlug: posts.pinyinSlug,
+            initialSlug: posts.initialSlug,
+            title: posts.title,
+            publishedAt: posts.publishedAt,
+            createdAt: posts.createdAt,
+            status: posts.status,
+          })
+          .from(posts)
+          .where(inArray(posts.slug, groups.post))
+      : Promise.resolve([] as Array<{ id: number; slug: string; pinyinSlug: string | null; initialSlug: string | null; title: string; publishedAt: Date | null; createdAt: Date; status: string }>),
+    groups.page
+      ? db
+          .select({ slug: pages.slug, status: pages.status })
+          .from(pages)
+          .where(inArray(pages.slug, groups.page))
+      : Promise.resolve([] as Array<{ slug: string; status: string }>),
+    groups.category
+      ? db
+          .select({ slug: categories.slug })
+          .from(categories)
+          .where(inArray(categories.slug, groups.category))
+      : Promise.resolve([] as Array<{ slug: string }>),
+    groups.tag
+      ? db.select({ slug: tags.slug }).from(tags).where(inArray(tags.slug, groups.tag))
+      : Promise.resolve([] as Array<{ slug: string }>),
+  ]);
+
+  for (const r of postRows) {
+    if (!includeUnpublished && r.status !== "published") continue;
+    resolved.set(keyOf("post", r.slug), postUrlFor(cfg, r));
   }
-  if (groups.page) {
-    const rows = await db
-      .select({ slug: pages.slug, status: pages.status })
-      .from(pages)
-      .where(inArray(pages.slug, groups.page));
-    for (const r of rows) {
-      if (!includeUnpublished && r.status !== "published") continue;
-      resolved.set(keyOf("page", r.slug), pageUrlFor(cfg, r));
-    }
+  for (const r of pageRows) {
+    if (!includeUnpublished && r.status !== "published") continue;
+    resolved.set(keyOf("page", r.slug), pageUrlFor(cfg, r));
   }
-  if (groups.category) {
-    const rows = await db
-      .select({ slug: categories.slug })
-      .from(categories)
-      .where(inArray(categories.slug, groups.category));
-    for (const r of rows) resolved.set(keyOf("category", r.slug), categoryUrlFor(cfg, r));
-  }
-  if (groups.tag) {
-    const rows = await db
-      .select({ slug: tags.slug })
-      .from(tags)
-      .where(inArray(tags.slug, groups.tag));
-    for (const r of rows) resolved.set(keyOf("tag", r.slug), tagUrlFor(cfg, r));
-  }
+  for (const r of catRows) resolved.set(keyOf("category", r.slug), categoryUrlFor(cfg, r));
+  for (const r of tagRows) resolved.set(keyOf("tag", r.slug), tagUrlFor(cfg, r));
 
   return flat.map((it) => {
     if (it.referenceSlug) {
@@ -398,17 +399,34 @@ export function menuLabelStore(label: string): string {
   return key ? `@${key}` : label;
 }
 
+/**
+ * Admin-typed zh labels that have a canonical English rendering, applied on
+ * the /en tree only — the zh chrome keeps the label exactly as the admin
+ * typed it (unlike the @-marker path, which translates both locales).
+ */
+const EN_LABEL_OVERRIDES: Record<string, string> = {
+  "关于本站": "About this site",
+  "联系": "Contact",
+};
+
 /** Translate seeded-default labels for the request locale (nested menus too). */
-export function localizeMenu<T extends { label?: string; children?: unknown }>(items: T[], t: Translate): T[] {
+export function localizeMenu<T extends { label?: string; children?: unknown }>(
+  items: T[],
+  t: Translate,
+  locale?: Locale,
+): T[] {
   return items.map((it) => {
     const raw = String(it.label ?? "");
     const key = raw.startsWith("@") ? raw.slice(1) : MENU_DEFAULT_BY_ZH.get(raw);
-    const label = key && zhCatalog[key] !== undefined ? t(key) : it.label;
+    let label = key && zhCatalog[key] !== undefined ? t(key) : it.label;
+    if (locale === "en" && label === it.label && EN_LABEL_OVERRIDES[it.label ?? ""]) {
+      label = EN_LABEL_OVERRIDES[it.label ?? ""];
+    }
     return {
       ...it,
       ...(label !== it.label ? { label } : {}),
       ...(Array.isArray(it.children) && it.children.length
-        ? { children: localizeMenu(it.children as { label?: string; children?: unknown }[], t) }
+        ? { children: localizeMenu(it.children as { label?: string; children?: unknown }[], t, locale) }
         : {}),
     };
   }) as T[];
@@ -445,6 +463,12 @@ async function seedDefaultMenus(): Promise<void> {
 // retries. onConflictDoNothing makes the SQL itself idempotent.
 let seeded = false;
 let seedPromise: Promise<void> | null = null;
+/** R607: a backup restore / DB switch replaces the menus table — the one-shot
+ *  "already seeded" gate must reset or a backup without menus never re-seeds. */
+export function resetDefaultMenusSeed(): void {
+  seeded = false;
+  seedPromise = null;
+}
 export function ensureDefaultMenus(): Promise<void> {
   if (seeded) return Promise.resolve();
   if (!seedPromise) {

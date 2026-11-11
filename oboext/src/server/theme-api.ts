@@ -5,12 +5,37 @@ import path from "path";
 import type { PostView, TaxRef } from "./queries.js";
 import type { PageView } from "./pages.js";
 import * as R from "./render.js";
-import { esc, fmtDate } from "./render.js";
+import { esc, fmtDate, siteYear, isoDateAttr } from "./render.js";
 import { mimeFor, PUBLIC_DIR } from "./storage.js";
+import { getThemeManifest } from "./themes.js";
 import { DEFAULT_LOCALE, makeT, type Translate } from "./i18n.js";
 
 export * as R from "./render.js";
-export { esc, fmtDate, authorByline } from "./render.js";
+export { esc, fmtDate, siteYear, isoDateAttr, authorByline } from "./render.js";
+
+/**
+ * The site's date contract for themes (R533–R535).
+ *
+ * A theme NEVER derives a calendar of its own. The whole program runs on ONE
+ * calendar — the site's timezone plus its dateFormat setting, resolved by
+ * the core and refreshed on every settings read. The helpers above are the
+ * only sanctioned way to print one:
+ *
+ *   fmtDate(v)         a visitor-facing date: the SITE's day in the SITE's
+ *                      date format. Never format a timestamp with
+ *                      Date.getFullYear()/getMonth()/getDate() — those read
+ *                      the SERVER's wall clock, which can differ from the
+ *                      site's calendar by a whole day near midnight.
+ *   siteYear()         the year the SITE is in right now (footer copyright).
+ *   isoDateAttr(v)     the `datetime="..."` attribute for a <time> element:
+ *                      the exact instant. Pair it with fmtDate so the visible
+ *                      text is the site's choice and the machine reads ISO:
+ *                      `<time${isoDateAttr(p.publishedAt)}>${fmtDate(p.publishedAt)}</time>`.
+ *
+ * Day-based data (archive sections, sitemap lastmod, check-in days, visit
+ * buckets) is bucketed in the same site calendar, so a date printed with
+ * fmtDate always agrees with the section it appears under.
+ */
 export { mimeFor, PUBLIC_DIR } from "./storage.js";
 export { DEFAULT_LOCALE, makeT } from "./i18n.js";
 export type { Translate } from "./i18n.js";
@@ -22,7 +47,8 @@ export type { PageView } from "./pages.js";
 export interface ThemeChrome {
   slug: string;
   cssHref(): string;
-  // The full stylesheet, inlined into `<head>` as a `<style>` block.
+  // Optional full stylesheet to inline into `<head>`; a theme that omits it
+  // links cssHref() instead, which is cacheable across page views.
   cssInline?(): string;
   // Raw CSS that must apply as early as possible (the theme's base background/colour, before the external stylesheet lands).
   bodyFix(): string;
@@ -117,7 +143,7 @@ export type ListParts = {
   blogIndex?: string;
   activeHref?: string;
 
-  variant?: "blog" | "category" | "search" | "term";
+  variant?: "blog" | "category" | "search" | "term" | "author";
 
   sidebarData?: { posts: PostView[]; tags: TaxRef[]; cats: TaxRef[]; showCatIcons?: boolean; catCounts?: Map<number, number> };
 
@@ -343,6 +369,15 @@ export interface ThemeAssetDecl {
 }
 
 export function readThemeDecl(slug: string): ThemeAssetDecl {
+  const m = getThemeManifest(slug);
+  if (m) {
+    return {
+      scripts: m.scripts,
+      publicScripts: m.publicScripts,
+      noflash: m.noflash,
+      fonts: m.fonts,
+    };
+  }
   try {
     return JSON.parse(
       fs.readFileSync(path.join(THEMES_DIR, slug, "manifest.json"), "utf-8"),
@@ -430,19 +465,7 @@ export const GLOBALS_BODY_UTILITIES = `.min-h-screen{min-height:100vh}
 @media (min-width:1024px){.lg\\:hidden{display:none}.lg\\:grid-cols-\\[1fr_300px\\]{grid-template-columns:1fr 300px}}
 @media (min-width:1280px){.xl\\:hidden{display:none}}
 .rv-ic{display:inline-block;vertical-align:-0.125em;flex-shrink:0;overflow:visible;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-#rv-progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:9999;background:var(--accent,#e91e63);transition:width .08s linear;pointer-events:none}
-#rv-toc{position:fixed;top:50%;right:16px;transform:translateY(-50%);max-width:260px;max-height:72vh;overflow:auto;-webkit-overflow-scrolling:touch;background:var(--surface,#fff);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:12px 14px;box-shadow:0 10px 34px rgba(0,0,0,.14);font-size:13px;line-height:1.5;z-index:9998;display:none}
-#rv-toc.open{display:block}
-#rv-toc h4{margin:0 0 8px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted,#888)}
-#rv-toc ol{list-style:none;margin:0;padding:0}
-#rv-toc li{margin:1px 0}
-#rv-toc a{display:block;padding:3px 7px;border-radius:6px;color:var(--text,#222);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#rv-toc a:hover{background:color-mix(in srgb,var(--accent,#e91e63) 10%,transparent)}
-#rv-toc a.active{color:var(--accent,#e91e63);font-weight:600;background:color-mix(in srgb,var(--accent,#e91e63) 12%,transparent)}
-#rv-toc li.h3 a{padding-left:18px;font-size:12px;color:var(--muted,#666)}
-#rv-toc-toggle{position:fixed;right:16px;bottom:22px;width:46px;height:46px;border-radius:50%;border:1px solid var(--border,#e5e7eb);background:var(--surface,#fff);color:var(--accent,#e91e63);font-size:20px;line-height:1;cursor:pointer;z-index:9998;box-shadow:0 6px 18px rgba(0,0,0,.14);display:none;align-items:center;justify-content:center}
-#rv-toc-toggle.show{display:flex}
-@media (max-width:768px){#rv-toc{right:10px;left:10px;max-width:none;transform:none;top:auto;bottom:80px}}
+#rv-progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:9999;background:var(--accent);transition:width .08s linear;pointer-events:none}
 img{height:auto}
 .prose-cms img,.post-content img,.bmx-blocks img,.cm-content img{max-width:100%;height:auto}
 `;
@@ -496,7 +519,7 @@ export const SHARED_FORM_BASELINE = `
 .comment-form .guest-info{ display:flex; gap:8px; margin-bottom:12px; position:relative; z-index:1; }
 .comment-form .guest-info .item{ position:relative; flex:1 1 0; min-width:0; }
 .comment-form .comment-field{
-  width:100%; height:38px; padding:0 10px 0 34px;
+  width:100%; height:38px; padding:.5625rem .75rem; padding-right:2rem;
   font-size:13px; font-family:inherit; outline:none;
   background:var(--surface, #fff);
   border:1px solid var(--border, rgba(144,147,153,.35));
@@ -511,7 +534,7 @@ export const SHARED_FORM_BASELINE = `
 .comment-form .comment-field::-moz-placeholder{ color:var(--muted); }
 .comment-form .comment-field::placeholder{ color:var(--muted); }
 .comment-form .guest-info .item i{
-  position:absolute; left:0; top:0; bottom:0; width:34px;
+  position:absolute; right:10px; top:50%; transform:translateY(-50%);
   display:flex; align-items:center; justify-content:center;
   font-style:normal; pointer-events:none; color:var(--muted);
   border:0; background:transparent;
@@ -559,6 +582,17 @@ export const SHARED_FORM_BASELINE = `
 // Emoji popover visibility + the open/close motion. NOTE ON WHAT ACTUALLY FIXED THE FIRST-OPEN ANIMATION: it was NOT this block.
 @media (prefers-reduced-motion:reduce){
   .emoji-panel-wrap .emoji-panel{ transition:none; }
+}
+/* Program-side backstop for every theme: users who ask the OS for reduced
+   motion get all transitions/keyframes flattened, regardless of what a
+   third-party theme animates. */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+    scroll-behavior:auto !important;
+  }
 }
 .emoji-panel{
   position:absolute; left:0; bottom:calc(100% + 6px); z-index:30;
@@ -801,6 +835,8 @@ export const CATEGORY_ICON_MAP: Record<string, string> = {
 
 export const iconFileCache = new Map<string, string | null>();
 
+const iconRootCache = new Map<string, string>();
+
 export const LUCIDE_CLASS_ALIAS: Record<string, string> = { "share-2": "share2" };
 
 export function dfIconAccent(): string {
@@ -822,17 +858,22 @@ export function lucideSvg(name: string, px: number, cls = "", styleExtra = ""): 
   const c = cls ? ` ${cls}` : "";
   const m = /^<svg\b([^>]*)>/.exec(svg);
   if (!m) return svg;
-  const root = m[1]
-    // xmlns, width/height, fill, stroke* and overflow are byte-for-byte
-    // identical on every glyph and were re-serialized into every <svg> on every
-    // page. They now live once in the shared `.rv-ic` rule (GLOBALS_BODY_UTILITIES)
-    // that every document inlines, so each icon drops ~210 bytes while the page
-    // pays a single ~150-byte rule. viewBox + the lucide class stay: the class
-    // is the theme hook and the viewBox is the geometry the stroke scales.
-    .replace(/\s*(?:xmlns|fill|stroke|stroke-width|stroke-linecap|stroke-linejoin|overflow)="[^"]*"/g, "")
-    .replace(/\s*(?:width|height)="\d+"/g, "")
-    .replace(/\s*class="[^"]*"/, ` class="lucide lucide-${LUCIDE_CLASS_ALIAS[name] || name} rv-ic${c}"`)
-    .replace(/^\s+/, "");
+  const rootKey = `${name}\u0000${cls}`;
+  let root = iconRootCache.get(rootKey);
+  if (root === undefined) {
+    root = m[1]
+      // xmlns, width/height, fill, stroke* and overflow are byte-for-byte
+      // identical on every glyph and were re-serialized into every <svg> on every
+      // page. They now live once in the shared `.rv-ic` rule (GLOBALS_BODY_UTILITIES)
+      // that every document inlines, so each icon drops ~210 bytes while the page
+      // pays a single ~150-byte rule. viewBox + the lucide class stay: the class
+      // is the theme hook and the viewBox is the geometry the stroke scales.
+      .replace(/\s*(?:xmlns|fill|stroke|stroke-width|stroke-linecap|stroke-linejoin|overflow)="[^"]*"/g, "")
+      .replace(/\s*(?:width|height)="\d+"/g, "")
+      .replace(/\s*class="[^"]*"/, ` class="lucide lucide-${LUCIDE_CLASS_ALIAS[name] || name} rv-ic${c}"`)
+      .replace(/^\s+/, "");
+    iconRootCache.set(rootKey, root);
+  }
   const style = styleExtra ? ` style="${styleExtra}"` : "";
   return `<svg ${root} width="${px}" height="${px}"${style}>` + svg.slice(m[0].length);
 }

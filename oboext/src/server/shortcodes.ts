@@ -1,6 +1,7 @@
 // `[tag]` macros expanded at render time — port of Oboext lib/shortcodes.ts.
 import { applyFilters, HOOKS } from "./hooks.js";
 import { createLogger } from "./logger.js";
+import { siteYear } from "./site-dates.js";
 const log = createLogger("shortcodes");
 
 export type ShortcodeAttrs = Record<string, string>;
@@ -396,7 +397,8 @@ function registerBuiltins() {
     name: "year",
     description: "当前年份",
     example: "[year]",
-    render: () => String(new Date().getFullYear()),
+    // R534: the year the SITE is in, not the server's.
+    render: () => String(siteYear()),
   });
 
   registerShortcode({

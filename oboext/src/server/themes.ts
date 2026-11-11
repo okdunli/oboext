@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import { db } from "./db.js";
 import { siteSettings, themes, type Theme, type ThemeConfig } from "./schema.js";
-import { SIDEBAR_TTL, invalidatePrefix, memoQuery, memoStrict } from "./cache.js";
+import { invalidatePrefix, memoQuery, memoStrict } from "./cache.js";
 import { ServiceError } from "./admin.js";
 import { rmSyncRetry } from "./fs-utils.js";
 import { installPackage } from "./package-install.js";
@@ -93,17 +93,6 @@ export function hasThemeChrome(slug: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** The theme that owns the build-time chrome stylesheet. */
-export function getChromeTheme(): ThemeManifest | null {
-  const all = discoverThemes();
-  return (
-    all.find((t) => t.chrome) ??
-    all.find((t) => t.isDefault) ??
-    all[0] ??
-    null
-  );
 }
 
 // Hard TTL for the active-theme reads.
@@ -254,6 +243,11 @@ export async function syncThemes(): Promise<void> {
 // getActiveTheme() on every request, but folder sync is a startup concern.
 let synced = false;
 let syncPromise: Promise<void> | null = null;
+/** R607: same one-shot gate for the themes table (see resetDefaultMenusSeed). */
+export function resetThemesSync(): void {
+  synced = false;
+  syncPromise = null;
+}
 export function ensureThemes(): Promise<void> {
   if (synced) return Promise.resolve();
   if (!syncPromise) {
@@ -300,12 +294,6 @@ export async function listThemes(): Promise<Theme[]> {
   await syncThemes();
   synced = true;
   return db.select().from(themes).orderBy(desc(themes.isDefault), desc(themes.createdAt));
-}
-
-export async function getThemeBySlug(slug: string): Promise<Theme | null> {
-  await ensureThemes();
-  const [row] = await db.select().from(themes).where(eq(themes.slug, slug));
-  return row ?? null;
 }
 
 export async function getThemeById(id: number): Promise<Theme> {
@@ -547,21 +535,6 @@ export async function deleteTheme(id: number): Promise<{ id: number }> {
   return { id };
 }
 
-/** Mark a theme as the public-site active theme. */
-export async function setActiveTheme(id: number): Promise<Theme> {
-  const theme = await getThemeById(id);
-  if (!isPublicThemePorted(theme.slug)) {
-    throw new ServiceError("该主题的前台模板尚未适配，暂不能启用", 422);
-  }
-  await db
-    .update(siteSettings)
-    .set({ activeThemeSlug: theme.slug, updatedAt: new Date() })
-    .where(eq(siteSettings.id, 1));
-  invalidateThemeDiscovery();
-  invalidateActiveThemeCache();
-  return theme;
-}
-
 // ------------------------------------------------------------ settings panel
 
 export type ThemePanel = {
@@ -584,6 +557,8 @@ export type ThemePanel = {
   palettes: Record<string, unknown>;
   /** Currently selected palette key (raw settings value), null when unset. */
   palette: string | null;
+  /** Panel copy (the theme panel page reads p.s.* for its own strings). */
+  s?: Record<string, string>;
 };
 
 /** Resolve by numeric id or slug — admin routes accept both. */
@@ -723,13 +698,6 @@ export async function resetThemePanel(idOrSlug: string | number): Promise<Theme>
 export async function getActiveThemeSettings(): Promise<Record<string, unknown>> {
   const theme = await getActiveTheme();
   return resolveSettings(getThemeSettingsSchema(theme.slug), theme.settings);
-}
-
-/** A specific (non-active) theme's resolved settings. */
-export async function getThemeSettings(slug: string): Promise<Record<string, unknown>> {
-  const theme = await getThemeBySlug(slug);
-  if (!theme) return {};
-  return resolveSettings(getThemeSettingsSchema(slug), theme.settings);
 }
 
 export async function getActiveThemeRenderConfig(): Promise<ThemeConfig> {

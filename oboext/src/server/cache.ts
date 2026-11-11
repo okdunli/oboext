@@ -9,6 +9,8 @@ const store = new Map<
 // In-flight query promises, keyed the same as `store`.
 const inflight = new Map<string, Promise<unknown>>();
 
+let storeGeneration = 0;
+
 export const SIDEBAR_TTL = 30_000;
 
 /** How long a stale entry may keep serving while a background refresh runs. */
@@ -16,6 +18,7 @@ const SWR_WINDOW = 5;
 
 // Hard ceiling on entries, so a key space that includes request input cannot grow the store without bound.
 const MAX_ENTRIES = 512;
+export const CACHE_MAX_ENTRIES = MAX_ENTRIES;
 
 // Insert, or refresh an existing entry, then enforce the ceiling. Called on every WRITE and on every cache HIT.
 function put(key: string, entry: { at: number; value: unknown }): void {
@@ -43,6 +46,7 @@ function touch(key: string): void {
 }
 
 async function memo<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<T> {
+  const gen = storeGeneration;
   const now = Date.now();
   const hit = store.get(key);
   if (hit) {
@@ -56,7 +60,7 @@ async function memo<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<
       if (!hit.refreshing) {
         hit.refreshing = fn()
           .then((value) => {
-            put(key, { at: Date.now(), value });
+            if (gen === storeGeneration) put(key, { at: Date.now(), value });
             // Clear the in-flight marker on SUCCESS too. put() deliberately
             // carries `refreshing` forward so a concurrent stale read does not
             // start a second refresh mid-flight; but if it is never cleared, the
@@ -84,7 +88,7 @@ async function memo<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<
   }
   return runOnce(key, async () => {
     const value = await fn();
-    put(key, { at: Date.now(), value });
+    if (gen === storeGeneration) put(key, { at: Date.now(), value });
     return value;
   });
 }
@@ -136,7 +140,10 @@ export function invalidate(key: string): void {
 
 /** Drop the entire cache (used on bulk content changes / cache warm resets). */
 export function invalidateAll(): void {
+  storeGeneration++;
   store.clear();
+  // New readers must not join a load that began before the clear.
+  inflight.clear();
 }
 
 // The framework KV (globalThis.__rosezmKvApi.kv) offers get/set/del/has but no
@@ -186,8 +193,17 @@ export function invalidateKvContent(): void {
  * routed slug lookups (public pages, post tails). Called from
  * post/tag/category/page/comment write paths so the sidebar and routed content
  * refresh immediately instead of waiting out the TTL.
+ *
+ * `heavy` (default true) also runs the two content-write side effects — the
+ * recovery-snapshot mark and the translation-pairing probe. They are scoped to
+ * real content changes (a post/page write, an import, a backup restore): a
+ * published COMMENT or a user rename cannot alter translation pairing or the
+ * "data moved" recovery snapshot, so the member-facing comment path and the
+ * self-rename path pass `false` and skip two needless count(*) queries plus a
+ * debounced snapshot write on every hot call. The prefix list is identical for
+ * both branches — heavy only gates the side effects, never what memos drop.
  */
-export function invalidateContentCaches(): void {
+export function invalidateContentCaches(heavy = true): void {
   invalidatePrefix("tax:");
   invalidatePrefix("counts");
   invalidatePrefix("archive");
@@ -200,12 +216,18 @@ export function invalidateContentCaches(): void {
   invalidatePrefix("adj:");
   invalidatePrefix("rand:");
   invalidatePrefix("cmts:");
+  // R559: the admin dashboard's trend window (day-level post/comment counts).
+  // Content writes are exactly the events that change it, so it rides the
+  // same invalidation list as the public listing families.
+  invalidatePrefix("trend:");
   invalidatePrefix("widget:");
   invalidatePrefix("pathmiss:");
   invalidatePrefix("pg:");
   invalidatePrefix("pgh:");
   invalidatePrefix("hydr:");
   invalidatePrefix("rp:");
+  invalidatePrefix("rpv:");
+  invalidatePrefix("menu:");
   // R149: verifyToken memoizes the identity row (`sess:<id>`). Every users-row
   // write that matters rides this function - admin updateUser (ban / role /
   // rename) and deleteUser both call it at their commit point - so dropping the
@@ -229,6 +251,7 @@ export function invalidateContentCaches(): void {
   // The loader KV entries (home bundle, sidebars, category lists, archives)
   // are content-derived too - drop them in the same breath.
   invalidateKvContent();
+  if (!heavy) return;
   // R267: this function runs at the COMMIT POINT of every content write (that
   // is what the comment below says), which makes it the one honest place to
   // tell the database layer that the on-disk data moved. Without it the
@@ -246,7 +269,10 @@ export function invalidateContentCaches(): void {
   void import("./db.js")
     .then(async (db) => {
       const rows = await db.rawQuery<{ n: number }>(
-        `select count(*)::int as n from posts where translation_of is not null`,
+        // 0046: pages carry translation pairs too — a page-only pair must
+        // turn the site flag on just like a post pair does.
+        `select (select count(*) from posts where translation_of is not null)
+               + (select count(*) from pages where translation_of is not null) as n`,
       );
       const i18n = await import("./i18n.js");
       i18n.setPairingActive(Number(rows[0]?.n ?? 0) > 0);
@@ -305,6 +331,7 @@ export function peekMemo<T = unknown>(key: string, ttl?: number): T | undefined 
  * look random (A -> B -> default landing back on A).
  */
 export async function memoStrict<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<T> {
+  const gen = storeGeneration;
   const hit = store.get(key);
   if (hit && Date.now() - hit.at < ttl) {
     // touch(), not put(): a hit must refresh recency so the key is not the
@@ -319,7 +346,7 @@ export async function memoStrict<T>(key: string, ttl: number, fn: () => Promise<
   // selected `site_settings` six times before this existed.
   return runOnce(key, async () => {
     const value = await fn();
-    put(key, { at: Date.now(), value });
+    if (gen === storeGeneration) put(key, { at: Date.now(), value });
     return value;
   });
 }
@@ -333,6 +360,3 @@ export async function memoStrict<T>(key: string, ttl: number, fn: () => Promise<
 export function cacheSize(): number {
   return store.size;
 }
-
-/** The ceiling `put` enforces. Exported for the same reason as cacheSize. */
-export const CACHE_MAX_ENTRIES = MAX_ENTRIES;

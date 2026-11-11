@@ -34,6 +34,8 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { postVisitors, posts, visitDaily } from "./schema.js";
 import { createLogger } from "./logger.js";
+import { siteTimeZone } from "./queries.js";
+import { invalidatePrefix, memoQuery } from "./cache.js";
 
 const log = createLogger("visits");
 
@@ -58,9 +60,33 @@ export type SourcePostRow = {
 /** `day >= current_date - (days - 1)` — today plus the previous `days-1`
  *  calendar days, computed in SQL so the window never depends on the app's
  *  timezone agreeing with the one that stamped the rows. */
-function dayWindow(days: number) {
+async function dayWindow(days: number) {
   const n = Math.max(1, Math.trunc(Number(days) || 1));
-  return gte(visitDaily.day, sql`current_date - (${n}::int - 1)`);
+  return gte(visitDaily.day, sql`${dayLabelOffset(await todayLabel(), n - 1)}`);
+}
+
+/** The site-tz calendar day `back` days before today, as YYYY-MM-DD. Rows in
+ *  visit_daily are stamped with the site's own day, so readers must ask in the
+ *  same calendar - `current_date` is the DB session's (UTC) day. */
+function zonedDay(d: Date, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+async function todayLabel(): Promise<string> {
+  return zonedDay(new Date(), await siteTimeZone());
+}
+function dayLabelOffset(base: string, back: number): string {
+  const anchor = new Date(`${base}T00:00:00Z`);
+  anchor.setUTCDate(anchor.getUTCDate() - back);
+  return anchor.toISOString().slice(0, 10);
 }
 
 /**
@@ -75,18 +101,21 @@ function dayWindow(days: number) {
  */
 export async function rollupVisitDaily(): Promise<void> {
   try {
+    const tz = await siteTimeZone();
     await db.execute(sql`
       insert into ${visitDaily} ("day", "post_id", "referrer_kind", "views", "uniques")
-      select pv."created_at"::date                                as "day",
+      select (pv."created_at" AT TIME ZONE ${tz})::date           as "day",
              pv."post_id"                                         as "post_id",
              coalesce(pv."referrer_kind", 'direct')               as "referrer_kind",
              count(*)::int                                        as "views",
              count(*)::int                                        as "uniques"
         from ${postVisitors} pv
-       where pv."created_at" >= current_date - interval '1 day'
+       where pv."created_at" >= now() - interval '3 days'
        group by 1, 2, 3
       on conflict ("day", "post_id", "referrer_kind")
       do update set views = excluded.views, uniques = excluded.uniques`);
+      invalidatePrefix("vst:");
+      invalidatePrefix("vsp:");
   } catch (e) {
     log.warn("[visits] daily rollup failed:", e);
   }
@@ -102,17 +131,20 @@ export async function rollupVisitDaily(): Promise<void> {
  * zeroes would look identical to a site with no traffic.
  */
 export async function visitSourcesToday(): Promise<VisitSourceRow[]> {
-  const rows = await db
-    .select({
-      kind: visitDaily.referrerKind,
-      views: sql<number>`coalesce(sum(${visitDaily.views}), 0)::int`,
-      uniques: sql<number>`coalesce(sum(${visitDaily.uniques}), 0)::int`,
-    })
-    .from(visitDaily)
-    .where(sql`${visitDaily.day} = current_date`)
-    .groupBy(visitDaily.referrerKind)
-    .orderBy(sql`coalesce(sum(${visitDaily.views}), 0) desc`, visitDaily.referrerKind);
-  return rows.map((r) => ({ kind: r.kind, views: Number(r.views), uniques: Number(r.uniques) }));
+  const day = await todayLabel();
+  return memoQuery(`vst:${day}`, 30_000, async () => {
+    const rows = await db
+      .select({
+        kind: visitDaily.referrerKind,
+        views: sql<number>`coalesce(sum(${visitDaily.views}), 0)::int`,
+        uniques: sql<number>`coalesce(sum(${visitDaily.uniques}), 0)::int`,
+      })
+      .from(visitDaily)
+      .where(sql`${visitDaily.day} = ${day}`)
+      .groupBy(visitDaily.referrerKind)
+      .orderBy(sql`coalesce(sum(${visitDaily.views}), 0) desc`, visitDaily.referrerKind);
+    return rows.map((r) => ({ kind: r.kind, views: Number(r.views), uniques: Number(r.uniques) }));
+  });
 }
 
 /**
@@ -132,7 +164,7 @@ export async function visitSourcesForPost(postId: number, days = 30): Promise<Vi
       uniques: sql<number>`coalesce(sum(${visitDaily.uniques}), 0)::int`,
     })
     .from(visitDaily)
-    .where(and(eq(visitDaily.postId, postId), dayWindow(days)))
+    .where(and(eq(visitDaily.postId, postId), await dayWindow(days)))
     .groupBy(visitDaily.referrerKind)
     .orderBy(sql`coalesce(sum(${visitDaily.views}), 0) desc`, visitDaily.referrerKind);
   return rows.map((r) => ({ kind: r.kind, views: Number(r.views), uniques: Number(r.uniques) }));
@@ -157,10 +189,25 @@ export async function topPostsBySource(kind: string, days = 7, limit = 10): Prom
     })
     .from(visitDaily)
     .innerJoin(posts, eq(posts.id, visitDaily.postId))
-    .where(and(eq(visitDaily.referrerKind, kind), dayWindow(days)))
+    .where(and(eq(visitDaily.referrerKind, kind), await dayWindow(days)))
     .groupBy(visitDaily.postId, posts.title)
     .orderBy(sql`coalesce(sum(${visitDaily.views}), 0) desc`, visitDaily.postId)
     .limit(take);
   return rows.map((r) => ({ kind, postId: r.postId, title: r.title, views: Number(r.views) }));
 }
 
+/**
+ * Delete raw visitor ledger rows older than 7 days. The rollup only reads a
+ * 3-day window, and visit_daily stores the historical aggregate, so anything
+ * past 7 days is dead weight: a site with 10k unique visitors × 100 posts
+ * accumulates 1M rows that nothing reads. The first-visit dedup for old
+ * posts is lost, so a returning visitor counts again in the CURRENT day's
+ * rollup — the same trade every analytics system makes when it ages out raw
+ * events. */
+export async function pruneVisitorLedger(): Promise<void> {
+  try {
+    await db.execute(sql`delete from ${postVisitors} where "created_at" < now() - interval '7 days'`);
+  } catch (e) {
+    log.warn("[visits] visitor ledger prune failed:", e);
+  }
+}

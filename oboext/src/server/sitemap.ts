@@ -61,6 +61,11 @@ export type SitemapPayload = {
   pages: PageItem[];
   categories: CategoryItem[];
   tags: TagItem[];
+  /** R532: the site's timezone - the calendar every lastmod is labelled in.
+   *  A plugin that rewrites lastmod must use THIS timezone, not UTC: the core
+   *  already resolved it from the settings row, so exposing it here keeps the
+   *  calendar identical by construction and saves the plugin a settings read. */
+  tz: string;
 };
 
 export type SitemapDocument = {
@@ -105,16 +110,43 @@ function esc(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function day(value?: Date | string | null): string | undefined {
-  if (!value) return undefined;
-  const d = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(d.getTime()) ? undefined : d.toISOString().slice(0, 10);
+// lastmod is a CALENDAR day, so it must be the day the site shows: an entry
+// published 20:00 UTC belongs to the NEXT day in Asia/Shanghai, and
+// toISOString() silently labelled it with the previous one. The formatter is
+// memoized per zone (Intl is expensive to build).
+const dayFmt = new Map<string, Intl.DateTimeFormat>();
+function dayFormatter(tz: string): Intl.DateTimeFormat {
+  let f = dayFmt.get(tz);
+  if (!f) {
+    try {
+      f = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
+    } catch {
+      f = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" });
+    }
+    dayFmt.set(tz, f);
+  }
+  return f;
 }
 
-function latestDay(items: { updatedAt?: Date | null }[]): string | undefined {
+/**
+ * The CALENDAR DAY an instant falls on, in the given timezone.
+ *
+ * Exported because a plugin that rewrites lastmod must use the SAME calendar
+ * as the core: a UTC-based day() labels an entry published at 20:00 UTC with
+ * the previous day, while the site (Asia/Shanghai by default) already shows
+ * the next one. A plugin that overwrites lastmod with a UTC day silently
+ * moves every late-evening post one day into the past.
+ */
+export function day(value?: Date | string | null, tz = "Asia/Shanghai"): string | undefined {
+  if (!value) return undefined;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? undefined : dayFormatter(tz).format(d);
+}
+
+function latestDay(items: { updatedAt?: Date | null }[], tz = "Asia/Shanghai"): string | undefined {
   let best: string | undefined;
   for (const it of items) {
-    const d = day(it.updatedAt);
+    const d = day(it.updatedAt, tz);
     if (d && (!best || d > best)) best = d;
   }
   return best;
@@ -218,6 +250,8 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
   // and a served page can never be missing from the map. Page counts use
   // counts()/tax counts (published + visible), matching the loaders' totals.
   const blogSize = blogListSize(settings.postsPerPage);
+  // Every lastmod below is a site-timezone calendar day (see day()).
+  const tz = String((settings as { timezone?: unknown }).timezone || "Asia/Shanghai");
   const catSize = 12; // dialects.ts BASE category page size
   const tagSize = 12; // dialects.ts BASE tag page size
   const pushPages = (
@@ -233,7 +267,7 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
   };
 
   const blogIndex = blogIndexUrlFor(cfg);
-  const fresh = latestDay(posts.items);
+  const fresh = latestDay(posts.items, tz);
   const entries: SitemapEntry[] = [
 
     { loc: `${base}/`, lastmod: fresh, changefreq: "daily", priority: "1.0" },
@@ -267,7 +301,7 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
   if (pageIndex) {
     entries.push({
       loc: `${base}${pageIndex}`,
-      lastmod: latestDay(pages.items),
+      lastmod: latestDay(pages.items, tz),
       changefreq: "weekly",
       priority: "0.6",
     });
@@ -278,7 +312,7 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
       : undefined;
     entries.push({
       loc: `${base}${p.url}`,
-      lastmod: day(p.updatedAt ?? p.publishedAt),
+      lastmod: day(p.updatedAt ?? p.publishedAt, tz),
       changefreq: "weekly",
       priority: "0.8",
       images,
@@ -308,7 +342,7 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
       // cover describes the shared content and the zh entry owns it).
       entries.push({
         loc: enLoc,
-        lastmod: day(p.updatedAt ?? p.publishedAt),
+        lastmod: day(p.updatedAt ?? p.publishedAt, tz),
         changefreq: "weekly",
         priority: "0.8",
         alternates: cluster,
@@ -326,12 +360,29 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
   const tailEn = restPosts.filter((p) => p.locale === "en" && p.translationOf != null);
   if (tailEn.length) {
     const ids = [...new Set(tailEn.map((p) => Number(p.translationOf)))];
-    const rows = await rawQuery<{ id: number; slug: string }>(
-      `select id, slug from posts where id = any(string_to_array($1, ',')::int[])`,
+    const rows = await rawQuery<{
+      id: number;
+      slug: string;
+      pinyin_slug: string | null;
+      initial_slug: string | null;
+      published_at: string | Date | null;
+      created_at: string | Date | null;
+    }>(
+      `select id, slug, pinyin_slug, initial_slug, published_at, created_at from posts where id = any(string_to_array($1, ',')::int[])`,
       [ids.join(",")],
     );
     const urlById = new Map(
-      rows.map((r) => [Number(r.id), `${base}${postUrlFor(cfg, { slug: r.slug })}`]),
+      rows.map((r) => [
+        Number(r.id),
+        `${base}${postUrlFor(cfg, {
+          id: Number(r.id),
+          slug: r.slug,
+          pinyinSlug: r.pinyin_slug,
+          initialSlug: r.initial_slug,
+          publishedAt: r.published_at,
+          createdAt: r.created_at,
+        })}`,
+      ]),
     );
     for (const p of tailEn) {
       const enLoc = `${base}${p.url}`;
@@ -356,18 +407,42 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
     const images = p.featuredImage
       ? [p.featuredImage.startsWith("http") ? p.featuredImage : `${base}${p.featuredImage}`]
       : undefined;
+    // 0046: an en page is its own document at /en/... — the bare URL serves
+    // the zh tree and 404s for it, so the locale rides the loc. A paired en
+    // page additionally carries the hreflang cluster (its zh original's
+    // existing entry gains the same one below).
+    const loc = p.locale === "en" ? `${base}/en${p.url}` : `${base}${p.url}`;
     entries.push({
-      loc: `${base}${p.url}`,
-      lastmod: day(p.updatedAt ?? p.publishedAt),
+      loc,
+      lastmod: day(p.updatedAt ?? p.publishedAt, tz),
       changefreq: "monthly",
       priority: "0.7",
       ...(images ? { images } : {}),
     });
   }
+  {
+    const byId = new Map([...pages.items, ...restPages].map((p) => [p.id, p]));
+    for (const p of [...pages.items, ...restPages]) {
+      if (p.locale !== "en" || p.translationOf == null) continue;
+      const original = byId.get(p.translationOf);
+      if (!original) continue;
+      const enLoc = `${base}/en${p.url}`;
+      const zhLoc = `${base}${original.url}`;
+      const cluster = [
+        { hreflang: "en", href: enLoc },
+        { hreflang: "zh-CN", href: zhLoc },
+        { hreflang: "x-default", href: zhLoc },
+      ];
+      const enEntry = entries.find((e) => e.loc === enLoc);
+      if (enEntry) enEntry.alternates = cluster;
+      const zhEntry = entries.find((e) => e.loc === zhLoc);
+      if (zhEntry) zhEntry.alternates = cluster;
+    }
+  }
   for (const c of categories) {
     entries.push({
       loc: `${base}${c.url}`,
-      lastmod: day((c as { createdAt?: Date | null }).createdAt),
+      lastmod: day((c as { createdAt?: Date | null }).createdAt, tz),
       changefreq: "weekly",
       priority: "0.6",
     });
@@ -376,7 +451,7 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
   for (const t of tags) {
     entries.push({
       loc: `${base}${t.url}`,
-      lastmod: day((t as { createdAt?: Date | null }).createdAt),
+      lastmod: day((t as { createdAt?: Date | null }).createdAt, tz),
       changefreq: "weekly",
       priority: "0.4",
     });
@@ -393,7 +468,7 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
   for (const p of posts.items) {
     const aid = (p as { author?: { id?: number } | null }).author?.id;
     if (aid == null) continue;
-    const d = day(p.updatedAt ?? p.publishedAt);
+    const d = day(p.updatedAt ?? p.publishedAt, tz);
     const cur = authorLatest.get(aid);
     if (d && (!cur || d > cur)) authorLatest.set(aid, d);
   }
@@ -418,6 +493,7 @@ async function buildEntriesRaw(base: string): Promise<SitemapPayload> {
   return {
     entries,
     base,
+    tz,
     posts: posts.items,
     pages: pages.items,
     categories,
@@ -611,6 +687,8 @@ export async function buildRobotsTxt(origin: string): Promise<string> {
       "Disallow: /search",
       "",
       `Sitemap: ${origin}/sitemap.xml`,
+      // llmstxt.org: point model crawlers at the same index the site serves.
+      `LLM-Friendly: ${origin}/llms.txt`,
     ],
     base: origin,
   } satisfies RobotsPayload);

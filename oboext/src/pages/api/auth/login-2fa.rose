@@ -4,6 +4,7 @@
   import {
     verifyChallengeTicket,
     assertLoginAllowed,
+    clearLoginFailures,
     recordLoginEvent,
     LOGIN_EVENTS,
     clientIp,
@@ -14,6 +15,7 @@
   import { applyAsyncFilters, doAction, HOOKS } from "@server/hooks";
   import { getAdminSecurity, isEntryReferer } from "@server/security";
   import { makeT, headerLocale } from "@server/i18n";
+  import { verifyTwoFaCode } from "@server/twofa";
 
   export async function POST(request) {
     const t = makeT(headerLocale(request));
@@ -47,10 +49,24 @@
         throw e;
       }
 
+      // Core check first: the account has 2FA on, so the code (a 6-digit TOTP
+      // or a recovery code) must verify against the stored secret. Plugins can
+      // still hook authChallengeVerify for extra factors; with no consumer the
+      // hook used to default the verdict to false, so enrollment was pointless.
+      if (!(await verifyTwoFaCode(user.id, code))) {
+        await recordLoginEvent({
+          eventType: LOGIN_EVENTS.FAIL,
+          userId: user.id,
+          account: user.name,
+          ip: clientIp(request),
+          userAgent: clientUa(request),
+        });
+        return jsonFail(t("api.twofa_wrong"), 401);
+      }
       const verdict = await applyAsyncFilters(HOOKS.authChallengeVerify, {
         user,
         code,
-        ok: false,
+        ok: true,
       });
       if (!verdict.ok) {
         await recordLoginEvent({
@@ -63,13 +79,16 @@
         return jsonFail(t("api.twofa_wrong"), 401);
       }
 
-      await recordLoginEvent({
-        eventType: LOGIN_EVENTS.SUCCESS,
-        userId: user.id,
-        account: user.name,
-        ip: clientIp(request),
-        userAgent: clientUa(request),
-      });
+      await Promise.all([
+        clearLoginFailures(user.name),
+        recordLoginEvent({
+          eventType: LOGIN_EVENTS.SUCCESS,
+          userId: user.id,
+          account: user.name,
+          ip: clientIp(request),
+          userAgent: clientUa(request),
+        }),
+      ]);
       doAction(HOOKS.userLoggedIn, { user });
       return withCookies(
         new Response(JSON.stringify({ user }), {

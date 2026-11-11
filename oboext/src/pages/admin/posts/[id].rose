@@ -1,5 +1,9 @@
 <script>
   // Post editor (new + existing).
+  // The island script below drives browser-only features (preview link,
+  // newsletter send, autodraft restore, Cmd/Ctrl+S) that the compiler's
+  // zero-JS predicate cannot see, so the client bundle is forced back in.
+  export const csr = true;
   let id = $state("");
   function copy() {
     return (d() && d().s) || {};
@@ -359,6 +363,18 @@
       if (typeof window.admToast === "function") window.admToast(err instanceof Error ? err.message : copy().generateFailed, "err");
     }
   });
+
+  // Keyboard saves: Cmd/Ctrl+S saves with the status the form already has,
+  // Cmd/Ctrl+Shift+S publishes. Rides the buttons as submitters so admin.js
+  // reads data-save-as off them — the exact same path a mouse click takes.
+  if (typeof document !== "undefined") document.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey) || (e.key !== "s" && e.key !== "S")) return;
+    const form = document.querySelector("form[data-adm-editor]");
+    if (!form) return;
+    e.preventDefault();
+    const btn = form.querySelector(e.shiftKey ? '[data-save-as="published"]' : '[data-save-as=""]');
+    if (btn) btn.click();
+  });
 </script>
 
 <head>
@@ -447,20 +463,20 @@
             <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().status}</span>
             <select class="adm-select" name="status">
               <option value="draft">{copy().statusDraft}</option>
-              <option value="published">已{copy().publish}</option>
+              <option value="published">{copy().statusPublished}</option>
               <option value="archived">{copy().statusArchived}</option>
             </select>
           </div>
           <div class="adm-field" style="margin-bottom:12px">
-            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().publish}时间</span>
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().publishedAt}</span>
             <input class="adm-input" type="datetime-local" name="publishedAt" value={localTime()}>
-            <div class="adm-hint" style="margin-top:4px">草稿设为未来时间即定时{copy().publish}，到点自动上线；留空按保存时间。</div>
+            <div class="adm-hint" style="margin-top:4px">{copy().scheduleHint}</div>
           </div>
           <div class="adm-field" style="margin-bottom:12px">
             <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().comments}</span>
             <select class="adm-select" name="commentStatus">
-              <option value="open">开放{copy().comments}</option>
-              <option value="closed">关闭{copy().comments}</option>
+              <option value="open">{copy().commentsOpen}</option>
+              <option value="closed">{copy().commentsClosed}</option>
             </select>
           </div>
           {#if hasAuthors()}
@@ -476,7 +492,11 @@
           {/if}
           <div class="adm-field" style="margin-bottom:0">
             <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().featuredImageUrl}</span>
-            <input class="adm-input" name="featuredImage" placeholder="https://…" value={val('featuredImage')}>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input class="adm-input" name="featuredImage" placeholder="https://…" value={val('featuredImage')} style="flex:1">
+              <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-media-pick>{copy().pickMedia}</button>
+            </div>
+            <img data-featured-preview alt="" style="display:none;margin-top:8px;max-height:120px;border-radius:8px">
           </div>
 
           <div class="adm-field" style="margin-top:12px">
@@ -505,7 +525,7 @@
             <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().cardColor}</span>
             <div style="display:flex;flex-wrap:wrap;gap:6px" data-ctheme-dots>
               {#each swatches() as c}
-              <button type="button" class="adm-ctheme-dot" style={"background:" + c} data-ctheme-dot={c} title={c} aria-label={"选择 " + c}></button>
+              <button type="button" class="adm-ctheme-dot" style={"background:" + c} data-ctheme-dot={c} title={c} aria-label={copy().colorPick + " " + c}></button>
               {/each}
             </div>
             <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
@@ -523,7 +543,7 @@
           <div class="adm-switch" style="margin-top:10px">
             <div>
               <div class="t">{copy().pinned}</div>
-              <div class="d">固定在{copy().backToPosts}顶部</div>
+              <div class="d">{copy().pinnedDesc}</div>
             </div>
             <input type="checkbox" name="pinned" data-bool>
           </div>
@@ -538,7 +558,7 @@
             <label><input type="checkbox" name="categoryIds[]" value={c.id}> {c.name}</label>
             {/each}
           </div>
-          <div class="adm-hint" style="margin-top:8px">没有合适的{copy().categories}？先去「{copy().categories}」页面创建。</div>
+          <div class="adm-hint" style="margin-top:8px">{copy().noCatHint}</div>
         </div>
       </div>
 
@@ -578,7 +598,7 @@
             {/if}
           </div>
           <div class="adm-hint" style="margin-top:8px">
-            英文译文可填写它翻译的中文文章 ID；中文原文留空。两篇将互为翻译对（{copy().publish}语义在后续版本接入 SEO 输出）。
+            {copy().translationHint}
           </div>
         </div>
       </div>
@@ -624,7 +644,7 @@
   <div class="adm-card-hd"><strong>{copy().sources30d}</strong><span class="adm-hint" style="margin-left:auto">{copy().sourcesHint}</span></div>
   <div class="adm-card-bd">
     {#each postSources() as r}
-    <div class="adm-hint" style="margin-bottom:4px">{r.label}：{r.views} 访次 / {r.uniques} 访客</div>
+    <div class="adm-hint" style="margin-bottom:4px">{r.label}：{r.views} {copy().sourcesViews} / {r.uniques} {copy().sourcesVisitors}</div>
     {/each}
   </div>
 </div>

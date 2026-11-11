@@ -104,7 +104,7 @@
             <span>{meta(t, "author")}</span>
             {/if}
             {#if (() => meta(t, "updatedAt") !== "")()}
-            <span>更新于 {meta(t, "updatedAt")}</span>
+            <span>{copy().updatedPrefix} {meta(t, "updatedAt")}</span>
             {/if}
           </div>
           {#if (() => t.active)()}

@@ -47,7 +47,7 @@
   <div style="display:flex;align-items:center;gap:8px;">
     <span class="adm-ic" style="--i:url(/public/icons/message-square.svg);width:20px;height:20px;color:#818cf8;"></span>
     <strong style="font-size:16px">{s("title")}</strong>
-    <span class="adm-hint" style="margin:0;">共 {total()} 条</span>
+    <span class="adm-hint" style="margin:0;">{s("totalLabel")} {total()} {s("countUnit")}</span>
   </div>
 </div>
 

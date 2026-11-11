@@ -18,13 +18,13 @@
       ? "background:rgba(22,163,74,.14);color:#4ade80;"
       : "background:rgba(120,120,130,.18);color:#d4d4d8;";
   }
-  function statusText(p) { return p.enabled ? "已启用" : "已禁用"; }
+  function statusText(p) { return p.enabled ? copy().enabled : copy().disabled; }
   function versionBadge(p) { return p.version ? "v" + p.version : "—"; }
   function authorText(p) { return p.author ? p.author : "—"; }
   function toggleIcon(p) {
     return p.enabled ? "/public/icons/circle-x.svg" : "/public/icons/circle-check.svg";
   }
-  function toggleText(p) { return p.enabled ? "禁用" : "启用"; }
+  function toggleText(p) { return p.enabled ? copy().disable : copy().enable; }
   // The toggle button used to be a plain adm-iconbtn, so an enabled plugin's green "已启用" badge sat next to a colourless "禁用" button and the row //.
   function toggleClass(p) { return p.enabled ? "plg-toggle is-on" : "plg-toggle is-off"; }
   function iconBg(p) { return p.enabled ? "rgba(79,70,229,.15)" : "var(--adm-panel-2)"; }
@@ -59,7 +59,7 @@
   <div style="display:flex;align-items:center;gap:8px;">
     <span class="adm-ic" style="--i:url(/public/icons/plug.svg);width:20px;height:20px;color:#818cf8;"></span>
     <strong style="font-size:16px">{copy().title}</strong>
-    <span class="adm-hint" style="margin:0">{list().length} 个已安装</span>
+    <span class="adm-hint" style="margin:0">{list().length} {copy().installedUnit}</span>
   </div>
   <span style="flex:1"></span>
   <label class="adm-btn adm-btn-ghost adm-btn-sm" style="cursor:pointer">
@@ -85,7 +85,7 @@
       </div>
       {#if p.description}<p style="margin:4px 0 0;font-size:13px;color:var(--adm-muted);line-height:1.5;">{p.description}</p>{/if}
       <div style="margin-top:6px;display:flex;align-items:center;gap:12px;font-size:11px;color:var(--adm-faint);flex-wrap:wrap;">
-        <span>作者：{authorText(p)}</span>
+        <span>{copy().authorLabel}{authorText(p)}</span>
         {#if homepageUrl(p) !== ""}
         <a href={homepageUrl(p)} target="_blank" rel="noreferrer noopener" style="color:inherit;display:inline-flex;align-items:center;gap:4px;">{copy().home}<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/external-link.svg)"></span></a>
         {/if}
@@ -94,13 +94,13 @@
     </div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
       {#if hasSettings(p)}
-      <button class="adm-iconbtn" data-plg-settings data-slug={p.slug} title="插件{copy().settings}">
+      <button class="adm-iconbtn" data-plg-settings data-slug={p.slug} title="{copy().pluginWord}{copy().settings}">
         <span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/settings-2.svg)"></span>
         {copy().settings}
       </button>
       {/if}
       {#if p.hasAdmin && p.enabled}
-      <a class="adm-iconbtn" href={"/admin/plugins/" + p.slug} title="管理{copy().panel}">
+      <a class="adm-iconbtn" href={"/admin/plugins/" + p.slug} title="{copy().manage}{copy().panel}">
         <span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/external-link.svg)"></span>
         {copy().panel}
       </a>
@@ -125,7 +125,7 @@
   <div class="adm-modal-box" style="max-width:min(94vw,920px);">
     <div class="adm-modal-hd">
       <div>
-        <h2 style="margin:0;font-size:15px;" data-plg-title>插件{copy().settings}</h2>
+        <h2 style="margin:0;font-size:15px;" data-plg-title>{copy().pluginWord}{copy().settings}</h2>
         <p class="adm-hint" style="margin:3px 0 0;" data-plg-sub></p>
       </div>
       <button type="button" class="adm-modal-x" data-plg-close aria-label="{copy().close}">{@html ic("x")}</button>
@@ -143,7 +143,7 @@
     <div class="adm-modal-ft">
       <span class="adm-thp-msg" data-plg-msg style="margin-right:auto;"></span>
       <button type="button" class="adm-btn adm-btn-ghost" data-plg-close>{copy().cancel}</button>
-      <button type="button" class="adm-btn" data-plg-save>保存{copy().settings}</button>
+      <button type="button" class="adm-btn" data-plg-save>{copy().saveVerb}{copy().settings}</button>
     </div>
   </div>
 </div>

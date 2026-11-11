@@ -12,6 +12,6 @@
 
 <div class="anf-wrap">
   <p class="anf-code">404</p>
-  <p class="anf-msg">页面不存在或已被移动。</p>
-  <a class="anf-home" href="/">返回首页</a>
+  <p class="anf-msg">页面不存在或已被移动。 / Page not found or moved.</p>
+  <a class="anf-home" href="/">返回首页 / Back to home</a>
 </div>

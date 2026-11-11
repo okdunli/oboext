@@ -20,7 +20,7 @@
   <div style="display:flex;align-items:center;gap:8px;">
     <span class="adm-ic" style="--i:url(/public/icons/shapes.svg);width:20px;height:20px;color:#818cf8;"></span>
     <strong style="font-size:16px">{copy().title}</strong>
-    <span class="adm-hint" style="margin:0;">共 {count()} 个</span>
+    <span class="adm-hint" style="margin:0;">{copy().totalLabel} {count()} {copy().countUnit}</span>
   </div>
   <span style="flex:1"></span>
   <a class="adm-iconbtn" href="https://lucide.dev/icons/" target="_blank" rel="noopener noreferrer" title={copy().browse}>{copy().source}</a>

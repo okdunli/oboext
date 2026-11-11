@@ -1,0 +1,34 @@
+<script>
+  // GET /api/comments/unsubscribe?email=...&token=... One-click opt-out of
+  // reply-notification mail. The token is an HMAC over the address with the
+  // session secret, so a link in a mail is proof the reader owns (or forged
+  // from a mail they received); a query-only GET cannot unsubscribe anyone
+  // else. Idempotent: the answer is the same page whether the flag flipped
+  // now or was already set - no address-enumeration oracle.
+  import { setOption, getOption } from "@server/options";
+  import { commentUnsubToken, unsubKey } from "@server/comment-notify";
+  import { makeT, apiLocale } from "@server/i18n";
+
+  export async function GET(request) {
+    const t = makeT(apiLocale(request));
+    const u = new URL(request.url);
+    const email = String(u.searchParams.get("email") || "").trim().toLowerCase();
+    const token = String(u.searchParams.get("token") || "").trim();
+    const ok =
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) &&
+      token.length === 32 &&
+      token === commentUnsubToken(email);
+    if (!ok) return new Response(t("notify.unsub_bad"), { status: 400, headers: { "content-type": "text/plain; charset=utf-8" } });
+    const key = unsubKey(email);
+    const already = (await getOption(key, false)) === true;
+    await setOption(key, true);
+    const body = t(already ? "notify.unsub_already" : "notify.unsub_done", { email });
+    return new Response(
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${t("notify.unsub_title")}</title>` +
+      `<style>body{display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;font-family:system-ui,sans-serif;background:#18181b;color:#f4f4f5}` +
+      `div{max-width:32rem;padding:2rem;text-align:center}a{color:#818cf8}</style></head>` +
+      `<body><div><h1>${t("notify.unsub_title")}</h1><p>${body}</p></div></body></html>`,
+      { status: 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } },
+    );
+  }
+</script>

@@ -132,7 +132,7 @@
   </div>
   <span style="flex:1"></span>
   <form class="adm-search" action="/admin/posts">
-    <input class="adm-input" name="q" placeholder={copy().searchPlaceholder} value={__rvQs().get("q") || ""}>
+    <input class="adm-input" name="q" aria-label={copy().searchPlaceholder} placeholder={copy().searchPlaceholder} value={__rvQs().get("q") || ""}>
   </form>
   <a class="adm-btn" href="/admin/posts/new"><span class="adm-ic" style="--i:url(/public/icons/plus.svg)"></span>{copy().write}</a>
 </div>
@@ -166,6 +166,7 @@
           <a class="title" href={"/admin/posts/" + p.id}>{p.title}</a>
           <div class="sub adm-post-meta">
             <a class="adm-post-slug" href={"/admin/posts/" + p.id}>/{p.slug}</a>
+            {#if p.pair}<a href={"/admin/posts/" + p.pair.id} style="font-size:12px">↔ {p.pair.slug}</a>{/if}
             {@html catChipHtml(p.categories)}
             {@html tagChipHtml(p.tags)}
           </div>

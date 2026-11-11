@@ -88,7 +88,7 @@
     <div class="adm-wg-theme">
       <span class="adm-wg-theme-label">{copy().configTheme}</span>
       <div class="adm-wg-select-wrap">
-        <select class="adm-select" data-wg-theme>
+        <select class="adm-select" data-wg-theme aria-label={copy().configTheme}>
           {#each themes() as t}
           <option value={t.slug}>{t.name}</option>
           {/each}
@@ -108,7 +108,7 @@
       <h3 class="adm-wg-area-title"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/layout-grid.svg)"></span> {x.label}
         <span class="adm-wg-key">{x.key}</span>
       </h3>
-      <span class="adm-wg-count">{x.count} 项</span>
+      <span class="adm-wg-count">{x.count}{x.count === 1 ? copy().countSuffixOne : copy().countSuffix}</span>
     </div>
     <p class="adm-wg-desc">{x.description}</p>
     <div class="adm-wg-rows">

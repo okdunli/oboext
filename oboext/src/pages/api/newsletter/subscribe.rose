@@ -11,6 +11,12 @@
   import { apiGate, jsonFail, readBody } from "@server/admin";
   import { subscribe } from "@server/newsletter";
   import { makeT, headerLocale } from "@server/i18n";
+  import { clientIp } from "@server/auth";
+  // IP rate cap: at most 10 subscribes per IP per hour. Per-process in-memory
+  // counter (same trust level as the login throttle's per-worker cap) — a bot
+  // hitting different workers is still limited by each worker's cap.
+  const SUBSCRIBE_IP_CAP = 10;
+  const SUB_WINDOW = 3600_000;
 
   export async function POST(request) {
     const t = makeT(headerLocale(request));
@@ -21,7 +27,18 @@
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || email.trim().length > 254) {
         return jsonFail(t("api.email_invalid"), 422);
       }
-      return subscribe(email, body?.locale);
+      if (!globalThis.__subRate) globalThis.__subRate = new Map();
+      const rateMap = globalThis.__subRate;
+      const ip = clientIp(request) || "unknown";
+      const now = Date.now();
+      const hits = (rateMap.get(ip) || []).filter((t) => now - t < SUB_WINDOW);
+      if (hits.length >= SUBSCRIBE_IP_CAP) {
+        return jsonFail(t("api.send_rate_limited"), 429);
+      }
+      hits.push(now);
+      rateMap.set(ip, hits);
+      await subscribe(email, body?.locale);
+      return { ok: true };
     }, t);
   }
 </script>

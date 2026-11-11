@@ -1,0 +1,22 @@
+<script>
+  // POST /api/users/:id/twofa — clear a user's second factor. The account owner
+  // needs a current code; an operator needs this route when the phone and the
+  // recovery codes are both gone.
+  import { apiGate, requireCap } from "@server/admin";
+  import { clearTwoFa } from "@server/twofa";
+  import { ServiceError } from "@server/errors";
+
+  function pathId(request) {
+    return Number(new URL(request.url).pathname.split("/").filter(Boolean)[2]);
+  }
+
+  export async function POST(request) {
+    return apiGate(async () => {
+      requireCap(getContext().user, "users:manage");
+      const id = pathId(request);
+      if (!Number.isInteger(id) || id <= 0) throw new ServiceError("用户不存在", 404);
+      await clearTwoFa(id);
+      return { id };
+    });
+  }
+</script>

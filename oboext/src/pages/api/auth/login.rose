@@ -4,6 +4,7 @@
   import {
     verifyCredentials,
     assertLoginAllowed,
+    clearLoginFailures,
     recordLoginEvent,
     LOGIN_EVENTS,
     signChallengeTicket,
@@ -62,12 +63,23 @@
         return jsonFail(t("api.login_wrong"), 401);
       }
 
-      const challenged = await applyAsyncFilters(HOOKS.authChallenge, {
-        user,
-        challenge: null,
-      });
+      // Core second factor: an account with 2FA enabled must present a TOTP
+      // (or a recovery code) before a session is minted. The plugin hook below
+      // can add further challenges; with no consumer it never fired, so the
+      // enrollment UI shipped last round had no effect on sign-in.
+      const { getTwoFaState } = await import("@server/twofa");
+      const twoFa = await getTwoFaState(user.id);
+      const challenged = twoFa?.enabled
+        ? { challenge: { type: "totp" as const } }
+        : await applyAsyncFilters(HOOKS.authChallenge, {
+            user,
+            challenge: null,
+          });
       if (challenged.challenge) {
         const ticket = await signChallengeTicket(user);
+        // The 2FA step is its own throttle boundary (fails book under the
+        // resolved user's name), so the step transition is worth a row too.
+        await recordLoginEvent({ eventType: LOGIN_EVENTS.LOGIN_CHALLENGE, userId: user.id, account, ip, userAgent: ua });
         return {
           twoFactorRequired: true,
           challengeType: challenged.challenge.type,
@@ -75,13 +87,16 @@
         };
       }
 
-      await recordLoginEvent({
-        eventType: LOGIN_EVENTS.SUCCESS,
-        userId: user.id,
-        account,
-        ip,
-        userAgent: ua,
-      });
+      await Promise.all([
+        clearLoginFailures(account),
+        recordLoginEvent({
+          eventType: LOGIN_EVENTS.SUCCESS,
+          userId: user.id,
+          account,
+          ip,
+          userAgent: ua,
+        }),
+      ]);
       doAction(HOOKS.userLoggedIn, { user });
       return withCookies(
         new Response(JSON.stringify({ user }), {

@@ -1,6 +1,6 @@
 <script>
   // Isomorphic data endpoint.
-  import { dispatch, documents, searchRedirect, warmEntityUrls } from "@server/loaders";
+  import { dispatch, documents, hasLoader, searchRedirect, warmEntityUrls } from "@server/loaders";
   import { buildSitemapDocument } from "@server/sitemap";
   import { themeCssContent, serveThemeAsset } from "@server/theme-chrome";
   import { servePluginAsset } from "@server/plugin-assets";
@@ -12,6 +12,7 @@
   import { syncPlugins, ensurePluginsLoaded } from "@server/plugins";
   import { dispatchPluginApi } from "@server/plugin-gateway";
   import { createLogger } from "@server/logger";
+  import { gzipResponse } from "@server/http-compress";
   const log = createLogger("data-api");
 
   // The fragment a loader answers depends on the page it was requested for -
@@ -47,7 +48,7 @@
       dispatch: (slug, path, request) => dispatchPluginApi(slug, path, request),
     },
     uploads: {
-      serve: (pathname, method, acceptEncoding) => serveUpload(pathname, method, acceptEncoding),
+      serve: (pathname, method, acceptEncoding, range) => serveUpload(pathname, method, acceptEncoding, range),
     },
     // Safety net for the app's own compiled assets, linked as /public/** (admin.css, admin.js, comments.js, icons/**, theme-*.js, vendor/**).
     publicStatic: {
@@ -68,9 +69,13 @@
         return getAdminSecurity();
       },
     },
-    searchRedirect: async (q) => {
+    // The middleware asks for the single-hit search redirect with the
+    // reader's locale: without it an /en reader could be jumped to a
+    // Chinese post (the middleware would then prefix it into /en/..., a URL
+    // that post does not live at).
+    searchRedirect: async (q, locale) => {
       await ready();
-      return searchRedirect(q);
+      return searchRedirect(q, locale);
     },
     // Boot warmup's dynamic URLs (latest post, a category, a tag page): the prod server's warm loop renders these through the normal handler.
     // The prod server calls this inside ready.then(), which is the SERVER's
@@ -119,6 +124,7 @@
       headers: {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
       },
     });
 
@@ -139,6 +145,9 @@
     if (key.indexOf("admin.") === 0 && !(ctx as Record<string, unknown>).user) {
       return jsonOut({ error: "unauthorized" }, 401);
     }
+    if (!hasLoader(key)) {
+      return jsonOut({ error: "unknown_loader" }, 404);
+    }
     let data;
     try {
       data = await dispatch(key, payload, ctx);
@@ -149,7 +158,9 @@
     // R386 sliding session renewal: the admin poller hits this endpoint
     // continuously, so it is the natural re-issue surface — a token past its
     // half-life gets a fresh cookie on this very response (no extra request).
-    const out = jsonOut(data);
+    // A post payload is ~34 KB of JSON; the client fetches it on every
+    // navigation. Small answers (and every error shape) stay plain.
+    const out = await gzipResponse(request, jsonOut(data), 4096);
     try {
       const renewed = await sessionRenewalCookie(request);
       if (renewed) out.headers.append("set-cookie", renewed);

@@ -23,7 +23,7 @@
         : d().s.badge_pending;
   }
   function localeLabel(l) {
-    return l === "en" ? "EN" : "中文";
+    return l === "en" ? "EN" : String((d().s || {}).localeZh || "中文");
   }
   function fmt(iso) {
     if (!iso) return "—";
@@ -176,7 +176,7 @@
 <div class="adm-toolbar">
   <span class="adm-hint">{d().s.hint_mask}</span>
   <span style="flex:1"></span>
-  <span class="adm-hint">共 {d().total} 条</span>
+  <span class="adm-hint">{d().s.totalLabel} {d().total} {d().s.countUnit}</span>
 </div>
 
 <div class="adm-card adm-table-wrap">
@@ -207,7 +207,7 @@
 
 {#each pager() as _}
 <div class="adm-pager">
-  第 {d().page} 页
+  {d().s.pagePrefix}{d().page}{d().s.pageSuffix}
   <span style="flex:1"></span>
   {#if hasPrev()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(d().page - 1)}>{d().s.pagerPrev}</a>{/if}
   {#if hasNext()}<a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(d().page + 1)}>{d().s.pagerNext}</a>{/if}

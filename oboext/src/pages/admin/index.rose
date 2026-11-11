@@ -198,13 +198,13 @@
 </head>
 
 <div class="adm-grid adm-stats">
-  <a class="adm-card adm-stat" href="/admin/posts"><div class="k">{@html ic("file-text")} 文章</div><div class="v">{counts().posts}</div></a>
-  <a class="adm-card adm-stat" href="/admin/pages"><div class="k">{@html ic("file")} 页面</div><div class="v">{counts().pages}</div></a>
-  <a class="adm-card adm-stat" href="/admin/comments"><div class="k">{@html ic("message-square")} 评论</div><div class="v">{counts().comments}</div>{#if counts().commentsPending > 0}<div class="sub">{counts().commentsPending} 条待审</div>{/if}</a>
-  <a class="adm-card adm-stat" href="/admin/media"><div class="k">{@html ic("image")} 媒体</div><div class="v">{counts().media}</div></a>
-  <a class="adm-card adm-stat" href="/admin/categories"><div class="k">{@html ic("folder")} 分类</div><div class="v">{counts().categories}</div></a>
-  <a class="adm-card adm-stat" href="/admin/tags"><div class="k">{@html ic("tags")} 标签</div><div class="v">{counts().tags}</div></a>
-  <a class="adm-card adm-stat" href="/admin/users"><div class="k">{@html ic("users")} 用户</div><div class="v">{counts().users}</div></a>
+  <a class="adm-card adm-stat" href="/admin/posts"><div class="k">{@html ic("file-text")} {copy().posts}</div><div class="v">{counts().posts}</div></a>
+  <a class="adm-card adm-stat" href="/admin/pages"><div class="k">{@html ic("file")} {copy().pages}</div><div class="v">{counts().pages}</div></a>
+  <a class="adm-card adm-stat" href="/admin/comments"><div class="k">{@html ic("message-square")} {copy().comments}</div><div class="v">{counts().comments}</div>{#if counts().commentsPending > 0}<div class="sub">{counts().commentsPending} {copy().pendingUnit}</div>{/if}</a>
+  <a class="adm-card adm-stat" href="/admin/media"><div class="k">{@html ic("image")} {copy().media}</div><div class="v">{counts().media}</div></a>
+  <a class="adm-card adm-stat" href="/admin/categories"><div class="k">{@html ic("folder")} {copy().categories}</div><div class="v">{counts().categories}</div></a>
+  <a class="adm-card adm-stat" href="/admin/tags"><div class="k">{@html ic("tags")} {copy().tags}</div><div class="v">{counts().tags}</div></a>
+  <a class="adm-card adm-stat" href="/admin/users"><div class="k">{@html ic("users")} {copy().users}</div><div class="v">{counts().users}</div></a>
 </div>
 
 {#if linkedCards().length > 0}
@@ -272,7 +272,7 @@
       </span>
       <svg class="adm-spark" viewBox="0 0 280 48" width="280" height="48" role="img" aria-label={copy().chartPosts} style="height:auto;max-width:100%;">
         {#each trendPostBars() as b}
-        <rect x={b.x} y={b.y} width={b.w} height={b.h} rx="2" fill="var(--adm-accent)"><title>{b.d} 新增文章 {b.v} 篇</title></rect>
+        <rect x={b.x} y={b.y} width={b.w} height={b.h} rx="2" fill="var(--adm-accent)"><title>{b.d} {copy().tipPosts} +{b.v}</title></rect>
         {/each}
       </svg>
     </div>
@@ -282,7 +282,7 @@
       </span>
       <svg class="adm-spark" viewBox="0 0 280 48" width="280" height="48" role="img" aria-label={copy().chartComments} style="height:auto;max-width:100%;">
         {#each trendCommentBars() as b}
-        <rect x={b.x} y={b.y} width={b.w} height={b.h} rx="2" fill="var(--adm-green)"><title>{b.d} 新增评论 {b.v} 条</title></rect>
+        <rect x={b.x} y={b.y} width={b.w} height={b.h} rx="2" fill="var(--adm-green)"><title>{b.d} {copy().tipComments} +{b.v}</title></rect>
         {/each}
       </svg>
     </div>

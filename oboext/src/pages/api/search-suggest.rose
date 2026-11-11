@@ -47,7 +47,12 @@
     const locale = headerLocale(request);
     const url = new URL(request.url);
     const format = url.searchParams.get("format") === "opensearch" ? "opensearch" : "ui";
-    const q = (url.searchParams.get("q") || "").trim().slice(0, MAX_Q);
+    // A NUL (or any C0 control) is not valid in a Postgres text parameter; it
+    // used to reach the scan and surface as a 500 on a public endpoint.
+    const q = (url.searchParams.get("q") || "")
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .trim()
+      .slice(0, MAX_Q);
     // Too short to scan: each shape still answers in its own empty form.
     if (q.length < MIN_Q) {
       return format === "opensearch"
@@ -71,12 +76,15 @@
             // Two or three rows go out of five to one title: over-fetch so the
             // de-dup still fills the popover instead of shortening it.
             limit: 10,
+            // The popover belongs to the reader's language tree: an /en
+            // reader must not see a Chinese post among the suggestions.
+            locale: locale === "en" ? "en" : "zh-CN",
           }),
           // R414: a reader searching "about"/"pricing" wants the PAGE, not a
           // post that mentions it. Pages follow the posts and share the five
           // slots; `total` stays the post count so the search page (posts only)
           // never claims results it cannot show.
-          searchPublishedPages(q, 5),
+          searchPublishedPages(q, 5, locale),
         ]);
         const rows = suggestDedupe(items || []).slice(0, 5);
         const seen = new Set(rows.map((r) => r.url));

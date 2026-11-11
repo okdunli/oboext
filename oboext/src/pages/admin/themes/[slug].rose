@@ -16,7 +16,7 @@
     return p().meta && p().meta.version ? "v" + p().meta.version : "";
   }
   function description() {
-    return (p().meta && p().meta.description) || "在管理后台创建的自定义主题";
+    return (p().meta && p().meta.description) || p().s.customDesc;
   }
   function themeSlug() {
     return p().theme ? p().theme.slug : "";
@@ -24,16 +24,16 @@
 </script>
 
 <head>
-  <title>{p.ts.docTitle}</title>
+  <title>{p().ts.docTitle}</title>
 </head>
 
 <div class="adm-thp" data-th-panel data-th-panel-data={payload()}>
   <div class="adm-thp-head">
     <div>
-      <a class="adm-thp-back" style="display:inline-flex;align-items:center;gap:5px" href="/admin/themes"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-left.svg)"></span>{p.ts.back}</a>
+      <a class="adm-thp-back" style="display:inline-flex;align-items:center;gap:5px" href="/admin/themes"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-left.svg)"></span>{p().ts.back}</a>
       <h1 class="adm-h1">{name()}
         {#if (() => p().isActive)()}
-        <span class="adm-thp-live">{p.ts.enabled}</span>
+        <span class="adm-thp-live">{p().ts.enabled}</span>
         {/if}
       </h1>
       <p class="adm-thp-desc">{description()}</p>
@@ -42,14 +42,14 @@
         · {meta("author")}
         {/if}
         {#if (() => !p().hasManifest)()}
-        · 自定义主题（无 manifest）
+        · {p().s.customBadge}
         {/if}
       </p>
     </div>
     <div class="adm-thp-headbtns">
-      <button type="button" class="adm-btn adm-btn-ghost" data-thp-reset><span class="adm-ic" style="--i:url(/public/icons/rotate-ccw.svg)"></span>{p.ts.reset}</button>
+      <button type="button" class="adm-btn adm-btn-ghost" data-thp-reset><span class="adm-ic" style="--i:url(/public/icons/rotate-ccw.svg)"></span>{p().ts.reset}</button>
       <button type="button" class="adm-btn" data-thp-save>
-        <span data-thp-save-label>{p.ts.save}</span>
+        <span data-thp-save-label>{p().ts.save}</span>
       </button>
     </div>
   </div>
@@ -59,27 +59,27 @@
   <div class="adm-thp-grid">
     <nav class="adm-thp-nav">
       <div class="adm-thp-navgroup" data-thp-nav-group="appearance">
-        <p class="adm-thp-navtitle">{p.ts.appearance}</p>
+        <p class="adm-thp-navtitle">{p().ts.appearance}</p>
         <div class="adm-thp-navlist" data-thp-nav="appearance"></div>
       </div>
       <div class="adm-thp-navgroup" data-thp-nav-group="settings">
-        <p class="adm-thp-navtitle">{p.ts.themeOptions}</p>
+        <p class="adm-thp-navtitle">{p().ts.themeOptions}</p>
         <div class="adm-thp-navlist" data-thp-nav="settings"></div>
       </div>
 
       <div class="adm-thp-areas">
-        <p class="adm-thp-areas-title"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/layout-grid.svg);vertical-align:-2px"></span> {p.ts.widgetAreas}</p>
+        <p class="adm-thp-areas-title"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/layout-grid.svg);vertical-align:-2px"></span> {p().ts.widgetAreas}</p>
         <ul class="adm-thp-area-list" data-thp-areas></ul>
-        <a class="adm-thp-areas-link" style="display:inline-flex;align-items:center;gap:4px" href="/admin/widgets">{p.ts.goWidgets}<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-right.svg)"></span></a>
+        <a class="adm-thp-areas-link" style="display:inline-flex;align-items:center;gap:4px" href="/admin/widgets">{p().ts.goWidgets}<span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/arrow-right.svg)"></span></a>
       </div>
 
       <div class="adm-thp-preview" data-thp-preview>
         <div class="adm-thp-preview-inner">
-          <p class="adm-thp-preview-kicker"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/sparkles.svg);vertical-align:-2px"></span> {p.ts.preview}</p>
+          <p class="adm-thp-preview-kicker"><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/sparkles.svg);vertical-align:-2px"></span> {p().ts.preview}</p>
           <div class="adm-thp-preview-card">
-            <p class="adm-thp-preview-title">{p.ts.phTitle}</p>
-            <p class="adm-thp-preview-sub">{p.ts.phSubtitle}</p>
-            <span class="adm-thp-preview-btn">{p.ts.button}</span>
+            <p class="adm-thp-preview-title">{p().ts.phTitle}</p>
+            <p class="adm-thp-preview-sub">{p().ts.phSubtitle}</p>
+            <span class="adm-thp-preview-btn">{p().ts.button}</span>
           </div>
         </div>
       </div>

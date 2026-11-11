@@ -13,23 +13,43 @@
   // No sensitive data: no connection strings, paths, or internal counters.
 
   import { ping } from "@server/db";
+  import { getSessionFromRequest } from "@server/auth";
 
   // Build-time constant, kept in sync with the root package.json (a JSON
   // import is not reliable under the esbuild rose bundler).
   const VERSION = "0.3.0";
 
-  export async function GET() {
+  export async function GET(request: Request) {
     let db = "ok";
     try {
       await ping();
     } catch {
       db = "fail";
     }
-    return {
-      status: "ok",
-      db,
-      uptimeSeconds: Math.floor(process.uptime()),
-      version: VERSION,
-    };
+    // The version and uptime are useful to a signed-in operator, but they are
+    // also attack-surface for an anonymous scanner (version → known CVEs,
+    // uptime → restart window). A load balancer only needs status + db.
+    const out: Record<string, unknown> = { status: "ok", db };
+    try {
+      const user = await getSessionFromRequest(request);
+      if (user) {
+        out.uptimeSeconds = Math.floor(process.uptime());
+        out.version = VERSION;
+      }
+    } catch {
+      /* probe answer without the extras is still correct */
+    }
+    return new Response(
+      JSON.stringify(out),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer",
+        },
+      },
+    );
   }
 </script>

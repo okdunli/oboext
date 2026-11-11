@@ -7,9 +7,16 @@
   import { roleAllows } from "@server/admin-menu";
   import { warmReadWave, xmlResponse } from "@server/loaders";
   import { handleReceiveRequest as handleWebmentionRequest, registerWebmentionHooks } from "@server/webmention";
+  import { registerCommentNotify } from "@server/comment-notify";
+  import { gzipResponse } from "@server/http-compress";
+  import { clientIp } from "@server/auth";
   import { existsSync, readFileSync } from "node:fs";
   import * as nodePath from "node:path";
   const log = createLogger("middleware");
+  // One encoded-body slot for the theme stylesheet: the ?v= stamp is the css
+  // content hash, so a key change means new bytes - the memo can never serve
+  // a stale encoding.
+  let styleEncCache: { key: string; enc: { br?: Buffer; gz?: Buffer } } | null = null;
   // dist/prod.mjs and the dev server both run with cwd = the app root, so
   // process.cwd() is the anchor for reading bundled public assets at the root.
   const ROOT = process.cwd();
@@ -47,6 +54,7 @@
     // renders or any post publishes. The guard inside makes it a no-op after
     // the first call.
     registerWebmentionHooks();
+    registerCommentNotify();
 
     const u = new URL(request.url);
     const p = u.pathname;
@@ -63,6 +71,78 @@
     // apply to them.
     if (p === "/webmention") {
       return handleWebmentionRequest(request);
+    }
+
+    // ------------------------------------------------- root identity assets
+    // R557: /favicon.ico and /apple-touch-icon.png are probed by every bot and
+    // browser with a cold cache; the branches used to run existsSync +
+    // readFileSync ON THE REQUEST PATH — two synchronous filesystem syscalls
+    // blocking the event loop per hit. The bytes are immutable (same window as
+    // the response), so a module-level memo reads them once per process. A
+    // missing file stays unmemoized (a later tools/gen run can create it).
+    const rootAssetMemo = (name: string): Uint8Array | null => {
+      const key = "rootAsset:" + name;
+      const hit = globalThis.__oboextRootAssets?.[key];
+      if (hit) return hit;
+      const abs = nodePath.join(ROOT, "oboext", "public", name);
+      if (!existsSync(abs)) return null;
+      const buf = readFileSync(abs);
+      (globalThis.__oboextRootAssets ??= {})[key] = buf;
+      return buf;
+    };
+
+    // ------------------------------------------------------------- /llms.txt
+    // The llmstxt.org index: one Markdown document a model can read instead of
+    // crawling the site. Served here because the framework's router only turns
+    // pages/api/* into API routes.
+    const isEn = p === "/en/llms.txt" || p === "/en/llms-txt";
+    if (p === "/llms.txt" || isEn) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return new Response("Method Not Allowed", {
+          status: 405,
+          headers: { allow: "GET, HEAD", "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+      const { buildLlmsTxt } = await import("@server/llms");
+      const body = await buildLlmsTxt(resolveOrigin(request.headers), isEn ? "en" : "zh-CN");
+      // R542: the llms index is a machine document like robots.txt — model
+      // crawlers poll it aggressively, and it used to answer 200 with no
+      // validator, so every poll paid the rebuild AND the full body. The same
+      // conditional-GET wrapper the other XML/text documents use (content
+      // ETag + bodiless 304 + gzip above 1 KB) closes that gap.
+      return xmlResponse(body, request, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "public, max-age=3600",
+      });
+    }
+
+    // ----------------------------------------------------- page method guard
+    // The framework dispatches every method to the page renderer: POST on a
+    // post page ran the loader and answered 500 "server error", PUT/DELETE
+    // answered the whole HTML page with 200. A document only has GET/HEAD;
+    // answering 405 (with Allow) keeps broken clients, probes and crawlers
+    // from executing render paths that were never written for them. API
+    // routes are excluded - each one owns its method set and answers its own
+    // 405. Webmention POST was dispatched above.
+    // POST /newsletter is exempt: that page exports a server action (the
+    // subscribe form's no-JS path) and the framework owns its answer.
+    // shortcut: the action-page list is manual, add a path here when a page
+    // grows a server action, revisit if a second form appears.
+    const hasAction = p === "/newsletter";
+    if (
+      request.method !== "GET" &&
+      request.method !== "HEAD" &&
+      !p.startsWith("/api/") &&
+      !(request.method === "POST" && hasAction)
+    ) {
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: {
+          allow: "GET, HEAD",
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "no-store",
+        },
+      });
     }
 
     // ------------------------------------------------- CSRF (single choke point) Runs before every branch below, so no route.
@@ -128,9 +208,14 @@
     ctx.origin = resolveOrigin(request.headers);
     ctx.query = real.searchParams;
     ctx.ua = request.headers.get("user-agent") || "";
+    // Rosezm 0.2.1+ writes the request's real socket peer into the context
+    // (framework BUG.md 2026-11-03: x-forwarded-for is client-writable, so
+    // per-IP throttles were bypassable by header rotation). Prefer it; on the
+    // installed 0.2.0 it is absent and clientIp's headers stay the fallback.
     ctx.ip =
-      (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
-      (request.headers.get("x-real-ip") || "").trim();
+      (getContext() as { remoteAddress?: string }).remoteAddress ||
+      clientIp(request) ||
+      "";
     // R255 traffic sources: the landing request's Referer rides on ctx so the
     // post loader can classify it into post_visitors.referrer_kind. Raw header,
     // unvalidated here - referrer.ts parses it without throwing, and only the
@@ -182,13 +267,26 @@
       if (!slug || !reg.themeStyle) return new Response("Not found", { status: 404 });
       const css = reg.themeStyle.css(slug);
       if (!css) return new Response("Not found", { status: 404 });
-      return new Response(css, {
-        status: 200,
-        headers: {
-          "content-type": "text/css; charset=utf-8",
-          "cache-control": "public, max-age=31536000, immutable",
-        },
-      });
+      // The render-blocking stylesheet rode out raw (~78 KB): the middleware
+      // returns plain Responses the runtime never negotiates. gzipResponse
+      // br/gzip-compresses per request and keeps the immutable policy below;
+      // the encCache pays that pass once per css version, not per request.
+      const v = u.searchParams.get("v") || "";
+      if (!styleEncCache || styleEncCache.key !== slug + ":" + v) {
+        styleEncCache = { key: slug + ":" + v, enc: {} };
+      }
+      return gzipResponse(
+        request,
+        new Response(css, {
+          status: 200,
+          headers: {
+            "content-type": "text/css; charset=utf-8",
+            "cache-control": "public, max-age=31536000, immutable",
+          },
+        }),
+        1024,
+        styleEncCache.enc,
+      );
     }
 
     if (!reg) return;
@@ -372,7 +470,12 @@
       if (reg && reg.publicStatic) {
         // R267: the negotiable dimension travels with the request, or the
         // handler cannot pick br/gzip and every asset goes out raw.
-        return reg.publicStatic.serve(rp, request.method, request.headers.get("accept-encoding"));
+        return reg.publicStatic.serve(
+          rp,
+          request.method,
+          request.headers.get("accept-encoding"),
+          u.searchParams.has("v"),
+        );
       }
     }
 
@@ -386,7 +489,7 @@
           headers: { "content-type": "text/plain; charset=utf-8" },
         });
       }
-      return reg.uploads.serve(rp, request.method, request.headers.get("accept-encoding"));
+      return reg.uploads.serve(rp, request.method, request.headers.get("accept-encoding"), request.headers.get("range"));
     }
 
     // ------------------------------------------- theme static assets
@@ -503,14 +606,23 @@
         "cache-control": "public, max-age=300",
       });
     }
-    if (rp.endsWith("/feed.xml") && rp !== "/feed.xml") {
+    // "/feed" is the short alias of "/feed.xml" on every feed the site owns
+    // (the site-wide feed already answers it), so readers that strip the
+    // extension still land on the right document.
+    const feedXml = rp.endsWith("/feed.xml") ? "/feed.xml" : rp.endsWith("/feed") ? "/feed" : "";
+    if (feedXml && rp !== "/feed.xml" && rp !== "/feed") {
+      const base = rp.slice(0, -feedXml.length);
       // R160: category/tag feeds. The loader resolves the path against the
       // CONFIGURED bases and returns null for anything unknown - that null
       // falls through to normal routing, so this branch claims no URL it does
       // not own. Same validator contract as the site feeds.
-      const base = rp.slice(0, -"/feed.xml".length);
       if (base) {
-        const doc = await reg.documents.taxonomyFeed(ctx, loc.locale, base);
+        // Taxonomy bases own their feeds; a post permalink's /feed.xml is the
+        // per-post comment feed - the matrix's last cells. Unknown paths stay
+        // null and fall through to routing (a real 404).
+        const doc =
+          (await reg.documents.taxonomyFeed(ctx, loc.locale, base)) ||
+          (await reg.documents.postCommentsFeed(ctx, loc.locale, base));
         if (doc) {
           return xmlResponse(doc, request, {
             "content-type": "application/rss+xml; charset=utf-8",
@@ -525,7 +637,9 @@
       // the pair can never disagree about which paths they own.
       const base = rp.slice(0, -"/feed.json".length);
       if (base) {
-        const doc = await reg.documents.taxonomyJsonFeed(ctx, loc.locale, base);
+        const doc =
+          (await reg.documents.taxonomyJsonFeed(ctx, loc.locale, base)) ||
+          (await reg.documents.postCommentsJsonFeed(ctx, loc.locale, base));
         if (doc) {
           return xmlResponse(doc, request, {
             "content-type": "application/feed+json; charset=utf-8",
@@ -541,9 +655,9 @@
     // shape answers with real bytes (prod's static handler also finds it, so
     // this branch is the dev/preview twin of that).
     if (rp === "/favicon.ico") {
-      const ico = nodePath.join(ROOT, "oboext", "public", "favicon.ico");
-      if (!existsSync(ico)) return new Response("Not found", { status: 404 });
-      return new Response(readFileSync(ico), {
+      const ico = rootAssetMemo("favicon.ico");
+      if (!ico) return new Response("Not found", { status: 404 });
+      return new Response(ico, {
         status: 200,
         headers: {
           "content-type": "image/x-icon",
@@ -559,9 +673,11 @@
     // site root, so the generated favicon.ico is picked up the moment it
     // exists — R308.)
     if (rp === "/apple-touch-icon.png") {
-      const png = nodePath.join(ROOT, "oboext", "public", "avatar.png");
-      if (!existsSync(png)) return new Response("Not found", { status: 404 });
-      return new Response(readFileSync(png), {
+      // Apple wants 180x180 for home-screen icons; the 80x80 avatar used to
+      // ride here and iOS had to upscale it itself.
+      const png = rootAssetMemo("avatar-180.png");
+      if (!png) return new Response("Not found", { status: 404 });
+      return new Response(png, {
         status: 200,
         headers: {
           "content-type": "image/png",
@@ -645,7 +761,7 @@
     if (rp === "/search") {
       const q = (real.searchParams.get("q") || "").trim();
       if (q && real.searchParams.get("all") !== "1") {
-        const to = await reg.searchRedirect(q);
+        const to = await reg.searchRedirect(q, loc.locale);
         // Keep the visitor on their locale: searchSingleHit returns a bare
         // /blog/<slug>, so without the prefix an /en visitor is ejected to the
         // Chinese URL by this 302.

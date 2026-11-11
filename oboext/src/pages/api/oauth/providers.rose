@@ -2,8 +2,11 @@
 
   import { apiGate } from "@server/admin";
   import { getPublicProviders } from "@server/oauth";
+  import { headerLocale } from "@server/i18n";
 
-  export async function GET() {
-    return apiGate(async () => getPublicProviders());
+  export async function GET(request) {
+    // The login card stamps x-locale, so the buttons read WeChat / Weibo in an
+    // English UI instead of shipping Chinese brand words to every visitor.
+    return apiGate(async () => getPublicProviders(headerLocale(request)));
   }
 </script>

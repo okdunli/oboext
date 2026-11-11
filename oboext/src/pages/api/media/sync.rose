@@ -1,0 +1,11 @@
+<script>
+  // /api/media/sync — POST: re-register uploads that exist on disk but lost
+  // their media row (the state an异常恢复 leaves behind). Idempotent: files
+  // that already have a row are skipped, responsive variants never register.
+  import { apiGate } from "@server/admin";
+  import { syncOrphanUploads } from "@server/media";
+
+  export async function POST(request) {
+    return apiGate(async () => syncOrphanUploads(getContext().user));
+  }
+</script>

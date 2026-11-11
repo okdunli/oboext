@@ -3,6 +3,7 @@
   import { jsonOk, jsonFail, readBody, apiGate } from "@server/admin";
   import {
     assertLoginAllowed,
+    clearLoginFailures,
     recordLoginEvent,
     LOGIN_EVENTS,
     signChallengeTicket,
@@ -66,12 +67,22 @@
       }
       const user = { id: row.id, email: row.email, name: row.name, role: row.role };
 
-      const challenged = await applyAsyncFilters(HOOKS.authChallenge, {
-        user,
-        challenge: null,
-      });
+      // Same core second factor as the password login: proving control of the
+      // mailbox/phone must not skip the TOTP gate. The plugin hook stays for
+      // extra factors.
+      const { getTwoFaState } = await import("@server/twofa");
+      const twoFa = await getTwoFaState(user.id);
+      const challenged = twoFa?.enabled
+        ? { challenge: { type: "totp" as const } }
+        : await applyAsyncFilters(HOOKS.authChallenge, {
+            user,
+            challenge: null,
+          });
       if (challenged.challenge) {
         const ticket = await signChallengeTicket(user);
+        // The 2FA step is its own throttle boundary (fails book under the
+        // resolved user's name), so the step transition is worth a row too.
+        await recordLoginEvent({ eventType: LOGIN_EVENTS.LOGIN_CHALLENGE, userId: user.id, account, ip, userAgent: ua });
         return {
           twoFactorRequired: true,
           challengeType: challenged.challenge.type,
@@ -79,14 +90,17 @@
         };
       }
 
-      await touchLastLogin(row.id);
-      await recordLoginEvent({
-        eventType: LOGIN_EVENTS.SUCCESS,
-        userId: user.id,
-        account,
-        ip,
-        userAgent: ua,
-      });
+      await Promise.all([
+        touchLastLogin(row.id),
+        clearLoginFailures(account),
+        recordLoginEvent({
+          eventType: LOGIN_EVENTS.SUCCESS,
+          userId: user.id,
+          account,
+          ip,
+          userAgent: ua,
+        }),
+      ]);
       doAction(HOOKS.userLoggedIn, { user });
       return withCookies(
         new Response(JSON.stringify({ user }), {

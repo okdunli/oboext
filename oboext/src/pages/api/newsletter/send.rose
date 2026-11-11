@@ -19,7 +19,7 @@
   //
   // Auth: requireUser + content:update:any — the same bar as re-sending a
   // confirmation code, an admin/editor management action, not a mere read.
-  import { apiGate, readBody, requireUser, can, ServiceError } from "@server/admin";
+  import { apiGate, readBody, requireUser, can, ServiceError, jsonFail } from "@server/admin";
   import { sendPostToSubscribers } from "@server/newsletter";
 
   export async function POST(request) {
@@ -29,7 +29,7 @@
       const body = await readBody(request);
       const postId = Math.trunc(Number(body?.postId));
       if (!Number.isInteger(postId) || postId <= 0) {
-        return { ok: false, error: "缺少有效的 postId" };
+        return jsonFail("缺少有效的 postId", 422);
       }
       const queued = await sendPostToSubscribers(postId);
       return { ok: true, queued };

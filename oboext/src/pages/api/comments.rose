@@ -4,6 +4,7 @@
   import { HOOKS, applyAsyncFilters } from "@server/hooks";
   import { makeT, headerLocale } from "@server/i18n";
   import { fireWebhook } from "@server/webhook";
+  import { verifyCommentCaptcha } from "@server/comment-captcha";
 
   export async function GET(request) {
     return apiGate(async () => {
@@ -25,6 +26,13 @@
       const postId = Number(body.postId);
       if (!Number.isInteger(postId)) {
         return jsonFail(t("api.comment_no_post"), 422);
+      }
+      // Opt-in (OBOEXT_COMMENT_CAPTCHA=1): guests must solve the arithmetic
+      // challenge. Signed in users already passed the login gate.
+      if (process.env.OBOEXT_COMMENT_CAPTCHA === "1" && !ctx.user) {
+        if (!verifyCommentCaptcha(String(body.captchaToken || ""), String(body.captchaAnswer || ""))) {
+          return jsonFail(t("api.comment_captcha"), 422);
+        }
       }
       // Guard plugins (comment-captcha, . ) reject before any DB write.
       const gate = await applyAsyncFilters(HOOKS.commentSubmission, {

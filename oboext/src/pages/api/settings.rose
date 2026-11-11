@@ -1,6 +1,6 @@
 <script>
   // /api/settings — GET the singleton row (public read, mirrors the original: the site theme/login screens read it unauthenticated)
-  import { apiGate, readBody, requireCap, updateSettings } from "@server/admin";
+  import { apiGate, readBody, requireCap, updateSettings, ServiceError } from "@server/admin";
   import { getSettings } from "@server/queries";
   import { setOption } from "@server/options";
 
@@ -20,6 +20,13 @@
   // whitelist caveat as above, so the save writes the option directly here
   // (feed_full_text pattern). Empty string = disabled (fireWebhook no-ops).
   const WEBHOOK_KEY = "webhook_url";
+  function normalizeWebhookUrl(raw: string): string {
+    const v = raw.trim();
+    if (v && !/^https?:\/\//i.test(v)) {
+      throw new ServiceError("Webhook 地址需以 http/https 开头", 422, "api.webhook_url_invalid");
+    }
+    return v;
+  }
 
   export async function GET() {
     return apiGate(async () => getSettings());
@@ -42,7 +49,7 @@
         else delete body.feedContent;
       }
       if (typeof body[WEBHOOK_KEY] === "string") {
-        await setOption(WEBHOOK_KEY, body[WEBHOOK_KEY].trim());
+        await setOption(WEBHOOK_KEY, normalizeWebhookUrl(body[WEBHOOK_KEY]));
         delete body[WEBHOOK_KEY]; // not a site_settings column; drop so updateSettings doesn't see it
       }
       return updateSettings(getContext().user, body);
@@ -59,7 +66,7 @@
         else delete body.feedContent;
       }
       if (typeof body[WEBHOOK_KEY] === "string") {
-        await setOption(WEBHOOK_KEY, body[WEBHOOK_KEY].trim());
+        await setOption(WEBHOOK_KEY, normalizeWebhookUrl(body[WEBHOOK_KEY]));
         delete body[WEBHOOK_KEY];
       }
       return updateSettings(getContext().user, body);

@@ -41,8 +41,8 @@
 <div class="adm-card" style="margin-bottom:16px;">
   <div class="adm-card-bd">
     <p class="adm-hint" style="margin:0;">
-      在各开放平台{copy().create}应用后，把对应提供商卡片中的「回调地址」填入平台的授权回调域；再填写客户端 ID / 密钥并{copy().enable}。
-      一个账号可绑定多种登录方式；仅当提供商返回<b style="color:var(--adm-text);">{copy().verifiedMerge}</b>{copy().verifiedMerge2}
+      {copy().lead}
+      {copy().bindHint}<b style="color:var(--adm-text);">{copy().verifiedMerge}</b>{copy().verifiedMerge2}
     </p>
   </div>
 </div>
@@ -149,11 +149,11 @@
 
       <div style="margin-top:12px;display:grid;gap:10px;">
         <label class="adm-switch"><span><span class="t">{copy().allowNew}</span><span class="d">{copy().allowNewHint}</span></span><input type="checkbox" name="allowCreate" data-on={on(p, 'allowCreate')} data-bool></label>
-        <label class="adm-switch"><span><span class="t">按{copy().verifiedMerge}合并账号</span><span class="d">{copy().mergeHint}</span></span><input type="checkbox" name="mergeByEmail" data-on={on(p, 'mergeByEmail')} data-bool></label>
+        <label class="adm-switch"><span><span class="t">{copy().mergeVerified}</span><span class="d">{copy().mergeHint}</span></span><input type="checkbox" name="mergeByEmail" data-on={on(p, 'mergeByEmail')} data-bool></label>
       </div>
 
       <div style="display:flex;align-items:center;gap:8px;margin-top:14px;">
-        <code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--adm-faint);background:var(--adm-panel-2);border:1px solid var(--adm-border);border-radius:8px;padding:8px 10px;">回调地址：{p.callbackUrl}</code>
+        <code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--adm-faint);background:var(--adm-panel-2);border:1px solid var(--adm-border);border-radius:8px;padding:8px 10px;">{copy().callbackLabel}{p.callbackUrl}</code>
         <button class="adm-btn" type="submit">{copy().save}</button>
       </div>
     </div>
@@ -164,7 +164,7 @@
 <details class="adm-card" style="margin-bottom:16px;">
   <summary class="adm-card-hd" style="cursor:pointer;list-style:none;">
     <span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/plus.svg)"></span>
-    <strong style="font-size:14px;">添加{copy().custom} OAuth2 登录方式</strong>
+    <strong style="font-size:14px;">{copy().addTitle}</strong>
     <span class="adm-hint" style="margin:0;">{copy().slugHint}</span>
   </summary>
   <div class="adm-card-bd">
@@ -198,7 +198,7 @@
       <div style="margin-top:12px;">
         <button class="adm-btn" type="submit">{copy().create}</button>
       </div>
-      <p class="adm-hint" style="margin:10px 0 0;">{copy().create}后可在上方卡片补全客户端 ID / 密钥、字段映射并{copy().enable}。</p>
+      <p class="adm-hint" style="margin:10px 0 0;">{copy().createNote}</p>
     </form>
   </div>
 </details>

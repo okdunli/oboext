@@ -28,6 +28,7 @@
     "login.success": copy().loginOk,
     "login.fail": copy().loginFail,
     "login.locked": copy().loginLock,
+    "login.challenge": copy().loginChallenge,
     "password.reset.request": copy().resetRequest,
     "password.reset.done": copy().resetDone,
   };
@@ -38,6 +39,7 @@
     if (t === "login.success") return "background:rgba(22,163,74,.14);color:#4ade80;";
     if (t === "login.fail") return "background:rgba(220,38,38,.14);color:#f87171;";
     if (t === "login.locked") return "background:rgba(217,119,6,.15);color:#fbbf24;";
+    if (t === "login.challenge") return "background:rgba(59,130,246,.14);color:#93c5fd;";
     return "background:rgba(120,120,130,.18);color:#d4d4d8;";
   }
   function fmt(iso) {
@@ -67,7 +69,7 @@
   <div style="display:flex;align-items:center;gap:8px;">
     <span class="adm-ic" style="--i:url(/public/icons/scroll-text.svg);width:20px;height:20px;color:#818cf8;"></span>
     <strong style="font-size:16px">{copy().title}</strong>
-    <span class="adm-hint" style="margin:0;">共 {total()} 条</span>
+    <span class="adm-hint" style="margin:0;">{copy().totalLabel} {total()} {copy().countUnit}</span>
   </div>
 </div>
 
@@ -110,7 +112,7 @@
       <tr>
         <td class="adm-hint">{fmt(e.createdAt)}</td>
         <td><span class="adm-tag" style="{eventStyle(e.eventType)}">{eventLabel(e.eventType)}</span></td>
-        <td>{#if e.account}<a href={byAccount(e.account)} title={copy().seeThisAccount}>{e.account}</a>{/if}{#if !e.account}{e.userId ? "用户 #" + e.userId : "—"}{/if}</td>
+        <td>{#if e.account}<a href={byAccount(e.account)} title={copy().seeThisAccount}>{e.account}</a>{/if}{#if !e.account}{e.userId ? copy().userHash + e.userId : "—"}{/if}</td>
         <td class="adm-hint">{#if e.ip}<a href={byIp(e.ip)} title={copy().seeThisIp}>{e.ip}</a>{/if}{#if !e.ip}—{/if}</td>
         <td class="adm-hint">{detailText(e)}</td>
       </tr>
@@ -127,7 +129,7 @@
   {#if page() > 1}
   <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() - 1)}>{copy().pagerPrev}</a>
   {/if}
-  <span class="adm-hint" style="margin:0;">第 {page()} / {pages()} 页</span>
+  <span class="adm-hint" style="margin:0;">{copy().pagePrefix}{page()} / {pages()}{copy().pageSuffix}</span>
   {#if page() < pages()}
   <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() + 1)}>{copy().pagerNext}</a>
   {/if}

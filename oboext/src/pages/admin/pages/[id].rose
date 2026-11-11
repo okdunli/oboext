@@ -1,5 +1,9 @@
 <script>
   // Page editor (new + existing), same blocks editor as posts.
+  // The island script below drives browser-only features (preview link,
+  // autodraft restore, Cmd/Ctrl+S) that the compiler's zero-JS predicate
+  // cannot see, so the client bundle is forced back in.
+  export const csr = true;
   let id = $state("");
   function copy() {
     return (d() && d().s) || {};
@@ -252,6 +256,18 @@
       if (typeof window.admToast === "function") window.admToast(err instanceof Error ? err.message : copy().generateFailed, "err");
     }
   });
+
+  // Keyboard saves: Cmd/Ctrl+S saves with the status the form already has,
+  // Cmd/Ctrl+Shift+S publishes. Rides the buttons as submitters so admin.js
+  // reads data-save-as off them — the exact same path a mouse click takes.
+  if (typeof document !== "undefined") document.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey) || (e.key !== "s" && e.key !== "S")) return;
+    const form = document.querySelector("form[data-adm-editor]");
+    if (!form) return;
+    e.preventDefault();
+    const btn = form.querySelector(e.shiftKey ? '[data-save-as="published"]' : '[data-save-as=""]');
+    if (btn) btn.click();
+  });
 </script>
 
 <head>
@@ -331,6 +347,13 @@
         <div class="adm-card-hd"><strong>{copy().publish}</strong></div>
         <div class="adm-card-bd">
           <div class="adm-field" style="margin-bottom:12px">
+            <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().contentLocale}</span>
+            <select class="adm-select" name="locale">
+              <option value="zh-CN" selected={(val('locale') || 'zh-CN') === 'zh-CN'}>{copy().langZh}</option>
+              <option value="en" selected={val('locale') === 'en'}>{copy().langEn}</option>
+            </select>
+          </div>
+          <div class="adm-field" style="margin-bottom:12px">
             <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().status}</span>
             <select class="adm-select" name="status">
               <option value="draft">{copy().statusDraft}</option>
@@ -361,8 +384,36 @@
           </div>
           <div class="adm-field" style="margin-bottom:0">
             <span style="display:block;font-size:13px;color:var(--adm-muted);margin-bottom:6px">{copy().featuredImage}</span>
-            <input class="adm-input" name="featuredImage" placeholder="https://…" value={val('featuredImage')}>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input class="adm-input" name="featuredImage" placeholder="https://…" value={val('featuredImage')} style="flex:1">
+              <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-media-pick>{copy().pickMedia}</button>
+            </div>
+            <img data-featured-preview alt="" style="display:none;margin-top:8px;max-height:120px;border-radius:8px">
           </div>
+        </div>
+      </div>
+
+      <div class="adm-card">
+        <div class="adm-card-hd"><strong>{copy().translation}</strong></div>
+        <div class="adm-card-bd">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <input
+              class="adm-input"
+              name="translationOf"
+              type="number"
+              min="1"
+              data-num
+              style="width:140px"
+              placeholder="{copy().translationIdPh}"
+              value={val('translationOf') || ""}
+            >
+            {#if d().page && d().page.translationOriginal}
+            <a href={d().page.translationOriginal.editHref} style="font-size:12px;color:var(--muted)">
+              ↳ {d().page.translationOriginal.title}
+            </a>
+            {/if}
+          </div>
+          <div class="adm-hint" style="margin-top:8px">{copy().translationHint}</div>
         </div>
       </div>
 

@@ -11,7 +11,7 @@
   function pages() { return d().pages || 1; }
   function s(k) { return (d().s || {})[k] || ""; }
   function href(p) { return "/admin/search-terms?page=" + p; }
-  function localeLabel(l) { return l === "en" ? "EN" : "中文"; }
+  function localeLabel(l) { return l === "en" ? "EN" : s("localeZh"); }
   function fmt(iso) {
     if (!iso) return "—";
     const dt = new Date(iso);
@@ -23,14 +23,14 @@
 </script>
 
 <head>
-  <title>{d().s.title} - 管理后台</title>
+  <title>{d().s.docTitle}</title>
 </head>
 
 <div class="adm-toolbar">
   <div style="display:flex;align-items:center;gap:8px;">
     <span class="adm-ic" style="--i:url(/public/icons/search.svg);width:20px;height:20px;color:#818cf8;"></span>
     <strong style="font-size:16px">{s("title")}</strong>
-    <span class="adm-hint" style="margin:0;">共 {total()} 个词</span>
+    <span class="adm-hint" style="margin:0;">{s("totalLabel")} {total()} {s("countUnit")}</span>
   </div>
 </div>
 
@@ -67,7 +67,7 @@
   {#if page() > 1}
   <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() - 1)}>{d().s.prev}</a>
   {/if}
-  <span class="adm-hint" style="margin:0;">第 {page()} / {pages()} 页</span>
+  <span class="adm-hint" style="margin:0;">{s("pagePrefix")}{page()} / {pages()}{s("pageSuffix")}</span>
   {#if page() < pages()}
   <a class="adm-btn adm-btn-ghost adm-btn-sm" href={href(page() + 1)}>{d().s.next}</a>
   {/if}

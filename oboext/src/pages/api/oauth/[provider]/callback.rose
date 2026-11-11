@@ -4,6 +4,8 @@
   import { handleOAuthCallback, STATE_COOKIE } from "@server/oauth";
   import { getAdminSecurity } from "@server/security";
   import { sessionCookiePair } from "@server/csrf";
+  import { signChallengeTicket } from "@server/auth";
+  import { getTwoFaState } from "@server/twofa";
   import { ServiceError } from "@server/errors";
   import { resolveLocale, makeT } from "@server/i18n";
 
@@ -36,10 +38,15 @@
 
   const CLEAR_COOKIE = `${STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/api/oauth; Max-Age=0`;
 
+  // The page the login card lives on: the secret wall when it is on, the plain
+  // admin login when it is off (/secret-login 404s in that case).
+  function loginPath(sec) {
+    return sec.entryEnabled ? sec.entryPath : "/admin/login";
+  }
+
   async function redirectWithError(origin, message) {
     const sec = await getAdminSecurity();
-    const entry = sec.entryEnabled ? sec.entryPath : "/admin/login";
-    const to = new URL(entry, origin);
+    const to = new URL(loginPath(sec), origin);
     to.searchParams.set("oauth_error", message);
     return new Response(null, {
       status: 302,
@@ -76,6 +83,19 @@
       if (result.mode === "registered" && result.needProfile) {
         to = "/admin/account?oauth_new=1";
       }
+
+      // A third-party login never sees the password, so the second factor that
+      // guards the password and code logins never ran. Hand back a challenge
+      // ticket instead of a session; "bound" only links an account that is
+      // already signed in, so it keeps its session.
+      const gated =
+        result.mode !== "bound" && !!(await getTwoFaState(result.user.id))?.enabled;
+      if (gated) {
+        const entry = new URL(loginPath(await getAdminSecurity()), origin);
+        entry.searchParams.set("twofa", "1");
+        entry.searchParams.set("ticket", await signChallengeTicket(result.user));
+        to = entry.pathname + entry.search;
+      }
       // Three cookies, as an array. This used to be one string joined with
       // "; ", which is not how Set-Cookie works: the whole thing parses as a
       // SINGLE cookie, and everything after the first "; " is read as an
@@ -87,7 +107,10 @@
       // as one cookie) nor an object-field array (the runtime collapses it to
       // a single comma-joined header, dropping all but the first) works -
       // BUG.md entry Y.
-      for (const v of [...(await sessionCookiePair(result.user)), CLEAR_COOKIE]) {
+      for (const v of [
+        ...(gated ? [] : await sessionCookiePair(result.user)),
+        CLEAR_COOKIE,
+      ]) {
         res.headers.append("set-cookie", v);
       }
       return res;

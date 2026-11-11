@@ -1,10 +1,19 @@
 <script>
   // GET /api/emojis — emoji panel data (groups). Served as an API route
   // because the framework's prebuild purge removes *.json from dist/public.
-  import { apiGate } from "@server/admin";
+  // The payload is a BUILD-TIME constant (imported, never reads the DB or
+  // options), so a long shared-cache TTL is correct — the client's own
+  // per-page cache sits on top of this.
   import data from "@server/emoji-data";
 
   export async function GET() {
-    return apiGate(async () => data);
+    return new Response(JSON.stringify(data), {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=86400",
+        "x-content-type-options": "nosniff",
+      },
+    });
   }
 </script>

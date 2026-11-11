@@ -3,7 +3,7 @@
   // the API enforces users:read/users:manage). Reads live rows per request.
   let users = $data(() => __rvLoad("admin.users", {}));
   function list() {
-    return users() || [];
+    return users().items || [];
   }
   function copy() {
     return users().s || {};
@@ -80,6 +80,7 @@
         <tr>
           <th>{copy().colUser}</th>
           <th style="width:90px">{copy().colRole}</th>
+          <th style="width:70px">{copy().colTwofa}</th>
           <th style="width:100px">{copy().colCreated}</th>
           <th style="width:130px"></th>
         </tr>
@@ -92,9 +93,13 @@
             <div class="sub">{u.email}</div>
           </td>
           <td><span class={"adm-tag role-" + u.role}>{roleLabel(u.role)}</span></td>
+          <td class="adm-hint" data-twofa-cell>{u.twoFaEnabled ? "✓" : "—"}</td>
           <td class="adm-hint">{fmt(u.createdAt)}</td>
           <td>
             <div class="row-actions">
+              {#if u.twoFaEnabled}
+              <button class="adm-iconbtn danger" data-adm-act="user-twofa-reset" data-url={"/api/users/" + u.id + "/twofa"} data-name={u.name}>{copy().twofaReset}</button>
+              {/if}
               {#if u.role !== "subscriber"}
               <a class="adm-iconbtn" href={"/author/" + u.id} target="_blank" rel="noopener">{copy().home}</a>
               {/if}

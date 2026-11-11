@@ -1,6 +1,8 @@
 <script>
   // /api/widgets GET ?theme=<slug> areas + types + instances (settings:manage) POST create an instance {area,type,themeSlug?,title?,config?}.
   import { apiGate, readBody, jsonFail, requireCap } from "@server/admin";
+  import { makeT, headerLocale } from "@server/i18n";
+  import { localizeWidgetCatalog } from "@server/widgets-en";
   import {
     WIDGET_AREAS,
     WIDGET_TYPES,
@@ -11,24 +13,27 @@
   } from "@server/widgets";
 
   export async function GET(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       requireCap(getContext().user, "settings:manage");
       const slug = new URL(request.url).searchParams.get("theme") || THEME_SLUG;
+      const catalog = localizeWidgetCatalog(headerLocale(request) === "en");
       return {
         theme: slug,
-        areas: WIDGET_AREAS,
-        types: WIDGET_TYPES,
+        areas: catalog.areas,
+        types: catalog.types,
         widgets: await listWidgets(slug),
       };
-    });
+    }, t);
   }
 
   export async function POST(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const body = await readBody(request);
       const area = typeof body?.area === "string" ? body.area.trim() : "";
       const type = typeof body?.type === "string" ? body.type.trim() : "";
-      if (!area || !type) return jsonFail("缺少 area 或 type", 422);
+      if (!area || !type) return jsonFail(t("api.widget_need_area"), 422);
       const row = await createWidget(getContext().user, {
         area,
         type,
@@ -40,16 +45,17 @@
         status: 201,
         headers: { "content-type": "application/json; charset=utf-8" },
       });
-    });
+    }, t);
   }
 
   export async function PATCH(request) {
+    const t = makeT(headerLocale(request));
     return apiGate(async () => {
       const body = await readBody(request);
-      if (!body || !Array.isArray(body.ids)) return jsonFail("ids 必须是数组", 422);
+      if (!body || !Array.isArray(body.ids)) return jsonFail(t("api.widget_need_ids"), 422);
       const ids = body.ids.map(Number).filter((n) => Number.isInteger(n));
       await reorderWidgets(getContext().user, ids);
       return { ok: true, count: ids.length };
-    });
+    }, t);
   }
 </script>

@@ -41,7 +41,7 @@
     <div class="adm-card-bd">
       <div class="adm-field">
         <label>{copy().colTitle}</label>
-        <input class="adm-input" name="title" value={v('title', '网站维护中')} maxlength="120" placeholder={copy().phTitle}>
+        <input class="adm-input" name="title" value={v('title', copy().phDefault)} maxlength="120" placeholder={copy().phTitle}>
       </div>
       <div class="adm-field" style="margin-top:12px;">
         <label>{copy().colBody}</label>

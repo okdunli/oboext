@@ -1,6 +1,7 @@
 <script>
 
   import { makeT } from "@server/i18n";
+  import { publicAssetHref } from "@server/theme-chrome";
 
   export const shell = false;
 
@@ -31,7 +32,7 @@
 
 <head>
 
-  <link rel="stylesheet" href="/public/notfound.css">
+  <link rel="stylesheet" href={publicAssetHref("notfound.css")}>
   <title>{nfTitle()} - {siteTitle()}</title>
   <meta name="robots" content="noindex, nofollow">
   <meta property="og:site_name" content={siteTitle()}>

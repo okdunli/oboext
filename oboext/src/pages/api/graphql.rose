@@ -38,8 +38,15 @@
 
   // Introspection is how an attacker maps the whole data model in one request.
   // It is a development affordance; on a public endpoint it is reconnaissance.
-  function introspectionAllowed() {
-    return process.env.NODE_ENV !== "production";
+  // The old gate (`NODE_ENV !== "production"`) never fired: nothing in this
+  // app's deploy paths sets that variable, so the schema was publicly
+  // enumerable everywhere. The honest gate: an explicit opt-in, the dev
+  // server, or a signed-in editor/admin (GraphiQL stays usable for staff).
+  function introspectionAllowed(user) {
+    if (process.env.GRAPHQL_INTROSPECTION === "1") return true;
+    if (process.env.NODE_ENV === "development") return true;
+    const role = (user as { role?: string } | null)?.role;
+    return role === "admin" || role === "editor";
   }
 
   async function execute(request, payload) {
@@ -64,17 +71,6 @@
       return jsonOut({ errors: problems.map((p) => ({ message: p.message })) }, 400, origin);
     }
 
-    if (!introspectionAllowed()) {
-      for (const def of document.definitions || []) {
-        if (def.kind === "OperationDefinition" && def.operation === "query") {
-          const names = ((def.selectionSet && def.selectionSet.selections) || []).map((s) => s.name && s.name.value);
-          if (names.includes("__schema") || names.includes("__type")) {
-            return jsonOut({ errors: [{ message: "Introspection is disabled." }] }, 403, origin);
-          }
-        }
-      }
-    }
-
     // Both guards run on the parsed document, before any resolver fires, so a
     // rejected query costs one parse and no database work at all.
     const tooDeep = checkQueryDepth(document);
@@ -86,6 +82,19 @@
     }
 
     const contextValue = await buildContext(request);
+
+    // After buildContext: the staff exemption needs the session, and an
+    // introspection probe that gets rejected here has paid one cookie parse.
+    if (!introspectionAllowed(contextValue.user)) {
+      for (const def of document.definitions || []) {
+        if (def.kind === "OperationDefinition" && def.operation === "query") {
+          const names = ((def.selectionSet && def.selectionSet.selections) || []).map((s) => s.name && s.name.value);
+          if (names.includes("__schema") || names.includes("__type")) {
+            return jsonOut({ errors: [{ message: "Introspection is disabled." }] }, 403, origin);
+          }
+        }
+      }
+    }
     const result = await executeGraphql({
       schema,
       document,

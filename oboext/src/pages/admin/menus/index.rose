@@ -86,7 +86,7 @@
     {#each rows() as r}
     <div class="adm-menu-row" data-menu-row style={indentStyle(r)}>
       <span class="adm-menu-depth">{depthLabel(r)}</span>
-      <select class="adm-select adm-menu-type" data-f="type">
+      <select class="adm-select adm-menu-type" data-f="type" aria-label={copy().typeLabel}>
         <option value="custom">{copy().customLink}</option>
         <option value="post">{copy().fromPosts}</option>
         <option value="page">{copy().fromPages}</option>
@@ -94,18 +94,18 @@
         <option value="tag">{copy().fromTags}</option>
       </select>
       {#if (() => menuIsRef(r))()}
-      <select class="adm-select adm-menu-ref" data-f="ref">
+      <select class="adm-select adm-menu-ref" data-f="ref" aria-label={copy().refLabel}>
         <option value={r.referenceSlug}>{refLabel(r)}</option>
       </select>
       {/if}
-      <input class="adm-input adm-menu-label" data-f="label" value={r.label} placeholder={copy().phLabel}>
+      <input class="adm-input adm-menu-label" data-f="label" value={r.label} aria-label={copy().phLabel} placeholder={copy().phLabel}>
       {#if (() => menuIsCustom(r))()}
-      <input class="adm-input adm-menu-url" data-f="url" value={r.url} placeholder={copy().phUrl}>
+      <input class="adm-input adm-menu-url" data-f="url" value={r.url} aria-label={copy().phUrl} placeholder={copy().phUrl}>
       {/if}
       {#if (() => menuIsRef(r))()}
       <span class="adm-menu-mono" title={r.url}>{refState(r)}</span>
       {/if}
-      <input class="adm-input adm-menu-icon" data-f="icon" data-icon-picker="compact" value={r.icon} placeholder={copy().phIcon} title={copy().setIcon}>
+      <input class="adm-input adm-menu-icon" data-f="icon" data-icon-picker="compact" value={r.icon} aria-label={copy().phIcon} placeholder={copy().phIcon} title={copy().setIcon}>
       <div class="adm-menu-tools">
         <button type="button" class="adm-iconbtn" data-menu-act="up" title={copy().moveUp} aria-label={copy().moveUp}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-up.svg)"></span></button>
         <button type="button" class="adm-iconbtn" data-menu-act="down" title={copy().moveDown} aria-label={copy().moveDown}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/chevron-down.svg)"></span></button>

@@ -22,6 +22,30 @@
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
     return (n / 1024 / 1024).toFixed(1) + " MB";
   }
+  // Re-register uploads that lost their media row (an异常恢复 leaves files on
+  // disk with no table entry). One POST, then refresh() re-runs $data so the
+  // library shows the recovered files without a page reload.
+  let syncMsg = $state("");
+  let syncing = $state(false);
+  async function runSync() {
+    if (syncing()) return;
+    syncing(true);
+    try {
+      const csrf = (document.cookie.split(/;\s*/).find((c) => c.startsWith("cms_csrf=")) || "").split("=")[1] || "";
+      const r = await fetch("/api/media/sync", {
+        method: "POST",
+        headers: { "x-csrf-token": decodeURIComponent(csrf) },
+      });
+      const d = await r.json();
+      const n = (d.registered || []).length;
+      syncMsg(n ? (copy().syncDone || "").replace("{n}", String(n)) : copy().syncNone);
+      if (n) await refresh();
+    } catch (e) {
+      syncMsg(String((e as Error).message || e));
+    } finally {
+      syncing(false);
+    }
+  }
 </script>
 
 <head>
@@ -39,7 +63,7 @@
     <div class="adm-upload-row">
       <div class="adm-field" style="flex:1;min-width:240px">
         <span class="adm-hint" style="display:block;margin-bottom:4px">{copy().altLabel}</span>
-        <input class="adm-input" data-media-alt placeholder="{copy().phAlt}">
+        <input class="adm-input" data-media-alt aria-label="{copy().phAlt}" placeholder="{copy().phAlt}">
       </div>
       <button type="submit" class="adm-btn adm-btn-green" data-media-submit disabled>{copy().upload}</button>
       <span class="adm-media-msg" data-media-msg></span>
@@ -53,18 +77,20 @@
 
 <div class="adm-toolbar" style="margin-top:16px">
   <label class="adm-check-line"><input type="checkbox" data-media-all> {copy().selectAll}</label>
-  <input class="adm-input" data-media-search placeholder="{copy().phSearch}" style="max-width:220px">
-  <select class="adm-input" data-media-type style="max-width:120px">
+  <input class="adm-input" data-media-search aria-label="{copy().phSearch}" placeholder="{copy().phSearch}" style="max-width:220px">
+  <select class="adm-input" data-media-type aria-label="{copy().typeFilter}" style="max-width:120px">
     <option value="">{copy().filterAll}</option>
     <option value="image">{copy().filterImages}</option>
     <option value="doc">{copy().filterNonImages}</option>
   </select>
-  <input class="adm-input" data-media-tagfilter placeholder="{copy().phTags}" style="max-width:130px">
+  <input class="adm-input" data-media-tagfilter aria-label="{copy().phTags}" placeholder="{copy().phTags}" style="max-width:130px">
   <span style="flex:1"></span>
   <span class="adm-hint" data-media-count>{copy().selectedN}</span>
   <button type="button" class="adm-btn adm-btn-sm" data-media-copyall disabled title="{copy().titleCopyAll}">{copy().titleCopy}</button>
   <button type="button" class="adm-btn adm-btn-sm" data-media-tagbtn disabled title="{copy().titleBulkTag}">{copy().tag}</button>
   <button type="button" class="adm-btn adm-btn-sm" data-media-variants-all title="{copy().titleVariants}">{copy().variants}</button>
+  <button type="button" class="adm-btn adm-btn-sm" on:click={runSync} disabled={syncing()} title="{copy().titleSync}">{syncing() ? "…" : copy().syncBtn}</button>
+  {#if syncMsg()}<span class="adm-hint">{syncMsg()}</span>{/if}
   <button type="button" class="adm-btn adm-btn-danger adm-btn-sm" data-media-bulk disabled>{copy().bulkDelete}</button>
 </div>
 
@@ -75,7 +101,7 @@
       <input type="checkbox" class="adm-media-sel" value={m.id}>
     </label>
     {#if (() => isImage(m))()}
-    <img class="adm-media-thumb" src={m.url} alt={m.alt || m.filename} loading="lazy" data-media-preview-btn>
+    <img class="adm-media-thumb" src={m.thumbUrl || m.url} alt={m.alt || m.filename} loading="lazy" data-media-preview-btn>
     {/if}
     {#if (() => !isImage(m))()}
     <div class="adm-media-file" data-media-preview-btn><span class="adm-ic adm-ic-lg" style="--i:url(/public/icons/file.svg)"></span><span>{m.mimeType}</span></div>
@@ -108,7 +134,7 @@
 <div class={"adm-empty adm-media-empty" + (items().length ? " is-hidden" : "")} data-media-empty style="padding:48px 16px">
   <div style="margin-bottom:8px;display:flex;justify-content:center"><span class="adm-ic" style="width:32px;height:32px;--i:url(/public/icons/image.svg)"></span></div>
   <p>{copy().empty}</p>
-  <p class="adm-hint">使用上方{copy().upload}区添加你的第一张图片或文档。</p>
+  <p class="adm-hint">{copy().emptyHint}</p>
 </div>
 
 <!-- edit alt text modal -->
@@ -121,11 +147,11 @@
     <div class="adm-modal-bd">
       <label class="adm-field" style="display:block">
         <span class="adm-hint" style="display:block;margin-bottom:4px">{copy().editAlt}</span>
-        <textarea class="adm-textarea" rows="3" data-media-edit-alt></textarea>
+        <textarea class="adm-textarea" rows="3" data-media-edit-alt aria-label="{copy().phAlt}"></textarea>
       </label>
       <label class="adm-field" style="display:block;margin-top:10px">
         <span class="adm-hint" style="display:block;margin-bottom:4px">{copy().editTags}</span>
-        <input class="adm-input" data-media-edit-tags placeholder="{copy().phBulkTags}">
+        <input class="adm-input" data-media-edit-tags aria-label="{copy().phBulkTags}" placeholder="{copy().phBulkTags}">
       </label>
       <div class="adm-hint" style="margin-top:10px">
         {copy().editFile}
@@ -155,12 +181,12 @@
 <div class="adm-modal" data-media-tagmodal hidden>
   <div class="adm-modal-box">
     <div class="adm-modal-hd">
-      <strong>批量{copy().tag}</strong>
+      <strong>{copy().bulkPrefix}{copy().tag}</strong>
       <button type="button" class="adm-iconbtn" data-media-tag-close aria-label={copy().close}><span class="adm-ic adm-ic-sm" style="--i:url(/public/icons/x.svg)"></span></button>
     </div>
     <div class="adm-modal-bd">
       <p class="adm-hint" data-media-tag-count style="margin-top:0"></p>
-      <input class="adm-input" data-media-tag-input placeholder={copy().phTagsEdit}>
+      <input class="adm-input" data-media-tag-input aria-label={copy().phTagsEdit} placeholder={copy().phTagsEdit}>
       <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
         <label class="adm-check-line"><input type="radio" name="media-tag-mode" value="add" checked> {copy().tagAppend}</label>
         <label class="adm-check-line"><input type="radio" name="media-tag-mode" value="replace"> {copy().tagOverwrite}</label>

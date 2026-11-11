@@ -27,7 +27,13 @@
       const p = window.location.pathname;
       return p === "/en" || p.indexOf("/en/") === 0 ? "en" : "zh-CN";
     }
-    return String(getContext().locale || "zh-CN") === "en" ? "en" : "zh-CN";
+    var ctx = getContext();
+    if (String(ctx.locale || "zh-CN") === "en") return "en";
+    // Admin paths carry no locale prefix, so the shell resolves its copy from
+    // Accept-Language; <html lang> must follow the same signal or an English
+    // admin page announces itself as Chinese to a screen reader.
+    if (adminPath()) return /^en\b/i.test(String(ctx.acceptLanguage || "").trim()) ? "en" : "zh-CN";
+    return "zh-CN";
   }
   // Safety net: guarantees links never render as default-underlined even if a theme's own stylesheet fails to load or a class mismatch leaves an <a>.
   // The tag is split: a contiguous open tag in a .rose source is a landmine for

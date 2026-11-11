@@ -1,6 +1,6 @@
 <script>
   // /api/tags — GET list, POST create
-  import { apiGate, readBody, createTag, bulkDeleteTags } from "@server/admin";
+  import { apiGate, readBody, createTag, bulkDeleteTags, jsonFail } from "@server/admin";
   import { listTags } from "@server/queries";
 
   export async function GET() {
@@ -23,10 +23,7 @@
       const body = await readBody(request);
       const ids = Array.isArray(body && body.ids) ? body.ids : [];
       if (ids.length > 500)
-        return new Response(JSON.stringify({ error: "批量操作一次最多 500 项" }), {
-          status: 422,
-          headers: { "content-type": "application/json; charset=utf-8" },
-        });
+        return jsonFail("批量操作一次最多 500 项", 422);
       const res = await bulkDeleteTags(getContext().user, ids);
       return new Response(JSON.stringify(res), {
         headers: { "content-type": "application/json; charset=utf-8" },

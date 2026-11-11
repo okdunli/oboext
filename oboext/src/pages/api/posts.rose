@@ -45,7 +45,24 @@
         opts.limit,
         opts.offset,
       ].join("|");
-      const payload = await memoQuery(`sq:posts:${sig}`, 20_000, () => listPosts(opts));
+      const payload = await memoQuery(`sq:posts:${sig}`, 20_000, async () => {
+        const out = await listPosts(opts);
+        // Public shape: the byline is public, the author address is not. An
+        // anonymous caller reading the post list has no use for a mailbox.
+        return {
+          ...out,
+          items: out.items.map((it) => {
+            // Public projection: byline yes, mailbox no; and the two fields the
+            // admin editor reads but no visitor can use - the custom meta bag
+            // (plugins park internal flags there) and the slug a post was first
+            // created with.
+            const { metas: _metas, initialSlug: _initial, ...rest } = it as Record<string, unknown> & typeof it;
+            if (!it.author) return rest;
+            const { email: _mailbox, ...author } = it.author;
+            return { ...rest, author };
+          }),
+        };
+      });
       // Fresh containers: the memo entry is shared, callers get their own
       // top-level array (item objects are read-only here - the gate serializes).
       return { ...payload, items: [...payload.items] };

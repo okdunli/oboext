@@ -116,7 +116,7 @@
         <td><input type="checkbox" class="adm-check" value={p.id}></td>
         <td>
           <a class="title" href={"/admin/pages/" + p.id}>{p.title}</a>
-          <div class="sub">/{p.slug}</div>
+          <div class="sub">/{p.slug}{#if p.locale === 'en'} · EN{/if}{#if p.pair} <a href={"/admin/pages/" + p.pair.id} style="margin-left:8px">↔ {p.pair.slug}</a>{/if}</div>
         </td>
         <td><span class={"adm-tag " + p.status}>{statusLabel(p.status)}</span></td>
         <td class="adm-hint">{p.order}</td>

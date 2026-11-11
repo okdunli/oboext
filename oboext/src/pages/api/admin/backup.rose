@@ -4,6 +4,7 @@
   import { buildDatabaseBackup, restoreDatabaseBackup } from "@server/backup";
   import { buildFullBackupZip, restoreFullBackupZip } from "@server/backup-zip";
   import { recordAdminAction } from "@server/security-events";
+  import { gzipResponse } from "@server/http-compress";
 
   function compactStamp() {
 
@@ -27,13 +28,19 @@
         });
       }
       const backup = await buildDatabaseBackup();
-      return new Response(JSON.stringify(backup), {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "content-disposition": `attachment; filename="oboext-db-backup-${compactStamp()}.json"`,
-        },
-      });
+      // The dump is text and grows with the site - same reason the exports are
+      // gzipped. The full-backup zip above is already compressed, so it stays
+      // as-is.
+      return await gzipResponse(
+        request,
+        new Response(JSON.stringify(backup), {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            "content-disposition": `attachment; filename="oboext-db-backup-${compactStamp()}.json"`,
+          },
+        }),
+      );
     });
   }
 

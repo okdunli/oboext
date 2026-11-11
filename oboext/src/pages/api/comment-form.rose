@@ -1,0 +1,90 @@
+<script>
+  // /api/comment-form - the no-JS comment path. The public comment form is a
+  // native POST form (render.ts), so a reader without JavaScript can comment:
+  // this endpoint runs the exact same pipeline as POST /api/comments (plugin
+  // gates, opt-in captcha, createPublicComment, webhook) and answers with a
+  // 303 redirect back to the post, whose ?c= flash says what happened. With
+  // JavaScript the form is intercepted by comments.js and the JSON endpoint
+  // is used instead - this route never fires.
+  import { createPublicComment } from "@server/admin";
+  import { HOOKS, applyAsyncFilters } from "@server/hooks";
+  import { fireWebhook } from "@server/webhook";
+  import { verifyCommentCaptcha } from "@server/comment-captcha";
+
+  function fail(back: string, code: string): Response {
+    const sep = back.includes("?") ? "&" : "?";
+    return new Response(null, {
+      status: 303,
+      headers: { location: `${back}${sep}c=${code}#comments`, "cache-control": "no-store" },
+    });
+  }
+
+  function safeBack(raw: string | null): string {
+    const v = String(raw ?? "").replace(/[\u0000-\u001f\u007f]/g, "");
+    if (v.startsWith("/") && !v.startsWith("//") && !v.includes("\\") && !v.includes("://")) {
+      return v;
+    }
+    return "/";
+  }
+
+  export async function POST(request: Request) {
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      return fail(safeBack(null), "failed");
+    }
+    const back = safeBack(String(form.get("back") || ""));
+    const ctx = getContext();
+    const postId = Number(form.get("postId"));
+    if (!Number.isInteger(postId)) return fail(back, "invalid");
+    const postType = form.get("postType") === "page" ? "page" : "post";
+    // Opt-in captcha: guests must solve the arithmetic challenge, mirroring
+    // the JSON endpoint's contract.
+    if (process.env.OBOEXT_COMMENT_CAPTCHA === "1" && !ctx.user) {
+      if (!verifyCommentCaptcha(String(form.get("captchaToken") || ""), String(form.get("captchaAnswer") || ""))) {
+        return fail(back, "invalid");
+      }
+    }
+    const data = {
+      postId,
+      postType,
+      parentId: form.get("parentId") ? Number(form.get("parentId")) : null,
+      authorName: String(form.get("authorName") || ""),
+      authorEmail: String(form.get("authorEmail") || ""),
+      authorUrl: String(form.get("authorUrl") || ""),
+      content: String(form.get("content") || ""),
+    };
+    try {
+      const gate = await applyAsyncFilters(HOOKS.commentSubmission, {
+        data,
+        userId: ctx.user ? ctx.user.id : null,
+        ip: ctx.ip || null,
+        reject: undefined,
+      });
+      if (gate.reject) return fail(back, "invalid");
+      const out = await createPublicComment({
+        postId,
+        postType,
+        parentId: data.parentId,
+        authorName: data.authorName,
+        authorEmail: data.authorEmail || null,
+        authorUrl: data.authorUrl || null,
+        content: data.content,
+        user: ctx.user || null,
+        ip: ctx.ip || null,
+        siteHost: request.headers.get("host"),
+      });
+      fireWebhook("comment.created", {
+        id: out.comment.id,
+        postType,
+        postId,
+        authorName: out.comment.authorName,
+        content: String(out.comment.content || "").slice(0, 200),
+      });
+      return fail(back, out.isPublic ? "ok" : "pending");
+    } catch {
+      return fail(back, "failed");
+    }
+  }
+</script>

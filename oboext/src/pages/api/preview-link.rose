@@ -3,7 +3,7 @@
   // page to anyone who has the link (no account needed, 7 days).
   // Posts: adminGetPost enforces content:read plus the author/manager rule.
   // Pages: pages are manager-only content, so the capability is required here.
-  import { apiGate, adminGetPost, requireCap } from "@server/admin";
+  import { apiGate, adminGetPost, requireCap, jsonFail } from "@server/admin";
   import { adminGetPage } from "@server/pages";
   import { previewTokenFor, previewTtlMs } from "@server/preview-link";
   import { resolveOrigin } from "@server/site-origin";
@@ -14,10 +14,7 @@
       const id = Number(url.searchParams.get("id"));
       const kind = url.searchParams.get("kind") === "page" ? "page" : "post";
       if (!Number.isInteger(id) || id <= 0) {
-        return new Response(JSON.stringify({ error: "id 无效" }), {
-          status: 422,
-          headers: { "content-type": "application/json; charset=utf-8" },
-        });
+        return jsonFail("id 无效", 422);
       }
       const user = getContext().user;
       let target;

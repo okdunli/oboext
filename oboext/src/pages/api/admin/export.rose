@@ -3,6 +3,7 @@
 
   import { apiGate, requireCap } from "@server/admin";
   import { EXPORT_SCOPES, buildExportData, exportToMarkdown, exportToWxr } from "@server/export";
+  import { gzipResponse } from "@server/http-compress";
 
   export async function GET(request) {
     return apiGate(async () => {
@@ -14,39 +15,42 @@
       // and are ignored.
       if (url.searchParams.get("format") === "wxr") {
         const data = await buildExportData(user, ["posts", "pages", "comments", "settings"]);
-        return new Response(exportToWxr(data, { siteUrl: url.origin }), {
+        return await gzipResponse(request, new Response(exportToWxr(data, { siteUrl: url.origin }), {
           status: 200,
           headers: {
             "content-type": "application/xml; charset=utf-8",
             "content-disposition": `attachment; filename="oboext-export-${stamp}.xml"`,
           },
-        });
+        }));
       }
       const picked = url.searchParams.getAll("scope");
       const scopes = picked.length
         ? picked.filter((s) => EXPORT_SCOPES.indexOf(s) >= 0)
         : EXPORT_SCOPES.slice();
       if (!scopes.length) {
-        return new Response("至少选择一个导出范围", { status: 400 });
+        return new Response(null, {
+          status: 303,
+          headers: { location: "/admin/export?err=noscope", "cache-control": "no-store" },
+        });
       }
       const markdown = url.searchParams.get("format") === "markdown";
       const data = await buildExportData(user, scopes);
       if (markdown) {
-        return new Response(exportToMarkdown(data), {
+        return await gzipResponse(request, new Response(exportToMarkdown(data), {
           status: 200,
           headers: {
             "content-type": "text/markdown; charset=utf-8",
             "content-disposition": `attachment; filename="oboext-export-${stamp}.md"`,
           },
-        });
+        }));
       }
-      return new Response(JSON.stringify(data, null, 2), {
+      return await gzipResponse(request, new Response(JSON.stringify(data, null, 2), {
         status: 200,
         headers: {
           "content-type": "application/json; charset=utf-8",
           "content-disposition": `attachment; filename="oboext-export-${stamp}.json"`,
         },
-      });
+      }));
     });
   }
 </script>
